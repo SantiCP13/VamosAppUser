@@ -9,8 +9,8 @@ import '../../auth/services/auth_service.dart';
 import '../../menu/screens/profile_screen.dart';
 import '../../menu/screens/history_screen.dart';
 import '../../menu/screens/wallet_screen.dart';
-import '../../menu/screens/share_referral_screen.dart'; // NUEVO ARCHIVO
-import '../../menu/screens/support_screen.dart'; // NUEVO ARCHIVO
+import '../../menu/screens/share_referral_screen.dart';
+import '../../menu/screens/support_screen.dart';
 import '../../auth/screens/welcome_screen.dart';
 
 class SideMenu extends StatelessWidget {
@@ -65,22 +65,6 @@ class SideMenu extends StatelessWidget {
             const ProfileScreen(),
           ),
 
-          // "Solicitar viaje" simplemente cierra el menú
-          ListTile(
-            leading: const Icon(
-              Icons.location_on_outlined,
-              color: AppColors.primaryGreen,
-            ),
-            title: Text(
-              "Solicitar viaje",
-              style: GoogleFonts.poppins(
-                color: AppColors.primaryGreen,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            onTap: () => Navigator.pop(context),
-          ),
-
           _buildMenuItem(
             context,
             Icons.history,
@@ -93,12 +77,7 @@ class SideMenu extends StatelessWidget {
             "Comparte y gana",
             const ShareReferralScreen(),
           ),
-          _buildMenuItem(
-            context,
-            Icons.account_balance_wallet_outlined,
-            "Monedero",
-            const WalletScreen(),
-          ),
+
           _buildMenuItem(
             context,
             Icons.help_outline,

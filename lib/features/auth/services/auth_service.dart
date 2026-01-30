@@ -1,7 +1,15 @@
 import 'package:flutter/foundation.dart';
 
 // Enum para manejar estados de respuesta de forma limpia
-enum AuthStatus { active, pending, rejected, notFound, wrongPassword, error }
+enum AuthStatus {
+  active,
+  pending,
+  rejected,
+  revoked, // Estado para usuarios bloqueados/despedidos
+  notFound,
+  wrongPassword,
+  error,
+}
 
 class AuthService {
   // Simulación de base de datos local
@@ -21,6 +29,14 @@ class AuthService {
       'password': '123',
       'status': 'PENDING', // Usuario esperando aprobación
       'nombre': 'Empleado Nuevo',
+      'empresa': 'Bancolombia S.A.',
+    },
+    // --- USUARIO NUEVO PARA PRUEBAS (REVOCADO) ---
+    {
+      'email': 'ex_empleado@bancolombia.com',
+      'password': '123',
+      'status': 'REVOKED', // <--- Este usuario ya no tiene acceso
+      'nombre': 'Juan Despedido',
       'empresa': 'Bancolombia S.A.',
     },
   ];
@@ -73,12 +89,16 @@ class AuthService {
 
       final String estadoDb = user['status'];
 
+      // --- MANEJO DE ESTADOS ---
       if (estadoDb == 'PENDING') {
         return {'status': AuthStatus.pending, 'empresa': user['empresa']};
       } else if (estadoDb == 'REJECTED') {
         return {'status': AuthStatus.rejected};
+      } else if (estadoDb == 'REVOKED') {
+        return {'status': AuthStatus.revoked}; // <--- Retorna estado revocado
       }
 
+      // Si es ACTIVE
       currentUser = user;
       return {'status': AuthStatus.active, 'user': user};
     } catch (e) {
@@ -131,9 +151,7 @@ class AuthService {
       'empresa': datos['nombre_empresa'] ?? '',
     });
 
-    _emailsRegistrados.add(
-      datos['email'],
-    ); // Mantener sincronizada la lista simple
+    _emailsRegistrados.add(datos['email']);
 
     currentUser = {
       'nombre': datos['nombre'],
@@ -149,7 +167,6 @@ class AuthService {
 
   static Future<bool> sendReferralCode(String code) async {
     await Future.delayed(const Duration(seconds: 1));
-    // Lógica simulada: Si el código es "ERROR", falla. Si no, pasa.
     if (code.toUpperCase() == "ERROR") return false;
     debugPrint("Referido canjeado: $code");
     return true;

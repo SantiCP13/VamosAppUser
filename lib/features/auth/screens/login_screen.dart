@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
 import 'register_screen.dart';
-import 'pending_approval_screen.dart'; // Importante para redireccionar si sigue pending
+import 'pending_approval_screen.dart';
 import '../../home/screens/home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -79,6 +79,32 @@ class _LoginScreenState extends State<LoginScreen> {
             );
             break;
 
+          // --- NUEVA LÓGICA DE REVOCADO ---
+          case AuthStatus.revoked:
+            if (mounted) {
+              showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text("Acceso Revocado"),
+                  content: const Text(
+                    "Tu empresa ha revocado tus permisos de acceso a VAMOS APP.\n\n"
+                    "Si crees que es un error, contacta al administrador de tu empresa.",
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text(
+                        "Entendido",
+                        style: TextStyle(color: Colors.red),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+            break;
+          // --------------------------------
+
           case AuthStatus.wrongPassword:
             _showSnack("Contraseña incorrecta", isError: true);
             break;
@@ -141,8 +167,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // ... El UI se mantiene igual que tu código original ...
-    // Solo cambia la lógica en _handleContinue
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
