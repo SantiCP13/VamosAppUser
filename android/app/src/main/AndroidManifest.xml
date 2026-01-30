@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.vamos_user">
-    
+    <uses-permission android:name="android.permission.INTERNET"/> 
     <application
         android:label="vamos_user"
         android:name="${applicationName}"

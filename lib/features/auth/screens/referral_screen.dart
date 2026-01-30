@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
-// ESTA ES LA RUTA NUEVA CORRECTA:
 import '../../home/screens/home_screen.dart';
 
 class ReferralCodeScreen extends StatefulWidget {
@@ -24,6 +23,7 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
 
   void _goToHome() {
     // Navegamos al Home borrando todo el historial de Auth
+    // (El usuario ya está registrado, con o sin código referido)
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (context) => const HomeScreen()),
@@ -32,20 +32,41 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
   }
 
   Future<void> _submitCode() async {
-    if (_codeController.text.isEmpty) return;
+    if (_codeController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Escribe un código para continuar")),
+      );
+      return;
+    }
 
     setState(() => isLoading = true);
 
-    // Llamamos al servicio (Simulado)
-    await AuthService.sendReferralCode(_codeController.text);
-
-    if (mounted) {
-      setState(() => isLoading = false);
-      // Muestra mensaje de éxito (opcional)
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("¡Código aplicado con éxito!")),
+    try {
+      // Llamamos al servicio
+      bool success = await AuthService.sendReferralCode(
+        _codeController.text.trim(),
       );
-      _goToHome();
+
+      if (success && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text("¡Código canjeado correctamente!"),
+            backgroundColor: AppColors.primaryGreen,
+          ),
+        );
+        _goToHome();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("El código no es válido"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => isLoading = false);
     }
   }
 
@@ -53,60 +74,105 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
+      // Quitamos el botón de atrás (leading: null) para evitar regresar al registro
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black),
-          // Si el usuario quiere volver, quizás queramos dejarlo ir al Home directamente
-          // o bloquearlo. Por ahora, hacemos pop (volver).
-          onPressed: () => Navigator.pop(context),
-        ),
+        automaticallyImplyLeading: false,
+        actions: [
+          TextButton(
+            onPressed: _goToHome,
+            child: Text(
+              "Omitir",
+              style: GoogleFonts.poppins(
+                color: Colors.grey,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 10),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              const SizedBox(height: 20),
+
+              // 1. Ícono decorativo amigable
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryGreen.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.card_giftcard,
+                  size: 50,
+                  color: AppColors.primaryGreen,
+                ),
+              ),
+
+              const SizedBox(height: 30),
+
+              // 2. Títulos claros
               Text(
-                "Código de recomendación",
+                "¿Tienes un código de amigo?",
+                textAlign: TextAlign.center,
                 style: GoogleFonts.poppins(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
                   color: Colors.black87,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               Text(
-                "Ingresa el código enviado",
+                "Si alguien te invitó a VAMOS, ingresa su código aquí. Si no, puedes omitir este paso.",
+                textAlign: TextAlign.center,
                 style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.primaryGreen, // Texto verde
+                  fontSize: 14,
+                  color: Colors.grey.shade600,
+                  height: 1.5,
                 ),
               ),
+
               const SizedBox(height: 40),
 
-              // --- CAMPO DE CÓDIGO ---
+              // 3. Input de Código
               Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
-                  // Fondo verdoso muy claro como en la foto
-                  color: AppColors.primaryGreen.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.grey.shade200),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.03),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
                 child: TextField(
                   controller: _codeController,
                   textAlign: TextAlign.center,
+                  textCapitalization:
+                      TextCapitalization.characters, // Fuerza mayúsculas
                   style: GoogleFonts.poppins(
-                    fontSize: 18,
+                    fontSize: 20,
                     color: AppColors.primaryGreen,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.5,
                   ),
                   decoration: InputDecoration(
-                    hintText: "Código referido",
+                    hintText: "CÓDIGO AQUÍ",
                     hintStyle: GoogleFonts.poppins(
-                      color: AppColors.primaryGreen.withValues(alpha: 0.5),
+                      color: Colors.grey.shade400,
+                      letterSpacing: 1,
                     ),
                     border: InputBorder.none,
                     contentPadding: const EdgeInsets.symmetric(vertical: 20),
@@ -116,63 +182,85 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
 
               const SizedBox(height: 16),
 
-              Center(
-                child: Text(
-                  "¡Premiaremos a quien te haya recomendado usar VamosApp!",
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
+              // 4. Nota Aclaratoria (IMPORTANTE para tu negocio)
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 16,
+                      color: Colors.amber.shade800,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      "Este NO es el código de empresa/convenio.",
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: Colors.amber.shade900,
+                      ),
+                    ),
+                  ],
                 ),
               ),
 
-              const Spacer(), // Empuja los botones al final
-              // --- BOTONES INFERIORES ---
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  // Botón "Saltar este paso"
-                  TextButton(
-                    onPressed: _goToHome,
-                    style: TextButton.styleFrom(
-                      backgroundColor: Colors.grey.shade200,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
-                      ),
-                    ),
-                    child: Text(
-                      "Saltar este paso",
-                      style: GoogleFonts.poppins(
-                        color: Colors.black54,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
+              const SizedBox(height: 50),
 
-                  // Botón Flecha (Submit)
-                  ElevatedButton(
-                    onPressed: isLoading ? null : _submitCode,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primaryGreen,
-                      shape: const CircleBorder(),
-                      padding: const EdgeInsets.all(16),
+              // 5. Botón de Acción
+              SizedBox(
+                width: double.infinity,
+                height: 56,
+                child: ElevatedButton(
+                  onPressed: isLoading ? null : _submitCode,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGreen,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
                     ),
-                    child: isLoading
-                        ? const SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            ),
-                          )
-                        : const Icon(Icons.arrow_forward, color: Colors.white),
+                    elevation: 4,
+                    shadowColor: AppColors.primaryGreen.withOpacity(0.4),
                   ),
-                ],
+                  child: isLoading
+                      ? const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : Text(
+                          "Validar Código",
+                          style: GoogleFonts.poppins(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                ),
               ),
-              const SizedBox(height: 16),
+
+              const SizedBox(height: 20),
+
+              // Botón secundario Omitir
+              TextButton(
+                onPressed: _goToHome,
+                child: Text(
+                  "No tengo código, continuar",
+                  style: GoogleFonts.poppins(
+                    color: Colors.grey.shade500,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
             ],
           ),
         ),

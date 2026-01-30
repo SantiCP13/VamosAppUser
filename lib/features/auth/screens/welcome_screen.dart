@@ -1,135 +1,194 @@
-import 'login_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../../../core/theme/app_colors.dart'; // Importamos nuestros colores
+import '../../../core/theme/app_colors.dart';
+import 'login_screen.dart';
+import 'company_register_screen.dart';
 
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // Detectamos el tamaño de la pantalla
     final size = MediaQuery.of(context).size;
 
     return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0),
-          child: Column(
-            children: [
-              const Spacer(flex: 2), // Empuja contenido al centro
-              // --- LOGO ---
-              // Asegúrate de que el archivo exista en assets/images/logo.png
-              Image.asset(
-                'assets/images/logo.png',
-                width: size.width * 0.7, // 70% del ancho de pantalla
-                fit: BoxFit.contain,
-              ),
+      backgroundColor: AppColors.bgColor,
+      body: Stack(
+        children: [
+          // Decoración de fondo
+          Positioned(
+            top: -50,
+            right: -50,
+            child: CircleAvatar(
+              radius: 130,
+              backgroundColor: AppColors.primaryGreen.withValues(alpha: 0.08),
+            ),
+          ),
 
-              const SizedBox(height: 40),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32.0),
+              child: Column(
+                children: [
+                  const Spacer(flex: 2),
 
-              // --- TEXTO: "Es momento de viajar" ---
-              Text(
-                "Es momento de viajar",
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.black87,
-                ),
-              ),
+                  // Logo
+                  Hero(
+                    tag: 'logo',
+                    child: Image.asset(
+                      'assets/images/logo.png', // Asegúrate de tener este asset
+                      width: size.width * 0.65,
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) => const Icon(
+                        Icons.directions_bus,
+                        size: 100,
+                        color: AppColors.primaryGreen,
+                      ),
+                    ),
+                  ),
 
-              const Spacer(flex: 3), // Empuja botones abajo
-              // --- BOTÓN E-MAIL ---
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.push(
+                  const SizedBox(height: 24),
+
+                  Text(
+                    "Bienvenido a VAMOS",
+                    style: GoogleFonts.poppins(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primaryGreen,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    "Movilidad legal y segura bajo la modalidad de Transporte Especial.",
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w400,
+                      color: Colors.grey.shade600,
+                      height: 1.5,
+                    ),
+                  ),
+
+                  const Spacer(flex: 3),
+
+                  Text(
+                    "Selecciona tu perfil para continuar:",
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      color: Colors.grey.shade500,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // BOTÓN 1: PASAJERO / EMPLEADO
+                  _buildRoleButton(
+                    context,
+                    label: "Soy Pasajero / Empleado",
+                    subLabel: "Viajes particulares o con código corporativo",
+                    icon: Icons.person_outline,
+                    isPrimary: true,
+                    onPressed: () => Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => const LoginScreen(),
                       ),
-                    );
-                  },
-                  icon: const Icon(Icons.email_outlined, color: Colors.white),
-                  label: Text(
-                    "Continuar con E-mail",
-                    style: GoogleFonts.poppins(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
                     ),
                   ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.darkButton,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                    elevation: 0,
-                  ),
-                ),
-              ),
 
-              const SizedBox(height: 16),
+                  const SizedBox(height: 16),
 
-              // --- BOTÓN GOOGLE ---
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text("Próximamente: Conexión con Google"),
-                        duration: Duration(seconds: 2),
+                  // BOTÓN 2: EMPRESA (CONTRATANTE)
+                  _buildRoleButton(
+                    context,
+                    label: "Soy Empresa",
+                    subLabel: "Quiero contratar servicios para mi personal",
+                    icon: Icons.domain,
+                    isPrimary: false,
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const CompanyRegisterScreen(),
                       ),
-                    );
-                  },
-                  // Usamos un icono temporal hasta configurar el logo real de Google
-                  icon: const Icon(
-                    Icons.g_mobiledata,
-                    size: 32,
-                    color: Colors.blue,
+                    ),
                   ),
-                  label: Text(
-                    "Continuar con Google",
+
+                  const Spacer(),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRoleButton(
+    BuildContext context, {
+    required String label,
+    required String subLabel,
+    required IconData icon,
+    required VoidCallback onPressed,
+    required bool isPrimary,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: isPrimary ? AppColors.primaryGreen : Colors.white,
+          foregroundColor: isPrimary ? Colors.white : AppColors.primaryGreen,
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+          elevation: isPrimary ? 3 : 0,
+          side: isPrimary
+              ? null
+              : const BorderSide(color: AppColors.primaryGreen, width: 1.5),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isPrimary
+                    ? Colors.white.withValues(alpha: 0.2)
+                    : AppColors.primaryGreen.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, size: 24),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
                     style: GoogleFonts.poppins(
                       fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black87,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: Colors.grey.shade300),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
+                  Text(
+                    subLabel,
+                    style: GoogleFonts.poppins(
+                      fontSize: 11,
+                      color: isPrimary
+                          ? Colors.white.withValues(alpha: 0.9)
+                          : Colors.grey.shade600,
                     ),
-                    backgroundColor: Colors.white,
                   ),
-                ),
+                ],
               ),
-
-              const SizedBox(height: 24),
-
-              // --- TÉRMINOS ---
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: Text(
-                  "Al continuar acepta los términos y condiciones del servicio",
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Colors.grey,
-                    decoration: TextDecoration.underline,
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 20),
-            ],
-          ),
+            ),
+            Icon(
+              Icons.arrow_forward_ios_rounded,
+              size: 16,
+              color: isPrimary ? Colors.white : AppColors.primaryGreen,
+            ),
+          ],
         ),
       ),
     );
