@@ -1239,29 +1239,73 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _assignDriverAndSimulateMovement() {
-    if (_currentPosition == null) return;
+    // 1. Validar que tengamos una posición actual antes de arrancar
+    if (_currentPosition == null) {
+      debugPrint("⚠️ No se puede simular conductor: _currentPosition es null");
+      return;
+    }
+
+    // Simulamos que el conductor aparece cerca (0.005 grados de diferencia)
     final startDriverPos = LatLng(
       _currentPosition!.latitude - 0.005,
       _currentPosition!.longitude - 0.005,
     );
+
     setState(() {
       _tripState = TripState.DRIVER_ON_WAY;
       _driverPosition = startDriverPos;
     });
 
+    // Cancelamos timer anterior si existía para evitar duplicados
+    _simulationTimer?.cancel();
+
     _simulationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      // GUARDIA 1: ¿El widget sigue vivo?
       if (!mounted) {
         timer.cancel();
         return;
       }
+
+      // GUARDIA 2: Captura segura (Snapshot) del estado actual
+      final currentUserPos = _currentPosition;
+      final currentDriverPos = _driverPosition;
+
+      // GUARDIA 3: Si alguno es nulo, detenemos la simulación inmediatamente
+      if (currentUserPos == null || currentDriverPos == null) {
+        debugPrint(
+          "Simulación detenida: Posición de usuario o conductor perdidas.",
+        );
+        timer.cancel();
+        return;
+      }
+
+      // LÓGICA SEGURA: Usamos las variables locales 'currentUserPos' y 'currentDriverPos'
+      // que sabemos que NO son nulas aquí.
+
+      // Interpolación lineal (LERP) simple para mover al conductor 5% hacia el usuario
       double newLat =
-          _driverPosition!.latitude +
-          (_currentPosition!.latitude - _driverPosition!.latitude) * 0.05;
+          currentDriverPos.latitude +
+          (currentUserPos.latitude - currentDriverPos.latitude) * 0.05;
+
       double newLng =
-          _driverPosition!.longitude +
-          (_currentPosition!.longitude - _driverPosition!.longitude) * 0.05;
-      setState(() => _driverPosition = LatLng(newLat, newLng));
-      if (timer.tick > 100) timer.cancel();
+          currentDriverPos.longitude +
+          (currentUserPos.longitude - currentDriverPos.longitude) * 0.05;
+
+      // Verificamos cercanía para "llegar"
+      // (Opcional: puedes usar una librería de distancia real aquí)
+      final distLat = (currentUserPos.latitude - newLat).abs();
+      final distLng = (currentUserPos.longitude - newLng).abs();
+
+      setState(() {
+        _driverPosition = LatLng(newLat, newLng);
+      });
+
+      // Si está muy cerca, termina la simulación
+      if (distLat < 0.0001 && distLng < 0.0001) {
+        debugPrint("🚖 El conductor ha llegado");
+        timer.cancel();
+        // Aquí podrías cambiar el estado a 'ARRIVED'
+      }
     });
   }
 
