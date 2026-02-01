@@ -197,7 +197,7 @@ class _RechargeModalState extends State<RechargeModal> {
 
     setState(() => isProcessing = true);
 
-    // TODO: CONEXIÓN PASARELA DE PAGOS (STRIPE / WOMPI)
+    // CONEXIÓN PASARELA DE PAGOS (STRIPE / WOMPI)
     // 1. Crear Intent de pago en Backend (Laravel) -> POST /api/wallet/deposit-intent
     // 2. Recibir ClientSecret
     // 3. Confirmar pago con SDK de Stripe/Wompi

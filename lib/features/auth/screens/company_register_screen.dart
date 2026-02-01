@@ -13,28 +13,88 @@ class CompanyRegisterScreen extends StatefulWidget {
 class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
   bool _isLoading = false;
 
-  // Controladores Empresa
+  // --- 1. Controladores Empresa (Información Legal) ---
   final _razonSocialController = TextEditingController();
   final _nitController = TextEditingController();
   final _direccionEmpresaController = TextEditingController();
 
-  // Controladores Contacto
-  final _nombreContactoController =
-      TextEditingController(); // Quien llena el form
+  // Nuevos campos de contacto DE LA EMPRESA
+  final _telefonoEmpresaController = TextEditingController();
+  final _emailEmpresaController = TextEditingController();
+
+  // Variable para la Ciudad (Dropdown)
+  String? _ciudadSeleccionada;
+
+  // Lista de ciudades de Colombia
+  final List<String> _ciudadesColombia = [
+    'Bogotá D.C.',
+    'Medellín',
+    'Cali',
+    'Barranquilla',
+    'Cartagena',
+    'Bucaramanga',
+    'Pereira',
+    'Manizales',
+    'Cúcuta',
+    'Ibagué',
+    'Santa Marta',
+    'Villavicencio',
+    'Pasto',
+    'Montería',
+    'Valledupar',
+    'Armenia',
+    'Neiva',
+    'Popayán',
+    'Sincelejo',
+    'Tunja',
+    'Riohacha',
+    'Florencia',
+    'Yopal',
+    'Quibdó',
+    'Arauca',
+    'Mocoa',
+    'San Andrés',
+    'Leticia',
+    'Mitú',
+    'Puerto Carreño',
+    'Inírida',
+    'San José del Guaviare',
+    'Otras',
+  ];
+
+  // --- 2. Controladores Contacto Administrativo (La persona) ---
+  final _nombreContactoController = TextEditingController();
   final _telefonoContactoController = TextEditingController();
   final _emailContactoController = TextEditingController();
+
+  @override
+  void dispose() {
+    _razonSocialController.dispose();
+    _nitController.dispose();
+    _direccionEmpresaController.dispose();
+    _telefonoEmpresaController.dispose();
+    _emailEmpresaController.dispose();
+    _nombreContactoController.dispose();
+    _telefonoContactoController.dispose();
+    _emailContactoController.dispose();
+    super.dispose();
+  }
 
   Future<void> _handleCompanyRequest() async {
     // Validaciones
     if (_razonSocialController.text.isEmpty ||
         _nitController.text.isEmpty ||
+        _ciudadSeleccionada == null || // Validar ciudad
+        _direccionEmpresaController.text.isEmpty ||
+        _telefonoEmpresaController.text.isEmpty || // Validar tel empresa
+        _emailEmpresaController.text.isEmpty || // Validar email empresa
         _nombreContactoController.text.isEmpty ||
         _telefonoContactoController.text.isEmpty ||
         _emailContactoController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            "Por favor completa todos los campos para la solicitud",
+            "Por favor completa todos los campos de la empresa y del encargado.",
           ),
           backgroundColor: Colors.redAccent,
         ),
@@ -46,18 +106,24 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
 
     try {
       final Map<String, dynamic> requestPayload = {
-        'tipo_solicitud': 'AFILIACION_EMPRESA', // Flag para tu backend
+        'tipo_solicitud': 'AFILIACION_EMPRESA',
+        // Objeto Empresa con sus propios datos de contacto
         'empresa': {
           'razon_social': _razonSocialController.text.trim(),
           'nit': _nitController.text.trim(),
+          'ciudad': _ciudadSeleccionada,
           'direccion': _direccionEmpresaController.text.trim(),
+          'telefono_corporativo': _telefonoEmpresaController.text.trim(),
+          'email_corporativo': _emailEmpresaController.text.trim(),
         },
-        'contacto': {
+        // Objeto Contacto (Encargado / Representante)
+        'contacto_administrativo': {
           'nombre': _nombreContactoController.text.trim(),
-          'telefono': _telefonoContactoController.text.trim(),
-          'email': _emailContactoController.text.trim(),
+          'telefono_personal': _telefonoContactoController.text.trim(),
+          'email_personal': _emailContactoController.text.trim(),
         },
-        'estado': 'PENDIENTE_REVISION_HUMANA', // Estado inicial
+        'estado': 'PENDIENTE_REVISION_HUMANA',
+        'fecha_solicitud': DateTime.now().toIso8601String(),
       };
 
       // Llamamos al servicio (Simulado)
@@ -65,13 +131,18 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
         requestPayload,
       );
 
-      if (success && mounted) {
+      // FIX: Verificamos mounted antes de usar el contexto
+      if (!mounted) return;
+
+      if (success) {
         _showSuccessDialog();
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -99,8 +170,8 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
           ],
         ),
         content: Text(
-          "Hemos recibido los datos de ${_razonSocialController.text}.\n\n"
-          "Un ejecutivo de cuenta de VAMOS APP se contactará contigo al ${_telefonoContactoController.text} en las próximas 24 horas para validar el contrato y habilitar tu acceso corporativo.",
+          "Hemos registrado la solicitud para ${_razonSocialController.text} en la ciudad de $_ciudadSeleccionada.\n\n"
+          "Enviaremos la confirmación al correo corporativo: ${_emailEmpresaController.text} y contactaremos a ${_nombreContactoController.text} para finalizar el proceso.",
           textAlign: TextAlign.center,
           style: GoogleFonts.poppins(fontSize: 14),
         ),
@@ -116,7 +187,7 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
               ),
               onPressed: () {
                 Navigator.pop(context); // Cierra Dialog
-                Navigator.pop(context); // Regresa al WelcomeScreen
+                Navigator.pop(context); // Regresa
               },
               child: const Text(
                 "Entendido",
@@ -151,48 +222,7 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Banner Informativo
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.blue.shade50,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.blue.shade100),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.business_center,
-                      color: Colors.blue.shade700,
-                      size: 30,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            "Solicitud de Convenio",
-                            style: GoogleFonts.poppins(
-                              fontWeight: FontWeight.bold,
-                              color: Colors.blue.shade900,
-                            ),
-                          ),
-                          Text(
-                            "Este formulario inicia el proceso de validación jurídica. No creará una cuenta inmediata.",
-                            style: GoogleFonts.poppins(
-                              fontSize: 11,
-                              color: Colors.blue.shade800,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-
+              // --- SECCIÓN 1: DATOS DE LA EMPRESA ---
               Text(
                 "Información de la Empresa",
                 style: GoogleFonts.poppins(
@@ -201,29 +231,89 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
                 ),
               ),
               const SizedBox(height: 16),
+
               _buildTextField(
                 _razonSocialController,
                 "Razón Social",
                 Icons.domain,
               ),
               const SizedBox(height: 16),
+
               _buildTextField(
                 _nitController,
-                "NIT (Sin dígito ver.)",
+                "NIT (Sin dígito de verificación)",
                 Icons.badge,
                 type: TextInputType.number,
               ),
               const SizedBox(height: 16),
+
+              // Dropdown de Ciudades
+              DropdownButtonFormField<String>(
+                // FIX: 'value' está deprecado, cambiamos a 'initialValue'
+                initialValue: _ciudadSeleccionada,
+                icon: const Icon(Icons.keyboard_arrow_down),
+                decoration: InputDecoration(
+                  labelText: "Ciudad Sede",
+                  prefixIcon: const Icon(
+                    Icons.location_city,
+                    size: 20,
+                    color: Colors.grey,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 16,
+                  ),
+                ),
+                items: _ciudadesColombia.map((String ciudad) {
+                  return DropdownMenuItem<String>(
+                    value: ciudad,
+                    child: Text(
+                      ciudad,
+                      style: GoogleFonts.poppins(fontSize: 14),
+                    ),
+                  );
+                }).toList(),
+                onChanged: (String? newValue) {
+                  setState(() {
+                    _ciudadSeleccionada = newValue;
+                  });
+                },
+              ),
+              const SizedBox(height: 16),
+
               _buildTextField(
                 _direccionEmpresaController,
                 "Dirección Fiscal",
                 Icons.map,
               ),
+              const SizedBox(height: 16),
+
+              // Nuevos campos de contacto CORPORATIVO
+              _buildTextField(
+                _telefonoEmpresaController,
+                "Telefono / Celular Corporativo",
+                Icons.phone_in_talk,
+                type: TextInputType.phone,
+              ),
+              const SizedBox(height: 16),
+
+              _buildTextField(
+                _emailEmpresaController,
+                "Correo de la Empresa",
+                Icons.alternate_email,
+                type: TextInputType.emailAddress,
+              ),
 
               const SizedBox(height: 30),
+              Divider(color: Colors.grey.shade300, thickness: 1),
+              const SizedBox(height: 20),
 
+              // --- SECCIÓN 2: CONTACTO ADMINISTRATIVO ---
               Text(
-                "Contacto Administrativo",
+                "Información del Responsable",
                 style: GoogleFonts.poppins(
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
@@ -231,28 +321,28 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
               ),
               const SizedBox(height: 5),
               Text(
-                "A quién contactaremos para la firma del contrato.",
+                "Persona responsable de gestionar la aplicación, esta información se puede modificar si hay un cambio a futuro.",
                 style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
               ),
               const SizedBox(height: 16),
 
               _buildTextField(
                 _nombreContactoController,
-                "Nombre del Encargado",
+                "Nombre Completo",
                 Icons.person,
               ),
               const SizedBox(height: 16),
               _buildTextField(
                 _telefonoContactoController,
-                "Celular de Contacto",
-                Icons.phone,
+                "Celular del Encargado",
+                Icons.smartphone,
                 type: TextInputType.phone,
               ),
               const SizedBox(height: 16),
               _buildTextField(
                 _emailContactoController,
-                "Correo Corporativo",
-                Icons.email,
+                "Correo del Encargado",
+                Icons.mail_outline,
                 type: TextInputType.emailAddress,
               ),
 

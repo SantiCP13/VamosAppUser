@@ -23,7 +23,6 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
 
   void _goToHome() {
     // Navegamos al Home borrando todo el historial de Auth
-    // (El usuario ya está registrado, con o sin código referido)
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (context) => const HomeScreen()),
@@ -42,25 +41,35 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
     setState(() => isLoading = true);
 
     try {
-      // Llamamos al servicio
+      // Llamamos al servicio (Asegúrate de haber agregado el método en AuthService)
       bool success = await AuthService.sendReferralCode(
         _codeController.text.trim(),
       );
 
       if (success && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text("¡Código canjeado correctamente!"),
+          const SnackBar(
+            content: Text("¡Código canjeado correctamente!"),
             backgroundColor: AppColors.primaryGreen,
           ),
         );
         _goToHome();
+      } else {
+        // Si devuelve falso (según tu lógica de mock)
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("El código no es válido"),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("El código no es válido"),
+            content: Text("Error al validar el código"),
             backgroundColor: Colors.red,
           ),
         );
@@ -74,7 +83,6 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      // Quitamos el botón de atrás (leading: null) para evitar regresar al registro
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
@@ -100,10 +108,11 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
             children: [
               const SizedBox(height: 20),
 
-              // 1. Ícono decorativo amigable
+              // 1. Ícono decorativo
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
+                  // CORRECCIÓN 1: withValues
                   color: AppColors.primaryGreen.withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
@@ -116,7 +125,7 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
 
               const SizedBox(height: 30),
 
-              // 2. Títulos claros
+              // 2. Títulos
               Text(
                 "¿Tienes un código de amigo?",
                 textAlign: TextAlign.center,
@@ -151,7 +160,8 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
                   border: Border.all(color: Colors.grey.shade200),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.03),
+                      // CORRECCIÓN 2: withValues en lugar de withOpacity
+                      color: Colors.black.withValues(alpha: 0.03),
                       blurRadius: 10,
                       offset: const Offset(0, 4),
                     ),
@@ -160,8 +170,7 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
                 child: TextField(
                   controller: _codeController,
                   textAlign: TextAlign.center,
-                  textCapitalization:
-                      TextCapitalization.characters, // Fuerza mayúsculas
+                  textCapitalization: TextCapitalization.characters,
                   style: GoogleFonts.poppins(
                     fontSize: 20,
                     color: AppColors.primaryGreen,
@@ -182,7 +191,7 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
 
               const SizedBox(height: 16),
 
-              // 4. Nota Aclaratoria (IMPORTANTE para tu negocio)
+              // 4. Nota Aclaratoria
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 12,
@@ -226,7 +235,8 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
                       borderRadius: BorderRadius.circular(16),
                     ),
                     elevation: 4,
-                    shadowColor: AppColors.primaryGreen.withOpacity(0.4),
+                    // CORRECCIÓN 3: withValues
+                    shadowColor: AppColors.primaryGreen.withValues(alpha: 0.4),
                   ),
                   child: isLoading
                       ? const SizedBox(
@@ -250,7 +260,7 @@ class _ReferralCodeScreenState extends State<ReferralCodeScreen> {
 
               const SizedBox(height: 20),
 
-              // Botón secundario Omitir
+              // Botón Omitir
               TextButton(
                 onPressed: _goToHome,
                 child: Text(

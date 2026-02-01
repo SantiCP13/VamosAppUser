@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
 import 'register_screen.dart';
-import 'pending_approval_screen.dart';
+import 'verification_check_screen.dart';
 import '../../home/screens/home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -42,13 +42,13 @@ class _LoginScreenState extends State<LoginScreen> {
           _showRegisterDialog(email);
         }
       } else {
-        // Fase 2: Login e interpretación de estados
+        // Fase 2: Login
         final result = await AuthService.login(email, _passwordController.text);
 
         setState(() => _isLoading = false);
 
         switch (result['status']) {
-          case AuthStatus.active:
+          case AuthResponseStatus.active:
             if (mounted) {
               Navigator.pushAndRemoveUntil(
                 context,
@@ -58,37 +58,35 @@ class _LoginScreenState extends State<LoginScreen> {
             }
             break;
 
-          case AuthStatus.pending:
-            // Usuario existe, contraseña ok, pero NO aprobado por jefe
+          case AuthResponseStatus.pending:
+          case AuthResponseStatus.incomplete:
             if (mounted) {
-              Navigator.push(
+              Navigator.pushAndRemoveUntil(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => PendingApprovalScreen(
-                    empresaNombre: result['empresa'] ?? "Tu Empresa",
-                  ),
+                  builder: (_) => const VerificationCheckScreen(),
                 ),
+                (r) => false,
               );
             }
             break;
 
-          case AuthStatus.rejected:
+          case AuthResponseStatus.rejected:
             _showSnack(
               "Tu solicitud fue rechazada por la empresa.",
               isError: true,
             );
             break;
 
-          // --- NUEVA LÓGICA DE REVOCADO ---
-          case AuthStatus.revoked:
+          case AuthResponseStatus.revoked:
             if (mounted) {
               showDialog(
                 context: context,
                 builder: (context) => AlertDialog(
                   title: const Text("Acceso Revocado"),
                   content: const Text(
-                    "Tu empresa ha revocado tus permisos de acceso a VAMOS APP.\n\n"
-                    "Si crees que es un error, contacta al administrador de tu empresa.",
+                    "Tu empresa ha revocado tus permisos de acceso.\n\n"
+                    "Si crees que es un error, contacta a tu administrador.",
                   ),
                   actions: [
                     TextButton(
@@ -103,13 +101,15 @@ class _LoginScreenState extends State<LoginScreen> {
               );
             }
             break;
-          // --------------------------------
 
-          case AuthStatus.wrongPassword:
+          case AuthResponseStatus.wrongPassword:
             _showSnack("Contraseña incorrecta", isError: true);
             break;
 
-          case AuthStatus.error:
+          case AuthResponseStatus.notFound:
+            _showSnack("Usuario no encontrado", isError: true);
+            break;
+
           default:
             _showSnack("Ocurrió un error inesperado", isError: true);
         }
@@ -175,7 +175,8 @@ class _LoginScreenState extends State<LoginScreen> {
         leading: const BackButton(color: Colors.black),
       ),
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
+          // Agregado scroll para evitar overflow en pantallas pequeñas
           padding: const EdgeInsets.all(24.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -189,6 +190,8 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
               const SizedBox(height: 30),
+
+              // --- CAMPO EMAIL ---
               TextField(
                 controller: _emailController,
                 enabled: !_emailExists,
@@ -210,6 +213,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       : null,
                 ),
               ),
+
+              // --- CAMPO PASSWORD ---
               if (_emailExists) ...[
                 const SizedBox(height: 20),
                 TextField(
@@ -233,7 +238,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
               ],
+
               const SizedBox(height: 30),
+
+              // --- BOTÓN CONTINUAR ---
               SizedBox(
                 width: double.infinity,
                 height: 56,
@@ -256,6 +264,38 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                 ),
               ),
+
+              // --- NUEVA SECCIÓN: TEXTO Y BOTÓN DE REGISTRO ---
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    "¿No tienes cuenta?",
+                    style: GoogleFonts.poppins(color: Colors.grey[600]),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      // Redirige directamente al registro
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          // No pasamos emailPreIngresado porque el usuario quiere empezar de cero
+                          builder: (_) => const RegisterScreen(),
+                        ),
+                      );
+                    },
+                    child: Text(
+                      "Crea tu cuenta aquí",
+                      style: GoogleFonts.poppins(
+                        color: AppColors.primaryGreen,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              // ------------------------------------------------
             ],
           ),
         ),

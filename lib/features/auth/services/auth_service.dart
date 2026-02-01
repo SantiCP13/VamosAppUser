@@ -1,187 +1,281 @@
-import 'package:flutter/foundation.dart';
+// lib/features/auth/services/auth_service.dart
 
-// Enum para manejar estados de respuesta de forma limpia
-enum AuthStatus {
+import 'package:flutter/foundation.dart';
+import '../../../core/models/user_model.dart';
+
+enum AuthResponseStatus {
   active,
   pending,
   rejected,
-  revoked, // Estado para usuarios bloqueados/despedidos
+  revoked,
+  incomplete,
   notFound,
   wrongPassword,
   error,
 }
 
 class AuthService {
-  // Simulación de base de datos local
-  static Map<String, dynamic> currentUser = {};
+  static User? _currentUser;
+  static User? get currentUser => _currentUser;
 
-  // Base de datos simulada de usuarios con sus estados
+  // Mock DB con un usuario demo corregido
+  // Mock DB con TODOS los escenarios posibles para QA
   static final List<Map<String, dynamic>> _dbUsuarios = [
+    // ---------------------------------------------------------
+    // CASO 1: Usuario NATURAL Verificado (Happy Path B2C)
+    // - Puede pedir viajes personales.
+    // - NO ve el switch corporativo.
+    // ---------------------------------------------------------
     {
-      'email': 'admin@vamos.com',
+      'id': 'user_natural_01',
+      'email': 'natural@test.com',
       'password': '123',
-      'status': 'ACTIVE',
-      'nombre': 'Admin',
-      'empresa': 'VAMOS Internal',
+      'status': 'VERIFIED',
+      'nombre': 'Ana Natural',
+      'telefono': '3001111111',
+      'empresa': '',
+      'role': 'NATURAL',
+      'beneficiaries': [], // Sin beneficiarios extra
     },
+
+    // ---------------------------------------------------------
+    // CASO 2: Usuario CORPORATIVO Verificado (Happy Path B2B)
+    // - Tiene switch Personal/Corporativo habilitado.
+    // - En modo Corporativo activa lógica FUEC.
+    // ---------------------------------------------------------
     {
-      'email': 'empleado@bancolombia.com',
+      'id': 'user_corp_01',
+      'email': 'corp@test.com',
       'password': '123',
-      'status': 'PENDING', // Usuario esperando aprobación
-      'nombre': 'Empleado Nuevo',
-      'empresa': 'Bancolombia S.A.',
+      'status': 'VERIFIED',
+      'nombre': 'Carlos Ejecutivo',
+      'telefono': '3002222222',
+      'empresa': 'Tech Solutions S.A.S',
+      'role': 'EMPLEADO',
+      'beneficiaries': [
+        // Simulamos un compañero o familiar registrado
+        {'id': 'ben_001', 'name': 'Hijo de Carlos', 'documentNumber': '102030'},
+      ],
     },
-    // --- USUARIO NUEVO PARA PRUEBAS (REVOCADO) ---
+
+    // ---------------------------------------------------------
+    // CASO 3: Usuario PENDIENTE (Recién registrado / En revisión)
+    // - Debe redirigir a pantalla de "Esperando Aprobación".
+    // ---------------------------------------------------------
     {
-      'email': 'ex_empleado@bancolombia.com',
+      'id': 'user_pending_01',
+      'email': 'pendiente@test.com',
       'password': '123',
-      'status': 'REVOKED', // <--- Este usuario ya no tiene acceso
-      'nombre': 'Juan Despedido',
-      'empresa': 'Bancolombia S.A.',
+      'status': 'UNDER_REVIEW',
+      'nombre': 'Pedro Pendiente',
+      'telefono': '3003333333',
+      'empresa': '',
+      'role': 'NATURAL',
+      'beneficiaries': [],
+    },
+
+    // ---------------------------------------------------------
+    // CASO 4: Usuario RECHAZADO (Documentos inválidos)
+    // - Debe mostrar error o pantalla de contacto a soporte.
+    // ---------------------------------------------------------
+    {
+      'id': 'user_rejected_01',
+      'email': 'rechazado@test.com',
+      'password': '123',
+      'status': 'REJECTED',
+      'nombre': 'Roberto Rechazado',
+      'telefono': '3004444444',
+      'empresa': '',
+      'role': 'NATURAL',
+      'beneficiaries': [],
+    },
+
+    // ---------------------------------------------------------
+    // CASO 5: Usuario REVOCADO (Baneado/Ex-empleado)
+    // - Acceso denegado totalmente.
+    // ---------------------------------------------------------
+    {
+      'id': 'user_revoked_01',
+      'email': 'bloqueado@test.com',
+      'password': '123',
+      'status': 'REVOKED',
+      'nombre': 'Maria Bloqueada',
+      'telefono': '3005555555',
+      'empresa': 'Empresa X',
+      'role': 'NATURAL',
+      'beneficiaries': [],
+    },
+
+    // ---------------------------------------------------------
+    // CASO 6: Usuario INCOMPLETO (Creó cuenta pero no subió docs)
+    // - Debe redirigir al flujo de onboarding/subida de fotos.
+    // ---------------------------------------------------------
+    {
+      'id': 'user_incomplete_01',
+      'email': 'nuevo@test.com',
+      'password': '123',
+      'status': 'DOCS_UPLOADED', // O 'DOCS_UPLOADED' dependiendo de tu lógica
+      'nombre': 'Nuevo Usuario',
+      'telefono': '3006666666',
+      'empresa': '',
+      'role': 'NATURAL',
+      'beneficiaries': [],
     },
   ];
 
   static final List<String> _emailsRegistrados = ['hola@vamos.com'];
 
-  // Simulación: Dominios permitidos
-  static final Map<String, String> _dominiosCorporativos = {
-    'bancolombia.com': 'Bancolombia S.A.',
-    'argos.co': 'Grupo Argos',
-    'vamos.com': 'VAMOS App Internal',
-    'tech.co': 'Tech Solutions',
-  };
-
-  // ---------------------------------------------------------------------------
-  // 1. MÉTODOS DE VALIDACIÓN Y LOGIN
-  // ---------------------------------------------------------------------------
-
-  static Future<bool> checkEmailExists(String email) async {
-    await Future.delayed(const Duration(milliseconds: 800));
-    // Revisa tanto en la lista simple como en la DB compleja
-    bool inSimpleList = _emailsRegistrados.contains(email);
-    bool inDb = _dbUsuarios.any((u) => u['email'] == email);
-    return inSimpleList || inDb;
-  }
-
+  // --- LOGIN ---
   static Future<Map<String, dynamic>> login(
     String email,
     String password,
   ) async {
     await Future.delayed(const Duration(seconds: 1));
-
     try {
-      final user = _dbUsuarios.firstWhere(
+      final userMap = _dbUsuarios.firstWhere(
         (u) => u['email'] == email,
         orElse: () => {},
       );
 
-      if (user.isEmpty) {
-        // Fallback para usuarios simples (legacy)
-        if (_emailsRegistrados.contains(email) && password == "123") {
-          return {'status': AuthStatus.active};
-        }
-        return {'status': AuthStatus.notFound};
+      if (userMap.isEmpty) return {'status': AuthResponseStatus.notFound};
+      if (userMap['password'] != password) {
+        return {'status': AuthResponseStatus.wrongPassword};
       }
 
-      if (user['password'] != password) {
-        return {'status': AuthStatus.wrongPassword};
+      final tempUser = User.fromMap(userMap);
+      _currentUser = tempUser;
+
+      switch (tempUser.verificationStatus) {
+        case UserVerificationStatus.VERIFIED:
+          return {'status': AuthResponseStatus.active, 'user': tempUser};
+        case UserVerificationStatus.UNDER_REVIEW:
+          return {
+            'status': AuthResponseStatus.pending,
+            'empresa': tempUser.empresa,
+          };
+        case UserVerificationStatus.CREATED:
+        case UserVerificationStatus.DOCS_UPLOADED:
+          return {'status': AuthResponseStatus.incomplete};
+        case UserVerificationStatus.REJECTED:
+          return {'status': AuthResponseStatus.rejected};
+        case UserVerificationStatus.REVOKED:
+          return {'status': AuthResponseStatus.revoked};
       }
-
-      final String estadoDb = user['status'];
-
-      // --- MANEJO DE ESTADOS ---
-      if (estadoDb == 'PENDING') {
-        return {'status': AuthStatus.pending, 'empresa': user['empresa']};
-      } else if (estadoDb == 'REJECTED') {
-        return {'status': AuthStatus.rejected};
-      } else if (estadoDb == 'REVOKED') {
-        return {'status': AuthStatus.revoked}; // <--- Retorna estado revocado
-      }
-
-      // Si es ACTIVE
-      currentUser = user;
-      return {'status': AuthStatus.active, 'user': user};
     } catch (e) {
-      return {'status': AuthStatus.error};
+      debugPrint("Error Login: $e");
+      return {'status': AuthResponseStatus.error};
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // 2. MÉTODOS DE SEGURIDAD CORPORATIVA
-  // ---------------------------------------------------------------------------
+  // --- REGISTRO ---
+  static Future<bool> registerPassenger(Map<String, dynamic> datos) async {
+    await Future.delayed(const Duration(seconds: 2));
+
+    // Lógica de estado inicial
+    String statusStr;
+    if (datos['tipo_persona'] == 'EMPLEADO') {
+      statusStr = 'UNDER_REVIEW';
+    } else {
+      // Usuario natural recién registrado con documentos enviados -> REVISIÓN
+      statusStr = 'UNDER_REVIEW';
+    }
+
+    // CORRECCIÓN CRÍTICA: Generar ID único simulado
+    final String newId = DateTime.now().millisecondsSinceEpoch.toString();
+
+    final newUserMap = {
+      'id': newId,
+      'email': datos['email'],
+      'password': datos['password'],
+      'status': statusStr,
+      'nombre': datos['nombre'],
+      'telefono': datos['telefono'],
+      'empresa': datos['nombre_empresa'] ?? '',
+      'role': datos['tipo_persona'] == 'EMPLEADO' ? 'EMPLEADO' : 'NATURAL',
+      'beneficiaries': [],
+    };
+
+    _dbUsuarios.add(newUserMap);
+
+    try {
+      _currentUser = User.fromMap(newUserMap);
+      debugPrint(
+        "Usuario registrado exitosamente: ${_currentUser?.id} - ${_currentUser?.verificationStatus}",
+      );
+      return true;
+    } catch (e) {
+      debugPrint("Error creando objeto User en registro: $e");
+      return false;
+    }
+  }
+
+  // --- OTROS MÉTODOS EXISTENTES (Sin cambios mayores) ---
+  static Future<bool> checkEmailExists(String email) async {
+    await Future.delayed(const Duration(milliseconds: 500));
+    return _dbUsuarios.any((u) => u['email'] == email) ||
+        _emailsRegistrados.contains(email);
+  }
+
+  static Future<bool> sendPhoneOTP(String phoneNumber) async {
+    await Future.delayed(const Duration(seconds: 1));
+    return true;
+  }
+
+  static Future<bool> verifyPhoneOTP(String phoneNumber, String code) async {
+    await Future.delayed(const Duration(seconds: 1));
+    return code == "555555";
+  }
+
+  static Future<bool> uploadIdentityDocuments({
+    required String frontIdPath,
+    required String backIdPath,
+    required String selfiePath,
+  }) async {
+    await Future.delayed(const Duration(seconds: 2));
+    return true;
+  }
+
+  static bool toggleAppMode(bool isCorporate) {
+    if (_currentUser == null) return false;
+    if (!_currentUser!.isEmployee && isCorporate) return false;
+    _currentUser = _currentUser!.copyWith(
+      appMode: isCorporate ? AppMode.CORPORATE : AppMode.PERSONAL,
+    );
+    return true;
+  }
+
+  static Future<bool> addBeneficiary(String name, String docId) async {
+    if (_currentUser == null) return false;
+    final newBen = Beneficiary(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: name,
+      documentNumber: docId,
+    );
+    final updatedList = List<Beneficiary>.from(_currentUser!.beneficiaries)
+      ..add(newBen);
+    _currentUser = _currentUser!.copyWith(beneficiaries: updatedList);
+    return true;
+  }
+
+  static Future<void> removeBeneficiary(String id) async {
+    if (_currentUser == null) return;
+    final updatedList = _currentUser!.beneficiaries
+        .where((b) => b.id != id)
+        .toList();
+    _currentUser = _currentUser!.copyWith(beneficiaries: updatedList);
+  }
 
   static Future<String?> checkCorporateDomain(String email) async {
-    await Future.delayed(const Duration(milliseconds: 1000));
-    final parts = email.split('@');
-    if (parts.length != 2) return null;
-
-    final domain = parts.last.toLowerCase();
-
-    if (_dominiosCorporativos.containsKey(domain)) {
-      return _dominiosCorporativos[domain];
-    }
+    if (email.contains('bancolombia')) return 'Bancolombia S.A.';
     return null;
   }
 
-  static Future<bool> sendCorporateOTP(String email) async {
-    await Future.delayed(const Duration(seconds: 1));
-    debugPrint("--- 🔐 OTP ENVIADO A $email : 123456 ---");
-    return true;
-  }
-
-  static Future<bool> verifyCorporateOTP(String email, String otp) async {
-    await Future.delayed(const Duration(seconds: 1));
-    return otp == "123456";
-  }
-
-  // ---------------------------------------------------------------------------
-  // 3. MÉTODOS DE REGISTRO
-  // ---------------------------------------------------------------------------
-
-  static Future<bool> registerPassenger(Map<String, dynamic> datos) async {
-    await Future.delayed(const Duration(seconds: 2));
-    debugPrint("--- NUEVO REGISTRO ---");
-    debugPrint("Data: $datos");
-
-    _dbUsuarios.add({
-      'email': datos['email'],
-      'password': datos['password'],
-      'status': datos['tipo_persona'] == 'EMPLEADO' ? 'PENDING' : 'ACTIVE',
-      'nombre': datos['nombre'],
-      'empresa': datos['nombre_empresa'] ?? '',
-    });
-
-    _emailsRegistrados.add(datos['email']);
-
-    currentUser = {
-      'nombre': datos['nombre'],
-      'email': datos['email'],
-      'tipo': datos['tipo_persona'],
-    };
-    return true;
-  }
-
-  // ---------------------------------------------------------------------------
-  // 4. MÉTODOS DE REFERIDOS
-  // ---------------------------------------------------------------------------
-
-  static Future<bool> sendReferralCode(String code) async {
-    await Future.delayed(const Duration(seconds: 1));
-    if (code.toUpperCase() == "ERROR") return false;
-    debugPrint("Referido canjeado: $code");
-    return true;
-  }
-
-  // ---------------------------------------------------------------------------
-  // 5. MÉTODOS DE AFILIACIÓN EMPRESAS
-  // ---------------------------------------------------------------------------
-
   static Future<bool> requestCompanyAffiliation(
-    Map<String, dynamic> requestData,
-  ) async {
-    await Future.delayed(const Duration(seconds: 2));
-    debugPrint("--- SOLICITUD EMPRESA RECIBIDA ---");
-    debugPrint("Empresa: ${requestData['empresa']['razon_social']}");
-    return true;
-  }
+    Map<String, dynamic> data,
+  ) async => true;
+  static Future<bool> sendCorporateOTP(String email) async => true;
+  static Future<bool> verifyCorporateOTP(String e, String o) async =>
+      o == "123456";
+  static Future<bool> sendReferralCode(String code) async =>
+      code.toUpperCase() != "ERROR";
 }

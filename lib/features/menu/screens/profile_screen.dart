@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/models/user_model.dart'; // Asegúrate de importar tu modelo
 import '../../auth/services/auth_service.dart';
 
 class ProfileScreen extends StatelessWidget {
@@ -9,11 +10,22 @@ class ProfileScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Obtenemos los datos actuales de la "sesión"
     final user = AuthService.currentUser;
 
+    // Valores seguros
+    final userName = user?.name ?? "Usuario";
+    final userPhone = (user?.phone != null && user!.phone.isNotEmpty)
+        ? user.phone
+        : "Sin teléfono";
+    final userEmail = user?.email ?? "Sin email";
+    final userId = user?.id ?? "Unknown";
+
+    final String userInitial = userName.isNotEmpty
+        ? userName[0].toUpperCase()
+        : "U";
+
     return Scaffold(
-      backgroundColor: Colors.white, // Fondo blanco como en la foto
+      backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
@@ -33,15 +45,14 @@ class ProfileScreen extends StatelessWidget {
             // --- AVATAR ---
             CircleAvatar(
               radius: 60,
-              backgroundColor: Colors.deepOrangeAccent.shade100, // Tono naranja
+              backgroundColor: Colors.deepOrangeAccent.shade100,
               backgroundImage: const NetworkImage(
                 "https://via.placeholder.com/150",
               ),
-              // Si no hay imagen, usa un color sólido o iniciales:
-              child: user['nombre'] != null
+              child: userName != "Usuario"
                   ? null
                   : Text(
-                      user['nombre'][0],
+                      userInitial,
                       style: const TextStyle(fontSize: 40, color: Colors.white),
                     ),
             ),
@@ -49,7 +60,7 @@ class ProfileScreen extends StatelessWidget {
 
             // --- NOMBRE ---
             Text(
-              user['nombre'] ?? "Usuario",
+              userName,
               style: GoogleFonts.poppins(
                 fontSize: 22,
                 color: AppColors.primaryGreen,
@@ -58,7 +69,7 @@ class ProfileScreen extends StatelessWidget {
             ),
             const SizedBox(height: 40),
 
-            // --- TITULO SECCION ---
+            // --- TITULO ---
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24.0),
               child: Align(
@@ -75,47 +86,32 @@ class ProfileScreen extends StatelessWidget {
             ),
             const SizedBox(height: 20),
 
-            // --- DATOS TELEFONO ---
+            // --- TELEFONO Y ESTADO ---
             _buildInfoTile(
               icon: Icons.phone,
-              text: user['telefono'] ?? "Sin teléfono",
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    "Verificado",
-                    style: GoogleFonts.poppins(
-                      color: AppColors.primaryGreen,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  const Icon(Icons.chevron_right, color: Colors.grey),
-                ],
-              ),
+              text: userPhone,
+              trailing: _buildVerificationBadge(user?.verificationStatus),
             ),
             const Divider(height: 1),
 
-            // --- DATOS EMAIL ---
+            // --- EMAIL ---
             _buildInfoTile(
               icon: Icons.email,
-              text: user['email'] ?? "Sin email",
+              text: userEmail,
               trailing: const Icon(Icons.chevron_right, color: Colors.grey),
             ),
             const Divider(height: 1),
 
             const SizedBox(height: 40),
 
-            // --- BOTON ELIMINAR CUENTA ---
+            // --- BOTON ELIMINAR ---
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24.0),
               child: SizedBox(
                 width: double.infinity,
                 height: 50,
                 child: OutlinedButton(
-                  onPressed: () {
-                    // Lógica para eliminar cuenta
-                  },
+                  onPressed: () {},
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Colors.red),
                     shape: RoundedRectangleBorder(
@@ -135,12 +131,63 @@ class ProfileScreen extends StatelessWidget {
 
             const SizedBox(height: 20),
             Text(
-              "100000001", // Versión o ID
+              "ID: $userId",
               style: GoogleFonts.poppins(color: Colors.grey.shade400),
             ),
+            const SizedBox(height: 20),
           ],
         ),
       ),
+    );
+  }
+
+  /// Construye el badge de estado (Verificado, Pendiente, etc.)
+  Widget _buildVerificationBadge(UserVerificationStatus? status) {
+    String label;
+    Color color;
+
+    switch (status) {
+      case UserVerificationStatus.VERIFIED:
+        label = "Verificado";
+        color = AppColors.primaryGreen;
+        break;
+      case UserVerificationStatus.UNDER_REVIEW:
+        label = "En revisión";
+        color = Colors.orange;
+        break;
+      case UserVerificationStatus.DOCS_UPLOADED:
+        label = "Docs subidos";
+        color = Colors.blue;
+        break;
+      case UserVerificationStatus.REJECTED:
+        label = "Rechazado";
+        color = Colors.red;
+        break;
+      case UserVerificationStatus.REVOKED:
+        label = "Revocado";
+        color = Colors.red;
+        break;
+      case UserVerificationStatus.CREATED:
+      default:
+        label = "Sin verificar";
+        color = Colors.grey;
+        break;
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.poppins(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(width: 4),
+        Icon(Icons.circle, size: 8, color: color),
+      ],
     );
   }
 

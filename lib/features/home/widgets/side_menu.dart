@@ -8,7 +8,7 @@ import '../../auth/services/auth_service.dart';
 // --- IMPORTS DE PANTALLAS ---
 import '../../menu/screens/profile_screen.dart';
 import '../../menu/screens/history_screen.dart';
-import '../../menu/screens/wallet_screen.dart';
+// import '../../menu/screens/wallet_screen.dart'; // Eliminado porque no se usa
 import '../../menu/screens/share_referral_screen.dart';
 import '../../menu/screens/support_screen.dart';
 import '../../auth/screens/welcome_screen.dart';
@@ -18,9 +18,11 @@ class SideMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Obtenemos nombre del usuario logueado
+    // Obtenemos el objeto usuario actual
     final user = AuthService.currentUser;
-    final String nombreMostrar = user['nombre'] ?? "Santi";
+
+    // CORRECCIÓN: Accedemos a la propiedad .name del objeto, no al mapa ['nombre']
+    final String nombreMostrar = user?.name ?? "Usuario";
 
     return Drawer(
       backgroundColor: Colors.white,
@@ -70,7 +72,8 @@ class SideMenu extends StatelessWidget {
             Icons.history,
             "Mis viajes",
             const HistoryScreen(),
-          ), // Texto cambiado a "Mis viajes" según foto
+          ),
+
           _buildMenuItem(
             context,
             Icons.card_giftcard,
@@ -93,6 +96,7 @@ class SideMenu extends StatelessWidget {
             padding: const EdgeInsets.all(24),
             child: ElevatedButton(
               onPressed: () {
+                // Aquí podrías limpiar sesión real si fuera necesario
                 Navigator.pushAndRemoveUntil(
                   context,
                   MaterialPageRoute(
