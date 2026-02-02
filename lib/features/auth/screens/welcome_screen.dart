@@ -84,8 +84,8 @@ class WelcomeScreen extends StatelessWidget {
                   // BOTÓN 1: PASAJERO / EMPLEADO
                   _buildRoleButton(
                     context,
-                    label: "Soy Pasajero / Empleado",
-                    subLabel: "Viajes particulares o con código corporativo",
+                    label: "Soy Pasajero",
+                    subLabel: "Viajes particulares o corporativos",
                     icon: Icons.person_outline,
                     isPrimary: true,
                     onPressed: () => Navigator.push(
@@ -101,7 +101,7 @@ class WelcomeScreen extends StatelessWidget {
                   // BOTÓN 2: EMPRESA (CONTRATANTE)
                   _buildRoleButton(
                     context,
-                    label: "Soy Empresa",
+                    label: "Registrar mi Empresa",
                     subLabel: "Quiero contratar servicios para mi personal",
                     icon: Icons.domain,
                     isPrimary: false,

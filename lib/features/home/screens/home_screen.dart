@@ -165,7 +165,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
-  void _toggleAppMode(bool value) {
+  void _toggleAppMode(bool isTargetCorporate) {
     if (_tripState != TripState.IDLE) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -175,18 +175,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       return;
     }
 
-    bool success = AuthService.toggleAppMode(value);
+    // CASO 1: Quiere activar Corporativo pero NO tiene vinculación (idResponsable es null)
+    if (isTargetCorporate && _currentUser.idResponsable == null) {
+      _showCorporateLinkingModal(); // <--- Aquí llamamos al modal
+      return;
+    }
 
-    // --- CORRECCIÓN 1: Bloque if/else con llaves {} ---
+    // CASO 2: Ya está vinculado o quiere volver a Personal
+    bool success = AuthService.toggleAppMode(isTargetCorporate);
+
     if (success) {
-      setState(() {});
+      setState(() {
+        // Forzamos actualización visual de marcadores y rutas
+        _routePoints = [];
+        _destinationCoordinates = null;
+        _destinationName = null;
+      });
     } else {
+      // Fallback por seguridad
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            "Solo empleados verificados pueden acceder al modo corporativo",
-          ),
-        ),
+        const SnackBar(content: Text("Error al cambiar de modo.")),
       );
     }
   }
@@ -505,7 +513,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildTopHybridBar() {
     bool isCorp = _currentUser.isCorporateMode;
-    bool isEmployee = _currentUser.isEmployee;
+    // bool isEmployee = _currentUser.isEmployee;
 
     return SafeArea(
       child: Container(
@@ -524,57 +532,31 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
             const SizedBox(width: 12),
-            if (isEmployee)
-              Expanded(
-                child: Container(
-                  height: 45,
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(25),
-                    boxShadow: const [
-                      BoxShadow(color: Colors.black12, blurRadius: 4),
-                    ],
-                  ),
-                  child: Row(
-                    children: [
-                      _buildModeOption(
-                        "Personal",
-                        !isCorp,
-                        AppColors.primaryGreen,
-                      ),
-                      _buildModeOption(
-                        "Corporativo",
-                        isCorp,
-                        Colors.blue[800]!,
-                      ),
-                    ],
-                  ),
+            // --- CAMBIO: Siempre mostramos el Switch, la lógica interna decide si permite cambiar ---
+            Expanded(
+              child: Container(
+                height: 45,
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(25),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black12, blurRadius: 4),
+                  ],
                 ),
-              )
-            else
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 8,
-                    horizontal: 16,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.person, color: AppColors.primaryGreen),
-                      const SizedBox(width: 8),
-                      Text(
-                        "Modo Personal",
-                        style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
+                child: Row(
+                  children: [
+                    _buildModeOption(
+                      "Personal",
+                      !isCorp,
+                      AppColors.primaryGreen,
+                    ),
+                    _buildModeOption("Corporativo", isCorp, Colors.blue[800]!),
+                  ],
                 ),
               ),
+            ),
+            // -------------------------------------------------------------------------------------
           ],
         ),
       ),
@@ -1022,10 +1004,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       secondary: const Icon(Icons.person),
                       onChanged: (bool? val) {
                         setModalState(() {
-                          // --- CORRECCIÓN 3: Validación segura de null y eliminación de operador muerto ---
-                          if (val != null) {
-                            _includeMyself = val;
-                          }
+                          _includeMyself = val ?? false;
                         });
                         setState(() {});
                       },
@@ -1437,4 +1416,265 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
         (Match m) => '${m[1]}.',
       );
+  // ===============================================================
+  // 5. MODAL DE VINCULACIÓN CORPORATIVA (NUEVO)
+  // ===============================================================
+
+  void _showCorporateLinkingModal() {
+    final nitCtrl = TextEditingController();
+    final emailCtrl = TextEditingController();
+    final otpCtrl = TextEditingController();
+
+    // Variables de estado interno del modal
+    String? foundCompanyName;
+    bool isLoading = false;
+    int step = 1; // 1: NIT, 2: OTP
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+                left: 20,
+                right: 20,
+                top: 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header
+                  Row(
+                    children: [
+                      Icon(Icons.business, color: Colors.blue[800], size: 28),
+                      const SizedBox(width: 10),
+                      Text(
+                        "Cuenta Corporativa",
+                        style: GoogleFonts.poppins(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue[900],
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                  const Divider(),
+                  const SizedBox(height: 10),
+
+                  if (isLoading)
+                    const Padding(
+                      padding: EdgeInsets.all(40.0),
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else if (step == 1) ...[
+                    // PASO 1: INGRESAR NIT
+                    Text(
+                      "Vincula tu cuenta para acceder a viajes pagados por tu empresa.",
+                      style: GoogleFonts.poppins(color: Colors.grey[700]),
+                    ),
+                    const SizedBox(height: 20),
+                    TextField(
+                      controller: nitCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: "NIT de la Empresa",
+                        hintText: "Ej: 900123456",
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        prefixIcon: const Icon(Icons.numbers),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue[800],
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        onPressed: () async {
+                          if (nitCtrl.text.isEmpty) return;
+
+                          setModalState(() => isLoading = true);
+                          // 1. Validar NIT
+                          final company = await AuthService.validateCompanyNit(
+                            nitCtrl.text,
+                          );
+
+                          setModalState(() {
+                            isLoading = false;
+                            if (company != null) {
+                              foundCompanyName = company;
+                              step = 2; // Avanzar a OTP
+                            } else {
+                              ScaffoldMessenger.of(ctx).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    "Empresa no encontrada con ese NIT",
+                                  ),
+                                ),
+                              );
+                            }
+                          });
+                        },
+                        child: Text(
+                          "Continuar",
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ] else ...[
+                    // PASO 2: CONFIRMAR Y OTP
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue[50],
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.blue[100]!),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.check_circle, color: Colors.green),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  "Empresa encontrada:",
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                                Text(
+                                  foundCompanyName ?? "",
+                                  style: GoogleFonts.poppins(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.blue[900],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      "Ingresa tu correo corporativo para verificar tu identidad.",
+                      style: GoogleFonts.poppins(fontSize: 12),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: emailCtrl,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: "Email Corporativo",
+                        prefixIcon: Icon(Icons.email_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    // Nota: Aquí simplificamos pidiendo el OTP de una vez,
+                    // en producción habría un botón "Enviar OTP" primero.
+                    // Para el MVP asumimos que el usuario ya tiene el OTP o "simulamos" el envío.
+                    TextField(
+                      controller: otpCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: "Código OTP (Simulado: 123456)",
+                        prefixIcon: Icon(Icons.lock_clock),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue[800],
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        onPressed: () async {
+                          if (emailCtrl.text.isEmpty || otpCtrl.text.isEmpty)
+                            return;
+
+                          setModalState(() => isLoading = true);
+
+                          // 2. Verificar OTP (Simulado)
+                          bool otpValid = otpCtrl.text == "123456";
+
+                          if (otpValid) {
+                            // 3. Vincular
+                            await AuthService.linkCorporateAccount(
+                              nit: nitCtrl.text,
+                              emailCorporativo: emailCtrl.text,
+                              empresaNombre: foundCompanyName!,
+                            );
+
+                            // --- CORRECCIÓN AQUÍ: Verificar si está montado ---
+                            if (!ctx.mounted) return;
+                            // ------------------------------------------------
+                            // Actualizar HOME
+                            setState(() {});
+
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  "¡Bienvenido a $foundCompanyName!",
+                                ),
+                                backgroundColor: Colors.green,
+                              ),
+                            );
+                          } else {
+                            setModalState(() => isLoading = false);
+                            ScaffoldMessenger.of(ctx).showSnackBar(
+                              const SnackBar(
+                                content: Text("Código OTP inválido"),
+                              ),
+                            );
+                          }
+                        },
+                        child: Text(
+                          "Vincular Empresa",
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 30),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 }

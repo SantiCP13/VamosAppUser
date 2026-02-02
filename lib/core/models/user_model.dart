@@ -1,10 +1,8 @@
-// lib/core/models/user_model.dart
 // ignore_for_file: constant_identifier_names
-
 enum UserVerificationStatus {
   CREATED,
   DOCS_UPLOADED,
-  UNDER_REVIEW, // En revisión manual
+  UNDER_REVIEW,
   VERIFIED,
   REJECTED,
   REVOKED,
@@ -41,21 +39,32 @@ class Beneficiary {
 }
 
 class User {
-  final String id;
+  final String id; // ID de Autenticación (Auth0 / Firebase / Laravel Sanctum)
+
+  // ESTRATEGIA ESPEJO (Identidad Unificada)
+  final String? idPassenger; // ID del perfil Pasajero (Personal)
+  final String?
+  idResponsable; // ID del perfil Corporativo (Nulo si no está vinculado)
+
   final String email;
   final String name;
   final String phone;
+  final String documentNumber; // Agregado para persistir la cédula
   final String empresa;
-  final UserRole role;
+  final UserRole
+  role; // Se mantiene por compatibilidad, pero default es NATURAL
   final UserVerificationStatus verificationStatus;
   final List<Beneficiary> beneficiaries;
   AppMode appMode;
 
   User({
     required this.id,
+    this.idPassenger,
+    this.idResponsable,
     required this.email,
     required this.name,
     required this.phone,
+    this.documentNumber = '',
     required this.role,
     this.empresa = '',
     this.verificationStatus = UserVerificationStatus.CREATED,
@@ -63,19 +72,24 @@ class User {
     this.appMode = AppMode.PERSONAL,
   });
 
-  bool get isEmployee => role == UserRole.EMPLEADO;
+  bool get isEmployee => role == UserRole.EMPLEADO || idResponsable != null;
   bool get isCorporateMode => appMode == AppMode.CORPORATE;
+
+  // Ahora la validación de solicitar viajes dependerá de si tiene el perfil activo
   bool get canRequestTrips =>
       verificationStatus == UserVerificationStatus.VERIFIED;
 
   factory User.fromMap(Map<String, dynamic> map) {
     return User(
-      // CORRECCIÓN: Asegurar fallback si no hay ID
       id: map['id'] ?? map['uid'] ?? 'unknown_id',
+      idPassenger: map['id_pasajero'],
+      idResponsable: map['id_responsable'],
       email: map['email'] ?? '',
       name: map['nombre'] ?? '',
       phone: map['telefono'] ?? map['phone'] ?? '',
+      documentNumber: map['documento'] ?? '',
       empresa: map['empresa'] ?? '',
+      // Todos nacen natural, el backend decidirá si cambia a EMPLEADO al vincular
       role: map['role'] == 'EMPLEADO' ? UserRole.EMPLEADO : UserRole.NATURAL,
       verificationStatus: _parseStatus(map['status']),
       beneficiaries:
@@ -91,7 +105,6 @@ class User {
       case 'ACTIVE':
       case 'VERIFIED':
         return UserVerificationStatus.VERIFIED;
-      // CORRECCIÓN: Agregado el case 'UNDER_REVIEW' explícito
       case 'UNDER_REVIEW':
       case 'PENDING':
         return UserVerificationStatus.UNDER_REVIEW;
@@ -111,12 +124,15 @@ class User {
   Map<String, dynamic> toMap() {
     return {
       'id': id,
+      'id_pasajero': idPassenger,
+      'id_responsable': idResponsable,
       'email': email,
       'nombre': name,
       'telefono': phone,
+      'documento': documentNumber,
       'empresa': empresa,
       'role': role == UserRole.EMPLEADO ? 'EMPLEADO' : 'NATURAL',
-      'status': verificationStatus.name, // Esto guarda "UNDER_REVIEW"
+      'status': verificationStatus.name,
       'beneficiaries': beneficiaries.map((b) => b.toJson()).toList(),
     };
   }
@@ -124,17 +140,22 @@ class User {
   User copyWith({
     String? name,
     String? phone,
+    String? idResponsable,
+    String? empresa, // <--- AGREGAR ESTA LÍNEA
     AppMode? appMode,
     UserVerificationStatus? verificationStatus,
     List<Beneficiary>? beneficiaries,
   }) {
     return User(
       id: id,
+      idPassenger: idPassenger,
+      idResponsable: idResponsable ?? this.idResponsable,
       email: email,
       name: name ?? this.name,
       phone: phone ?? this.phone,
+      documentNumber: documentNumber,
       role: role,
-      empresa: empresa,
+      empresa: empresa ?? this.empresa, // <--- AGREGAR ESTA LÍNEA
       verificationStatus: verificationStatus ?? this.verificationStatus,
       beneficiaries: beneficiaries ?? this.beneficiaries,
       appMode: appMode ?? this.appMode,

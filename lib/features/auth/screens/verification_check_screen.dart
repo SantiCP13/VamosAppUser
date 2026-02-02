@@ -162,7 +162,7 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
   String _getMessage() {
     switch (_status) {
       case UserVerificationStatus.UNDER_REVIEW:
-        return "Tu empresa o nuestro equipo de seguridad está validando tu identidad. Te notificaremos cuando puedas viajar.";
+        return "Estamos validando tu identidad. Te notificaremos cuando puedas viajar.";
       case UserVerificationStatus.CREATED:
         return "Para cumplir con la normativa legal, necesitamos copia de tu cédula. Por favor contacta a soporte.";
       case UserVerificationStatus.DOCS_UPLOADED:

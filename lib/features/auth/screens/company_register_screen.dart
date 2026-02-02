@@ -13,12 +13,10 @@ class CompanyRegisterScreen extends StatefulWidget {
 class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
   bool _isLoading = false;
 
-  // --- 1. Controladores Empresa (Información Legal) ---
+  // ---Controladores Empresa (Información Legal) ---
   final _razonSocialController = TextEditingController();
   final _nitController = TextEditingController();
   final _direccionEmpresaController = TextEditingController();
-
-  // Nuevos campos de contacto DE LA EMPRESA
   final _telefonoEmpresaController = TextEditingController();
   final _emailEmpresaController = TextEditingController();
 
@@ -62,7 +60,7 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
     'Otras',
   ];
 
-  // --- 2. Controladores Contacto Administrativo (La persona) ---
+  // ---  Controladores Contacto Administrativo (La persona) ---
   final _nombreContactoController = TextEditingController();
   final _telefonoContactoController = TextEditingController();
   final _emailContactoController = TextEditingController();
@@ -84,10 +82,10 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
     // Validaciones
     if (_razonSocialController.text.isEmpty ||
         _nitController.text.isEmpty ||
-        _ciudadSeleccionada == null || // Validar ciudad
+        _ciudadSeleccionada == null ||
         _direccionEmpresaController.text.isEmpty ||
-        _telefonoEmpresaController.text.isEmpty || // Validar tel empresa
-        _emailEmpresaController.text.isEmpty || // Validar email empresa
+        _telefonoEmpresaController.text.isEmpty ||
+        _emailEmpresaController.text.isEmpty ||
         _nombreContactoController.text.isEmpty ||
         _telefonoContactoController.text.isEmpty ||
         _emailContactoController.text.isEmpty) {
@@ -107,7 +105,7 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
     try {
       final Map<String, dynamic> requestPayload = {
         'tipo_solicitud': 'AFILIACION_EMPRESA',
-        // Objeto Empresa con sus propios datos de contacto
+
         'empresa': {
           'razon_social': _razonSocialController.text.trim(),
           'nit': _nitController.text.trim(),
@@ -116,7 +114,7 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
           'telefono_corporativo': _telefonoEmpresaController.text.trim(),
           'email_corporativo': _emailEmpresaController.text.trim(),
         },
-        // Objeto Contacto (Encargado / Representante)
+
         'contacto_administrativo': {
           'nombre': _nombreContactoController.text.trim(),
           'telefono_personal': _telefonoContactoController.text.trim(),
@@ -126,12 +124,10 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
         'fecha_solicitud': DateTime.now().toIso8601String(),
       };
 
-      // Llamamos al servicio (Simulado)
       bool success = await AuthService.requestCompanyAffiliation(
         requestPayload,
       );
 
-      // FIX: Verificamos mounted antes de usar el contexto
       if (!mounted) return;
 
       if (success) {
@@ -186,8 +182,8 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
                 ),
               ),
               onPressed: () {
-                Navigator.pop(context); // Cierra Dialog
-                Navigator.pop(context); // Regresa
+                Navigator.pop(context);
+                Navigator.pop(context);
               },
               child: const Text(
                 "Entendido",
@@ -222,13 +218,20 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // --- SECCIÓN 1: DATOS DE LA EMPRESA ---
+              // ---- DATOS DE LA EMPRESA ---
               Text(
                 "Información de la Empresa",
                 style: GoogleFonts.poppins(
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
                 ),
+              ),
+
+              const SizedBox(height: 16),
+
+              Text(
+                "Información legal y de contacto de la empresa que desea afiliarse a nuestra plataforma.",
+                style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
               ),
               const SizedBox(height: 16),
 
@@ -249,7 +252,6 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
 
               // Dropdown de Ciudades
               DropdownButtonFormField<String>(
-                // FIX: 'value' está deprecado, cambiamos a 'initialValue'
                 initialValue: _ciudadSeleccionada,
                 icon: const Icon(Icons.keyboard_arrow_down),
                 decoration: InputDecoration(
@@ -286,12 +288,11 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
 
               _buildTextField(
                 _direccionEmpresaController,
-                "Dirección Fiscal",
+                "Dirección",
                 Icons.map,
               ),
               const SizedBox(height: 16),
 
-              // Nuevos campos de contacto CORPORATIVO
               _buildTextField(
                 _telefonoEmpresaController,
                 "Telefono / Celular Corporativo",
@@ -311,9 +312,9 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
               Divider(color: Colors.grey.shade300, thickness: 1),
               const SizedBox(height: 20),
 
-              // --- SECCIÓN 2: CONTACTO ADMINISTRATIVO ---
+              // --- CONTACTO ADMINISTRATIVO ---
               Text(
-                "Información del Responsable",
+                "Información del Respresentante",
                 style: GoogleFonts.poppins(
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
@@ -321,7 +322,7 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
               ),
               const SizedBox(height: 5),
               Text(
-                "Persona responsable de gestionar la aplicación, esta información se puede modificar si hay un cambio a futuro.",
+                "Persona responsable de gestionar la aplicación, este será nuestro contacto principal con usted.",
                 style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
               ),
               const SizedBox(height: 16),
@@ -332,21 +333,6 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
                 Icons.person,
               ),
               const SizedBox(height: 16),
-              _buildTextField(
-                _telefonoContactoController,
-                "Celular del Encargado",
-                Icons.smartphone,
-                type: TextInputType.phone,
-              ),
-              const SizedBox(height: 16),
-              _buildTextField(
-                _emailContactoController,
-                "Correo del Encargado",
-                Icons.mail_outline,
-                type: TextInputType.emailAddress,
-              ),
-
-              const SizedBox(height: 40),
 
               SizedBox(
                 width: double.infinity,

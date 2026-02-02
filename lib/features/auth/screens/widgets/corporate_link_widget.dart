@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../../../../core/theme/app_colors.dart'; // Ajustado para llegar a core (4 niveles)
-// CORRECCIÓN PRINCIPAL AQUÍ ABAJO: Solo dos niveles atrás
+import '../../../../core/theme/app_colors.dart';
 import '../../services/auth_service.dart';
 
 class CorporateLinkWidget extends StatefulWidget {
@@ -43,14 +42,14 @@ class _CorporateLinkWidgetState extends State<CorporateLinkWidget> {
         widget.emailController.text.trim(),
       );
 
-      if (!mounted) return; // Corrección Async Gap
+      if (!mounted) return;
 
       if (companyName != null) {
         bool otpSent = await AuthService.sendCorporateOTP(
           widget.emailController.text.trim(),
         );
 
-        if (!mounted) return; // Corrección Async Gap
+        if (!mounted) return;
 
         if (otpSent) {
           setState(() {
@@ -94,7 +93,7 @@ class _CorporateLinkWidgetState extends State<CorporateLinkWidget> {
         _otpController.text.trim(),
       );
 
-      if (!mounted) return; // Corrección Async Gap
+      if (!mounted) return;
 
       if (isValid) {
         setState(() => _verificationSuccess = true);

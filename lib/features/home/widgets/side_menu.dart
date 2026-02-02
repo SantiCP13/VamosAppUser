@@ -51,6 +51,31 @@ class SideMenu extends StatelessWidget {
                         color: AppColors.primaryGreen,
                       ),
                     ),
+                    // --- NUEVO: Mostrar empresa si existe ---
+                    if (user?.empresa != null && user!.empresa.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4.0),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.blue[50],
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.blue[100]!),
+                          ),
+                          child: Text(
+                            user.empresa,
+                            style: GoogleFonts.poppins(
+                              fontSize: 10,
+                              color: Colors.blue[800],
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    // ----------------------------------------
                   ],
                 ),
               ],
