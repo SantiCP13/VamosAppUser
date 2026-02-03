@@ -1,11 +1,14 @@
+// lib/core/models/user_model.dart
+
 // ignore_for_file: constant_identifier_names
+
 enum UserVerificationStatus {
-  CREATED,
-  DOCS_UPLOADED,
-  UNDER_REVIEW,
-  VERIFIED,
-  REJECTED,
-  REVOKED,
+  CREATED, // Recién creado
+  DOCS_UPLOADED, // Subió documentos
+  UNDER_REVIEW, // En revisión
+  VERIFIED, // Aprobado y activo
+  REJECTED, // Rechazado
+  REVOKED, // Acceso revocado
 }
 
 enum UserRole { NATURAL, EMPLEADO }
@@ -39,23 +42,28 @@ class Beneficiary {
 }
 
 class User {
-  final String id; // ID de Autenticación (Auth0 / Firebase / Laravel Sanctum)
+  final String id; // El ID único no cambia
 
-  // ESTRATEGIA ESPEJO (Identidad Unificada)
-  final String? idPassenger; // ID del perfil Pasajero (Personal)
-  final String?
-  idResponsable; // ID del perfil Corporativo (Nulo si no está vinculado)
+  // --- VARIABLES MUTABLES (QUITAMOS 'FINAL') ---
+  String? idPassenger;
+  String? idResponsable;
 
   final String email;
   final String name;
   final String phone;
-  final String documentNumber; // Agregado para persistir la cédula
-  final String empresa;
-  final UserRole
-  role; // Se mantiene por compatibilidad, pero default es NATURAL
-  final UserVerificationStatus verificationStatus;
-  final List<Beneficiary> beneficiaries;
+  final String documentNumber;
+
+  // Datos de empresa mutables
+  String empresa;
+  String nitEmpresa;
+
+  // Enums mutables
+  UserRole role;
+  UserVerificationStatus verificationStatus;
   AppMode appMode;
+
+  // Lista mutable
+  List<Beneficiary> beneficiaries;
 
   User({
     required this.id,
@@ -67,17 +75,14 @@ class User {
     this.documentNumber = '',
     required this.role,
     this.empresa = '',
+    this.nitEmpresa = '',
     this.verificationStatus = UserVerificationStatus.CREATED,
-    this.beneficiaries = const [],
-    this.appMode = AppMode.PERSONAL,
+    required this.beneficiaries, // Quitamos 'const []' para permitir listas mutables
+    this.appMode = AppMode.CORPORATE,
   });
 
-  bool get isEmployee => role == UserRole.EMPLEADO || idResponsable != null;
   bool get isCorporateMode => appMode == AppMode.CORPORATE;
-
-  // Ahora la validación de solicitar viajes dependerá de si tiene el perfil activo
-  bool get canRequestTrips =>
-      verificationStatus == UserVerificationStatus.VERIFIED;
+  bool get isEmployee => role == UserRole.EMPLEADO || idResponsable != null;
 
   factory User.fromMap(Map<String, dynamic> map) {
     return User(
@@ -89,9 +94,19 @@ class User {
       phone: map['telefono'] ?? map['phone'] ?? '',
       documentNumber: map['documento'] ?? '',
       empresa: map['empresa'] ?? '',
-      // Todos nacen natural, el backend decidirá si cambia a EMPLEADO al vincular
-      role: map['role'] == 'EMPLEADO' ? UserRole.EMPLEADO : UserRole.NATURAL,
+      nitEmpresa: map['nit_empresa'] ?? '',
+
+      role: (map['role'] == 'EMPLEADO' || map['id_responsable'] != null)
+          ? UserRole.EMPLEADO
+          : UserRole.NATURAL,
+
       verificationStatus: _parseStatus(map['status']),
+
+      appMode: map['app_mode'] == 'PERSONAL'
+          ? AppMode.PERSONAL
+          : AppMode.CORPORATE,
+
+      // Aseguramos que sea una lista que se pueda modificar (growable: true)
       beneficiaries:
           (map['beneficiaries'] as List<dynamic>?)
               ?.map((e) => Beneficiary.fromJson(e))
@@ -108,14 +123,13 @@ class User {
       case 'UNDER_REVIEW':
       case 'PENDING':
         return UserVerificationStatus.UNDER_REVIEW;
-      case 'CREATED':
-        return UserVerificationStatus.CREATED;
       case 'DOCS_UPLOADED':
         return UserVerificationStatus.DOCS_UPLOADED;
       case 'REJECTED':
         return UserVerificationStatus.REJECTED;
       case 'REVOKED':
         return UserVerificationStatus.REVOKED;
+      case 'CREATED':
       default:
         return UserVerificationStatus.CREATED;
     }
@@ -131,34 +145,11 @@ class User {
       'telefono': phone,
       'documento': documentNumber,
       'empresa': empresa,
+      'nit_empresa': nitEmpresa,
       'role': role == UserRole.EMPLEADO ? 'EMPLEADO' : 'NATURAL',
       'status': verificationStatus.name,
+      'app_mode': appMode == AppMode.CORPORATE ? 'CORPORATE' : 'PERSONAL',
       'beneficiaries': beneficiaries.map((b) => b.toJson()).toList(),
     };
-  }
-
-  User copyWith({
-    String? name,
-    String? phone,
-    String? idResponsable,
-    String? empresa, // <--- AGREGAR ESTA LÍNEA
-    AppMode? appMode,
-    UserVerificationStatus? verificationStatus,
-    List<Beneficiary>? beneficiaries,
-  }) {
-    return User(
-      id: id,
-      idPassenger: idPassenger,
-      idResponsable: idResponsable ?? this.idResponsable,
-      email: email,
-      name: name ?? this.name,
-      phone: phone ?? this.phone,
-      documentNumber: documentNumber,
-      role: role,
-      empresa: empresa ?? this.empresa, // <--- AGREGAR ESTA LÍNEA
-      verificationStatus: verificationStatus ?? this.verificationStatus,
-      beneficiaries: beneficiaries ?? this.beneficiaries,
-      appMode: appMode ?? this.appMode,
-    );
   }
 }

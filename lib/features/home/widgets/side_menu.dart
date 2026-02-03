@@ -52,7 +52,9 @@ class SideMenu extends StatelessWidget {
                       ),
                     ),
                     // --- NUEVO: Mostrar empresa si existe ---
-                    if (user?.empresa != null && user!.empresa.isNotEmpty)
+                    if (user?.isCorporateMode == true &&
+                        user?.empresa != null &&
+                        user!.empresa.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 4.0),
                         child: Container(

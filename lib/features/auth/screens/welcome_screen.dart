@@ -81,24 +81,7 @@ class WelcomeScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
 
-                  // BOTÓN 1: PASAJERO / EMPLEADO
-                  _buildRoleButton(
-                    context,
-                    label: "Soy Pasajero",
-                    subLabel: "Viajes particulares o corporativos",
-                    icon: Icons.person_outline,
-                    isPrimary: true,
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const LoginScreen(),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // BOTÓN 2: EMPRESA (CONTRATANTE)
+                  // BOTÓN 1: EMPRESA (CONTRATANTE)
                   _buildRoleButton(
                     context,
                     label: "Registrar mi Empresa",
@@ -112,7 +95,22 @@ class WelcomeScreen extends StatelessWidget {
                       ),
                     ),
                   ),
+                  const SizedBox(height: 16),
 
+                  // BOTÓN 2: PASAJERO / EMPLEADO
+                  _buildRoleButton(
+                    context,
+                    label: "Soy Pasajero",
+                    subLabel: "Viaja con Nosotros",
+                    icon: Icons.person_outline,
+                    isPrimary: true,
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const LoginScreen(),
+                      ),
+                    ),
+                  ),
                   const Spacer(),
                 ],
               ),

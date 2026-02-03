@@ -4,7 +4,9 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/models/user_model.dart';
 import '../../auth/services/auth_service.dart';
 import '../../home/screens/home_screen.dart';
-import 'login_screen.dart'; // Asegúrate de tener este import para el logout
+import 'login_screen.dart';
+import 'pending_approval_screen.dart';
+import 'welcome_screen.dart';
 
 class VerificationCheckScreen extends StatefulWidget {
   const VerificationCheckScreen({super.key});
@@ -16,6 +18,7 @@ class VerificationCheckScreen extends StatefulWidget {
 
 class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
   UserVerificationStatus? _status;
+  User? _currentUser;
 
   @override
   void initState() {
@@ -24,13 +27,10 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
   }
 
   void _checkStatus() async {
-    // Simulamos una pequeña carga para validar sesión
     await Future.delayed(const Duration(milliseconds: 500));
-
     final user = AuthService.currentUser;
 
     if (user == null) {
-      // Si no hay usuario, volvemos al login
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
@@ -40,10 +40,10 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
     }
 
     setState(() {
+      _currentUser = user;
       _status = user.verificationStatus;
     });
 
-    // Si ya está verificado, pasamos directo al Home
     if (_status == UserVerificationStatus.VERIFIED) {
       if (!mounted) return;
       Navigator.pushReplacement(
@@ -55,7 +55,7 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Si aún carga o pasa al home
+    // 1. Cargando
     if (_status == null || _status == UserVerificationStatus.VERIFIED) {
       return const Scaffold(
         backgroundColor: Colors.white,
@@ -65,7 +65,22 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
       );
     }
 
-    // UI DE BLOQUEO SEGÚN ESTADO
+    // 2. CASOS DE PENDIENTES (LÓGICA DIVIDIDA)
+
+    // Caso A: Empleado Nuevo (Espera a la empresa)
+    if (_status == UserVerificationStatus.CREATED) {
+      return PendingApprovalScreen(
+        isNatural: false,
+        empresaNombre: _currentUser?.empresa ?? "Tu Empresa",
+      );
+    }
+
+    // Caso B: Natural Nuevo (Espera a VAMOS - Biometría)
+    if (_status == UserVerificationStatus.UNDER_REVIEW) {
+      return const PendingApprovalScreen(isNatural: true);
+    }
+
+    // 3. CASOS DE RECHAZO
     return Scaffold(
       backgroundColor: Colors.white,
       body: Padding(
@@ -73,10 +88,12 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            _buildStatusIcon(),
+            Icon(Icons.block, size: 80, color: Colors.red[300]),
             const SizedBox(height: 30),
             Text(
-              _getTitle(),
+              _status == UserVerificationStatus.REVOKED
+                  ? "Acceso Revocado"
+                  : "Solicitud Rechazada",
               textAlign: TextAlign.center,
               style: GoogleFonts.poppins(
                 fontSize: 22,
@@ -86,7 +103,7 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
             ),
             const SizedBox(height: 15),
             Text(
-              _getMessage(),
+              "Tu perfil no cumple con los requisitos o ha sido desactivado.",
               textAlign: TextAlign.center,
               style: GoogleFonts.poppins(
                 fontSize: 14,
@@ -95,25 +112,19 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
               ),
             ),
             const SizedBox(height: 40),
-
-            // Botón de Acción (Logout o Subir Docs)
             SizedBox(
               width: double.infinity,
               child: OutlinedButton(
                 onPressed: () {
-                  // Aquí podrías implementar LogOut real
                   Navigator.pushAndRemoveUntil(
                     context,
-                    MaterialPageRoute(builder: (_) => const LoginScreen()),
+                    MaterialPageRoute(builder: (_) => const WelcomeScreen()),
                     (route) => false,
                   );
                 },
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 15),
                   side: const BorderSide(color: Colors.red),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
                 ),
                 child: Text(
                   "Cerrar Sesión",
@@ -125,54 +136,5 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
         ),
       ),
     );
-  }
-
-  Widget _buildStatusIcon() {
-    switch (_status) {
-      case UserVerificationStatus.UNDER_REVIEW:
-        return Icon(Icons.history_edu, size: 80, color: Colors.orange[300]);
-      case UserVerificationStatus.CREATED:
-      case UserVerificationStatus.DOCS_UPLOADED:
-        return Icon(Icons.upload_file, size: 80, color: Colors.blue[300]);
-      case UserVerificationStatus.REJECTED:
-      case UserVerificationStatus.REVOKED:
-        return Icon(Icons.block, size: 80, color: Colors.red[300]);
-      default:
-        return const Icon(Icons.error, size: 80);
-    }
-  }
-
-  String _getTitle() {
-    switch (_status) {
-      case UserVerificationStatus.UNDER_REVIEW:
-        return "Perfil en Revisión";
-      case UserVerificationStatus.CREATED:
-        return "Faltan Documentos";
-      case UserVerificationStatus.DOCS_UPLOADED:
-        return "Documentos Subidos";
-      case UserVerificationStatus.REJECTED:
-        return "Solicitud Rechazada";
-      case UserVerificationStatus.REVOKED:
-        return "Acceso Revocado";
-      default:
-        return "Estado Desconocido";
-    }
-  }
-
-  String _getMessage() {
-    switch (_status) {
-      case UserVerificationStatus.UNDER_REVIEW:
-        return "Estamos validando tu identidad. Te notificaremos cuando puedas viajar.";
-      case UserVerificationStatus.CREATED:
-        return "Para cumplir con la normativa legal, necesitamos copia de tu cédula. Por favor contacta a soporte.";
-      case UserVerificationStatus.DOCS_UPLOADED:
-        return "Hemos recibido tus documentos. Estamos procesando la validación.";
-      case UserVerificationStatus.REJECTED:
-        return "Lamentablemente tu perfil no cumple con los requisitos de seguridad de VAMOS.";
-      case UserVerificationStatus.REVOKED:
-        return "Tu empresa ha desactivado tu cuenta corporativa. Contacta a tu administrador.";
-      default:
-        return "";
-    }
   }
 }

@@ -101,7 +101,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       debugPrint("GPS Apagado -> Usando Default");
-      _useDefaultLocation(); // Fallback inmediato
+      _useDefaultLocation();
       return;
     }
 
@@ -122,21 +122,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
 
     try {
-      // Intentamos obtener ubicación con un timeout de 5 seg
+      // --- MEJORA 1: Usar Cache (Last Known Position) ---
+      // Esto carga instantáneamente si el GPS ya se usó hace poco
+      Position? lastKnown = await Geolocator.getLastKnownPosition();
+
+      if (lastKnown != null && mounted) {
+        debugPrint("📍 Usando ubicación en caché (rápida)");
+        setState(() {
+          _currentPosition = LatLng(lastKnown.latitude, lastKnown.longitude);
+        });
+        _moveMapToCurrent();
+      }
+
+      // --- MEJORA 2: Aumentar Timeout ---
+      // 5 segundos es muy poco. Subimos a 15 segundos.
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 5),
+        timeLimit: const Duration(seconds: 15),
       );
 
       if (!mounted) return;
+
+      debugPrint("📡 Ubicación GPS fresca obtenida");
       setState(() {
         _currentPosition = LatLng(position.latitude, position.longitude);
       });
       _moveMapToCurrent();
     } catch (e) {
-      debugPrint("Error GPS ($e) -> Usando ubicación por defecto (Cajicá)");
-      // SI FALLA (Timeout o error de emulador), USAMOS LA DEFAULT
-      _useDefaultLocation();
+      debugPrint("Error GPS ($e)");
+      // Solo usamos la default si NO logramos obtener ni la caché ni la fresca
+      if (_currentPosition == null) {
+        debugPrint("⚠️ Falló todo -> Usando ubicación por defecto (Cajicá)");
+        _useDefaultLocation();
+      }
     }
   }
 
@@ -175,28 +193,101 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       return;
     }
 
-    // CASO 1: Quiere activar Corporativo pero NO tiene vinculación (idResponsable es null)
-    if (isTargetCorporate && _currentUser.idResponsable == null) {
-      _showCorporateLinkingModal(); // <--- Aquí llamamos al modal
+    // --- ESCENARIO 1: Quiere ir a CORPORATIVO ---
+    if (isTargetCorporate) {
+      // Si no tiene ID de responsable (no está vinculado), mostramos el modal de NIT
+      if (_currentUser.idResponsable == null) {
+        _showCorporateLinkingModal();
+        return;
+      }
+      // Si ya lo tiene, cambio directo
+      AuthService.toggleAppMode(true);
+      setState(() {
+        _resetTripData();
+      });
       return;
     }
 
-    // CASO 2: Ya está vinculado o quiere volver a Personal
-    bool success = AuthService.toggleAppMode(isTargetCorporate);
-
-    if (success) {
-      setState(() {
-        // Forzamos actualización visual de marcadores y rutas
-        _routePoints = [];
-        _destinationCoordinates = null;
-        _destinationName = null;
-      });
-    } else {
-      // Fallback por seguridad
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Error al cambiar de modo.")),
-      );
+    // --- ESCENARIO 2: Quiere ir a PERSONAL ---
+    if (!isTargetCorporate) {
+      // a. Si YA tiene ID de pasajero (Perfil Natural activo) -> Cambio directo
+      if (_currentUser.idPassenger != null) {
+        AuthService.toggleAppMode(false);
+        setState(() {
+          _resetTripData();
+        });
+      }
+      // b. Si NO tiene ID de pasajero (Es corporativo puro) -> Diálogo de activación simple
+      else {
+        _showActivateNaturalDialog();
+      }
     }
+  }
+
+  // Helper para limpiar datos al cambiar modo
+  void _resetTripData() {
+    _routePoints = [];
+    _destinationCoordinates = null;
+    _destinationName = null;
+  }
+
+  // --- NUEVO DIÁLOGO SIMPLE (Reemplaza al _showPersonalKYCModal) ---
+  // --- DIÁLOGO DE ACTIVACIÓN SIMPLE (Corregido) ---
+  void _showActivateNaturalDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Activar Perfil Personal"),
+        content: const Text(
+          "Como usuario Corporativo verificado, puedes activar tu perfil Personal inmediatamente.\n\n"
+          "Esto te permitirá solicitar viajes particulares pagados por ti.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancelar"),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryGreen,
+            ),
+            onPressed: () async {
+              // 1. Cerramos el diálogo primero
+              Navigator.pop(ctx);
+
+              // 2. Mostrar indicador de carga (Opcional, pero recomendado)
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Procesando solicitud...")),
+              );
+
+              // 3. Llamamos al servicio existente
+              // (Este método ya existe en tu AuthService y hace lo correcto:
+              // genera id_pasajero y cambia el modo a PERSONAL)
+              await AuthService.activateNaturalProfile();
+
+              // 4. Verificamos si el widget sigue montado antes de usar setState
+              if (!mounted) return;
+
+              // 5. Actualizamos la UI
+              setState(() {
+                _resetTripData();
+              });
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text("¡Perfil Personal Activado y en uso!"),
+                ),
+              );
+            },
+            child: const Text(
+              "Activar Ahora",
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<bool> _isTripAllowed(LatLng start, LatLng end) async {
@@ -1416,25 +1507,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
         (Match m) => '${m[1]}.',
       );
+
   // ===============================================================
-  // 5. MODAL DE VINCULACIÓN CORPORATIVA (NUEVO)
+  // 5. MODAL DE VINCULACIÓN CORPORATIVA (SELECCIÓN SIMPLE)
   // ===============================================================
 
   void _showCorporateLinkingModal() {
-    final nitCtrl = TextEditingController();
-    final emailCtrl = TextEditingController();
-    final otpCtrl = TextEditingController();
-
-    // Variables de estado interno del modal
-    String? foundCompanyName;
+    // Variable para guardar la empresa seleccionada del Dropdown
+    Map<String, String>? selectedCompany;
     bool isLoading = false;
-    int step = 1; // 1: NIT, 2: OTP
+
+    // Variable para controlar si mostramos el estado de "Verificando..."
+    bool isVerifying = false;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      isDismissible: false,
-      enableDrag: false,
+      isDismissible: !isVerifying, // No cerrar mientras verifica
+      enableDrag: !isVerifying,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
       ),
@@ -1443,7 +1533,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           builder: (context, setModalState) {
             return Padding(
               padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
                 left: 20,
                 right: 20,
                 top: 20,
@@ -1452,229 +1542,384 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Header
+                  // --- CABECERA ---
                   Row(
                     children: [
-                      Icon(Icons.business, color: Colors.blue[800], size: 28),
-                      const SizedBox(width: 10),
-                      Text(
-                        "Cuenta Corporativa",
-                        style: GoogleFonts.poppins(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue[900],
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.blue[50],
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(Icons.domain, color: Colors.blue[900]),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text(
+                          "Activar Modo Corporativo",
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: () => Navigator.pop(context),
-                      ),
+                      if (!isVerifying)
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.grey),
+                          onPressed: () => Navigator.pop(context),
+                        ),
                     ],
                   ),
                   const Divider(),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 15),
 
-                  if (isLoading)
-                    const Padding(
-                      padding: EdgeInsets.all(40.0),
-                      child: Center(child: CircularProgressIndicator()),
-                    )
-                  else if (step == 1) ...[
-                    // PASO 1: INGRESAR NIT
-                    Text(
-                      "Vincula tu cuenta para acceder a viajes pagados por tu empresa.",
-                      style: GoogleFonts.poppins(color: Colors.grey[700]),
-                    ),
-                    const SizedBox(height: 20),
-                    TextField(
-                      controller: nitCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: InputDecoration(
-                        labelText: "NIT de la Empresa",
-                        hintText: "Ej: 900123456",
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        prefixIcon: const Icon(Icons.numbers),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue[800],
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                        ),
-                        onPressed: () async {
-                          if (nitCtrl.text.isEmpty) return;
-
-                          setModalState(() => isLoading = true);
-                          // 1. Validar NIT
-                          final company = await AuthService.validateCompanyNit(
-                            nitCtrl.text,
-                          );
-
-                          setModalState(() {
-                            isLoading = false;
-                            if (company != null) {
-                              foundCompanyName = company;
-                              step = 2; // Avanzar a OTP
-                            } else {
-                              ScaffoldMessenger.of(ctx).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
-                                    "Empresa no encontrada con ese NIT",
-                                  ),
-                                ),
-                              );
-                            }
-                          });
-                        },
-                        child: Text(
-                          "Continuar",
-                          style: GoogleFonts.poppins(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ] else ...[
-                    // PASO 2: CONFIRMAR Y OTP
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.blue[50],
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.blue[100]!),
-                      ),
-                      child: Row(
+                  // --- CUERPO: CASO 1 (VERIFICANDO) ---
+                  if (isVerifying) ...[
+                    Center(
+                      child: Column(
                         children: [
-                          const Icon(Icons.check_circle, color: Colors.green),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  "Empresa encontrada:",
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color: Colors.grey,
-                                  ),
-                                ),
-                                Text(
-                                  foundCompanyName ?? "",
-                                  style: GoogleFonts.poppins(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.blue[900],
-                                  ),
-                                ),
-                              ],
+                          const SizedBox(height: 20),
+                          const CircularProgressIndicator(),
+                          const SizedBox(height: 20),
+                          Text(
+                            "Validando con la empresa...",
+                            style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
                             ),
                           ),
+                          const SizedBox(height: 10),
+                          Text(
+                            "Consultando cédula ${_currentUser.documentNumber}\nen la base de datos de ${selectedCompany?['name']}...",
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.poppins(color: Colors.grey),
+                          ),
+                          const SizedBox(height: 30),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 20),
+
+                    // --- CUERPO: CASO 2 (FORMULARIO) ---
+                  ] else ...[
                     Text(
-                      "Ingresa tu correo corporativo para verificar tu identidad.",
-                      style: GoogleFonts.poppins(fontSize: 12),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: emailCtrl,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(
-                        labelText: "Email Corporativo",
-                        prefixIcon: Icon(Icons.email_outlined),
+                      "Selecciona la empresa a la que perteneces. Validaremos automáticamente si tu documento está autorizado.",
+                      style: GoogleFonts.poppins(
+                        color: Colors.grey[700],
+                        fontSize: 13,
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    // Nota: Aquí simplificamos pidiendo el OTP de una vez,
-                    // en producción habría un botón "Enviar OTP" primero.
-                    // Para el MVP asumimos que el usuario ya tiene el OTP o "simulamos" el envío.
-                    TextField(
-                      controller: otpCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: "Código OTP (Simulado: 123456)",
-                        prefixIcon: Icon(Icons.lock_clock),
-                      ),
+                    const SizedBox(height: 25),
+
+                    // DROPDOWN CON FUTURE BUILDER
+                    const Text(
+                      "Empresa",
+                      style: TextStyle(fontWeight: FontWeight.bold),
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 8),
+                    FutureBuilder<List<Map<String, String>>>(
+                      future:
+                          AuthService.getAvailableCompanies(), // Método nuevo
+                      builder: (context, snapshot) {
+                        if (!snapshot.hasData) {
+                          return Container(
+                            height: 55,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[100],
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Center(
+                              child: Text("Cargando empresas..."),
+                            ),
+                          );
+                        }
+
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey.shade400),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<Map<String, String>>(
+                              isExpanded: true,
+                              hint: const Text("Toca para seleccionar..."),
+                              value: selectedCompany,
+                              items: snapshot.data!.map((company) {
+                                return DropdownMenuItem(
+                                  value: company,
+                                  child: Text(
+                                    company['name']!,
+                                    style: GoogleFonts.poppins(),
+                                  ),
+                                );
+                              }).toList(),
+                              onChanged: (val) {
+                                setModalState(() {
+                                  selectedCompany = val;
+                                });
+                              },
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    // BOTÓN DE ACCIÓN
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.blue[800],
-                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(12),
                           ),
+                          disabledBackgroundColor: Colors.grey[300],
                         ),
-                        onPressed: () async {
-                          if (emailCtrl.text.isEmpty || otpCtrl.text.isEmpty)
-                            return;
+                        onPressed: selectedCompany == null
+                            ? null
+                            : () async {
+                                // 1. CAMBIAR ESTADO A VERIFICANDO
+                                setModalState(() {
+                                  isVerifying = true;
+                                });
 
-                          setModalState(() => isLoading = true);
+                                // 2. LLAMAR AL SERVICIO
+                                bool success =
+                                    await AuthService.verifyAndLinkCompanyFromBackend(
+                                      nit: selectedCompany!['nit']!,
+                                      companyName: selectedCompany!['name']!,
+                                    );
 
-                          // 2. Verificar OTP (Simulado)
-                          bool otpValid = otpCtrl.text == "123456";
+                                // 3. MANEJAR RESPUESTA
+                                if (!context.mounted) return;
 
-                          if (otpValid) {
-                            // 3. Vincular
-                            await AuthService.linkCorporateAccount(
-                              nit: nitCtrl.text,
-                              emailCorporativo: emailCtrl.text,
-                              empresaNombre: foundCompanyName!,
-                            );
+                                // Cerramos el modal de formulario
+                                Navigator.pop(context);
 
-                            // --- CORRECCIÓN AQUÍ: Verificar si está montado ---
-                            if (!ctx.mounted) return;
-                            // ------------------------------------------------
-                            // Actualizar HOME
-                            setState(() {});
-
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  "¡Bienvenido a $foundCompanyName!",
-                                ),
-                                backgroundColor: Colors.green,
-                              ),
-                            );
-                          } else {
-                            setModalState(() => isLoading = false);
-                            ScaffoldMessenger.of(ctx).showSnackBar(
-                              const SnackBar(
-                                content: Text("Código OTP inválido"),
-                              ),
-                            );
-                          }
-                        },
+                                if (success) {
+                                  // ÉXITO
+                                  setState(() {
+                                    // Forzamos rebuild del Home para ver el cambio de color
+                                  });
+                                  _showSuccessDialog(selectedCompany!['name']!);
+                                } else {
+                                  // FALLO
+                                  _showRejectionDialog(
+                                    selectedCompany!['name']!,
+                                  );
+                                }
+                              },
                         child: Text(
-                          "Vincular Empresa",
+                          "Verificar Vinculación",
                           style: GoogleFonts.poppins(
                             fontWeight: FontWeight.bold,
                             color: Colors.white,
+                            fontSize: 16,
                           ),
                         ),
                       ),
                     ),
+                    const SizedBox(height: 20),
                   ],
-                  const SizedBox(height: 30),
                 ],
               ),
             );
           },
         );
       },
+    );
+  }
+
+  // --- DIÁLOGO DE ÉXITO ---
+  void _showSuccessDialog(String companyName) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.check_circle, color: Colors.green, size: 60),
+            const SizedBox(height: 20),
+            Text(
+              "¡Bienvenido!",
+              style: GoogleFonts.poppins(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              "Tu identidad ha sido verificada correctamente por $companyName.",
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              "Ir a Modo Corporativo",
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- DIÁLOGO DE RECHAZO ---
+  void _showRejectionDialog(String companyName) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.error_outline, color: Colors.red),
+            const SizedBox(width: 10),
+            const Text("Verificación Fallida"),
+          ],
+        ),
+        content: Text(
+          "No encontramos la cédula ${_currentUser.documentNumber} en la lista de empleados activos de $companyName.\n\nPor favor contacta a RRHH de tu empresa.",
+          style: GoogleFonts.poppins(fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              "Intentar de nuevo",
+              style: TextStyle(color: Colors.red),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- DIÁLOGO DE CONFIRMACIÓN PENDIENTE ---
+  void _showPendingApprovalDialog(String companyName) {
+    showDialog(
+      context: context,
+      barrierDismissible: false, // Obliga a darle OK
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        contentPadding: const EdgeInsets.all(25),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(
+                color: Colors.amber[50],
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.hourglass_top_rounded,
+                size: 50,
+                color: Colors.amber[800],
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              "Solicitud Enviada",
+              style: GoogleFonts.poppins(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Colors.black87,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 15),
+            Text.rich(
+              TextSpan(
+                text: "Hemos notificado a ",
+                style: GoogleFonts.poppins(color: Colors.grey[600]),
+                children: [
+                  TextSpan(
+                    text: companyName,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const TextSpan(
+                    text:
+                        ".\n\nTu perfil cambiará a MODO CORPORATIVO automáticamente una vez que el administrador de la empresa apruebe tu solicitud.",
+                  ),
+                ],
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue[800],
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text(
+                "Entendido",
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  // ===============================================================
+  // 6. MODAL DE VERIFICACIÓN BIOMÉTRICA (KYC PERSONAL)
+  // ===============================================================
+
+  // Widget auxiliar para los botones de carga
+  Widget _buildUploadButton({
+    required String label,
+    required IconData icon,
+    required bool isUploaded,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: isUploaded ? null : onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 15),
+        decoration: BoxDecoration(
+          color: isUploaded ? Colors.green[50] : Colors.white,
+          border: Border.all(
+            color: isUploaded ? Colors.green : Colors.grey.shade300,
+          ),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              isUploaded ? Icons.check_circle : icon,
+              color: isUploaded ? Colors.green : Colors.grey,
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: Text(
+                isUploaded ? "$label (Cargado)" : "Subir $label",
+                style: GoogleFonts.poppins(
+                  color: isUploaded ? Colors.green[800] : Colors.black87,
+                  fontWeight: isUploaded ? FontWeight.bold : FontWeight.normal,
+                ),
+              ),
+            ),
+            if (!isUploaded)
+              const Icon(Icons.camera_alt, color: Colors.grey, size: 20),
+          ],
+        ),
+      ),
     );
   }
 }

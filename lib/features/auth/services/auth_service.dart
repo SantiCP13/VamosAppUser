@@ -1,9 +1,11 @@
 import 'package:flutter/foundation.dart';
 import '../../../core/models/user_model.dart';
+// Asegúrate de que la ruta al user_model sea correcta.
 
 enum AuthResponseStatus {
   active,
-  pending,
+  pending, // Para Created (Empresa - Pendiente aprobación)
+  underReview, // Para revisión manual (Vamos / Natural)
   rejected,
   revoked,
   incomplete,
@@ -16,240 +18,406 @@ class AuthService {
   static User? _currentUser;
   static User? get currentUser => _currentUser;
 
-  // Mock DB
+  // ===========================================================================
+  // 1. BASES DE DATOS MOCK (Simulación de Escenarios)
+  // ===========================================================================
+
+  static final List<Map<String, String>> _mockCompaniesDB = [
+    {'nit': '900123456', 'name': 'Transportes Ejecutivos S.A.S'},
+    {'nit': '890903938', 'name': 'Bancolombia S.A.'},
+    {'nit': '800222333', 'name': 'Ecopetrol'},
+    {'nit': '111222333', 'name': 'Vamos App Demo'},
+  ];
+
+  // ---------------------------------------------------------------------------
+  // LISTA DE USUARIOS DE PRUEBA PARA TODOS LOS ESCENARIOS
+  // Contraseña universal: "123"
+  // ---------------------------------------------------------------------------
   static final List<Map<String, dynamic>> _dbUsuarios = [
+    // ESCENARIO 1: Corporativo VERIFICADO -> Home Screen (Modo Corp)
     {
-      'id': 'user_verified',
-      'id_pasajero': 'p_01',
-      'id_responsable': null,
-      'email': 'test@vamos.com',
+      'id': 'user_corp_active',
+      'id_pasajero': null,
+      'id_responsable': 'resp_01',
+      'email': 'corp@vamos.com',
       'password': '123',
-      'status': 'VERIFIED',
-      'nombre': 'Usuario Test',
-      'documento': '123456',
-      'telefono': '3001234567',
+      'nombre': 'Carlos Corporativo',
+      'documento': '101',
+      'telefono': '3001001001',
+      'direccion': 'Oficina Central',
+      'empresa': 'Transportes Ejecutivos S.A.S',
+      'nit_empresa': '900123456',
+      'role': 'EMPLEADO',
+      'status': 'VERIFIED', // Clave para entrar al Home
+      'app_mode': 'CORPORATE',
+      'beneficiaries': [],
+    },
+
+    // ESCENARIO 2: Corporativo PENDIENTE -> Pending Approval Screen
+    {
+      'id': 'user_corp_pending',
+      'id_pasajero': null,
+      'id_responsable': 'resp_02',
+      'email': 'pendiente@vamos.com',
+      'password': '123',
+      'nombre': 'Pedro Pendiente',
+      'documento': '102',
+      'telefono': '3001001002',
+      'empresa': 'Bancolombia S.A.',
+      'nit_empresa': '890903938',
+      'role': 'EMPLEADO',
+      'status':
+          'CREATED', // Clave para pantalla de "Esperando aprobación empresa"
+      'app_mode': 'CORPORATE',
+      'beneficiaries': [],
+    },
+
+    // ESCENARIO 3: Natural VERIFICADO -> Home Screen (Modo Personal)
+    {
+      'id': 'user_natural_active',
+      'id_pasajero': 'pas_03', // Usuario natural tiene ID pasajero
+      'id_responsable': null,
+      'email': 'natural@vamos.com',
+      'password': '123',
+      'nombre': 'Ana Natural',
+      'documento': '103',
+      'telefono': '3001001003',
+      'direccion': 'Casa 1',
+      'empresa': null,
+      'nit_empresa': null,
+      'role': 'NATURAL',
+      'status': 'VERIFIED', // Clave para entrar al Home
+      'app_mode': 'PERSONAL',
+      'beneficiaries': [],
+    },
+
+    // ESCENARIO 4: Natural EN REVISIÓN -> Verification Check Screen
+    {
+      'id': 'user_natural_review',
+      'id_pasajero': 'pas_04',
+      'email': 'revision@vamos.com',
+      'password': '123',
+      'nombre': 'Roberto Revisión',
+      'documento': '104',
+      'role': 'NATURAL',
+      'status':
+          'UNDER_REVIEW', // Clave para pantalla "Estamos revisando tus docs"
+      'app_mode': 'PERSONAL',
+      'beneficiaries': [],
+    },
+
+    // ESCENARIO 5: Usuario RECHAZADO -> Debe mostrar error/alerta
+    {
+      'id': 'user_rejected',
+      'email': 'rechazado@vamos.com',
+      'password': '123',
+      'nombre': 'Felipe Fallido',
+      'status': 'REJECTED', // Clave para AuthResponseStatus.rejected
       'role': 'NATURAL',
       'beneficiaries': [],
-      'empresa': '',
+    },
+
+    // ESCENARIO 6: Usuario REVOCADO (Baneado) -> Debe mostrar error/alerta
+    {
+      'id': 'user_revoked',
+      'email': 'baneado@vamos.com',
+      'password': '123',
+      'nombre': 'Maria Malportada',
+      'status': 'REVOKED', // Clave para AuthResponseStatus.revoked
+      'role': 'NATURAL',
+      'beneficiaries': [],
     },
   ];
 
-  static final List<String> _emailsRegistrados = ['hola@vamos.com'];
-
   // ===========================================================================
-  // 1. MÉTODOS DE AUTENTICACIÓN (LOGIN & REGISTRO NUEVO)
+  // 2. MÓDULO B2B (EMPRESAS)
   // ===========================================================================
 
-  // --- LOGIN ---
-  static Future<Map<String, dynamic>> login(
-    String email,
-    String password,
-  ) async {
-    await Future.delayed(const Duration(seconds: 1));
-    try {
-      final userMap = _dbUsuarios.firstWhere(
-        (u) => u['email'] == email,
-        orElse: () => {},
-      );
-
-      if (userMap.isEmpty) return {'status': AuthResponseStatus.notFound};
-      if (userMap['password'] != password) {
-        return {'status': AuthResponseStatus.wrongPassword};
-      }
-
-      final tempUser = User.fromMap(userMap);
-      _currentUser = tempUser;
-
-      if (tempUser.verificationStatus == UserVerificationStatus.VERIFIED) {
-        return {'status': AuthResponseStatus.active, 'user': tempUser};
-      } else if (tempUser.verificationStatus ==
-          UserVerificationStatus.UNDER_REVIEW) {
-        return {'status': AuthResponseStatus.pending};
-      } else {
-        return {'status': AuthResponseStatus.incomplete};
-      }
-    } catch (e) {
-      debugPrint("Error Login: $e");
-      return {'status': AuthResponseStatus.error};
-    }
+  static Future<List<Map<String, String>>> searchCompanies(String query) async {
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (query.isEmpty) return _mockCompaniesDB;
+    final q = query.toLowerCase();
+    return _mockCompaniesDB
+        .where(
+          (c) => c['name']!.toLowerCase().contains(q) || c['nit']!.contains(q),
+        )
+        .toList();
   }
 
-  // --- REGISTRO SEGURO (CON DOCS) ---
-  static Future<bool> registerPassenger(Map<String, dynamic> datos) async {
-    await Future.delayed(const Duration(seconds: 3));
-
+  static Future<bool> requestCompanyAffiliation(
+    Map<String, dynamic> payload,
+  ) async {
+    await Future.delayed(const Duration(seconds: 2));
     try {
-      final String newId = DateTime.now().millisecondsSinceEpoch.toString();
+      final datosEmpresa = payload['empresa'];
+      final String nuevoNit = datosEmpresa['nit'];
+      final String nuevaRazonSocial = datosEmpresa['razon_social'];
 
-      final newUserMap = {
-        'id': newId,
-        'id_pasajero': 'pass_$newId',
-        'id_responsable': null,
-        'email': datos['email'],
-        'password': datos['password'],
-        'status': 'UNDER_REVIEW',
-        'nombre': datos['nombre'],
-        'documento': datos['documento'],
-        'telefono': datos['telefono'],
-        'direccion': datos['direccion'],
-        'empresa': '',
-        'role': 'NATURAL',
-        'beneficiaries': [],
-      };
-
-      _dbUsuarios.add(newUserMap);
-      _currentUser = User.fromMap(newUserMap);
-
+      final existe = _mockCompaniesDB.any((c) => c['nit'] == nuevoNit);
+      if (!existe) {
+        _mockCompaniesDB.add({'nit': nuevoNit, 'name': nuevaRazonSocial});
+      }
       return true;
     } catch (e) {
-      debugPrint("Error registro: $e");
       return false;
     }
   }
 
   // ===========================================================================
-  // 2. MÉTODOS DE VERIFICACIÓN (OTP & DOCS)
+  // 3. REGISTROS DE USUARIOS
   // ===========================================================================
 
-  static Future<bool> sendEmailOTP(String email) async {
-    await Future.delayed(const Duration(seconds: 1));
-    debugPrint("📧 Enviando OTP al correo: $email");
-    return true;
-  }
-
-  static Future<bool> verifyEmailOTP(String email, String otp) async {
-    await Future.delayed(const Duration(seconds: 1));
-    return otp == "123456";
-  }
-
-  // Método legacy para mantener compatibilidad si alguna pantalla vieja llama a phone
-  static Future<bool> sendPhoneOTP(String phoneNumber) async => true;
-  static Future<bool> verifyPhoneOTP(String phoneNumber, String code) async =>
-      code == "555555";
-
-  static Future<bool> uploadIdentityDocuments({
-    required String frontIdPath,
-    required String backIdPath,
-    required String selfiePath,
-  }) async {
-    await Future.delayed(const Duration(seconds: 1));
-    return true;
-  }
-
-  // ===========================================================================
-  // 3. MÉTODOS DE GESTIÓN DE ESTADO (HOME & PERFIL)
-  // ===========================================================================
-
-  // Restaurado para que home_screen.dart no falle
-  static bool toggleAppMode(bool isCorporate) {
-    if (_currentUser == null) return false;
-
-    // Si quiere ser corporativo pero NO tiene idResponsable (Vinculación)
-    if (isCorporate && _currentUser!.idResponsable == null) {
-      return false; // El Home deberá detectar este false para mostrar el modal de vinculación
+  static Future<bool> registerCorporateUser(Map<String, dynamic> datos) async {
+    await Future.delayed(const Duration(seconds: 2));
+    try {
+      final String newId = DateTime.now().millisecondsSinceEpoch.toString();
+      final newUserMap = {
+        'id': newId,
+        'id_pasajero': null,
+        'id_responsable': 'resp_$newId',
+        'email': datos['email'],
+        'password': datos['password'],
+        'nombre': datos['nombre'],
+        'documento': datos['documento'],
+        'telefono': datos['telefono'],
+        'direccion': datos['direccion'],
+        'empresa': datos['nombre_empresa'],
+        'nit_empresa': datos['nit_empresa'],
+        'role': 'EMPLEADO',
+        'status': 'CREATED',
+        'app_mode': 'CORPORATE',
+        'beneficiaries': [],
+      };
+      _dbUsuarios.add(newUserMap);
+      _currentUser = User.fromMap(newUserMap);
+      return true;
+    } catch (e) {
+      return false;
     }
-
-    _currentUser = _currentUser!.copyWith(
-      appMode: isCorporate ? AppMode.CORPORATE : AppMode.PERSONAL,
-    );
-    return true;
   }
 
-  // Restaurado para home_screen.dart
-  static Future<bool> addBeneficiary(String name, String docId) async {
-    if (_currentUser == null) return false;
-    final newBen = Beneficiary(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: name,
-      documentNumber: docId,
-    );
-    final updatedList = List<Beneficiary>.from(_currentUser!.beneficiaries)
-      ..add(newBen);
-    _currentUser = _currentUser!.copyWith(beneficiaries: updatedList);
-    return true;
-  }
-
-  // Restaurado para home_screen.dart
-  static Future<void> removeBeneficiary(String id) async {
-    if (_currentUser == null) return;
-    final updatedList = _currentUser!.beneficiaries
-        .where((b) => b.id != id)
-        .toList();
-    _currentUser = _currentUser!.copyWith(beneficiaries: updatedList);
+  static Future<bool> registerNaturalUser(Map<String, dynamic> datos) async {
+    await Future.delayed(const Duration(seconds: 2));
+    try {
+      final String newId = DateTime.now().millisecondsSinceEpoch.toString();
+      final newUserMap = {
+        'id': newId,
+        'id_pasajero': newId,
+        'id_responsable': newId, // Temporalmente responsable de sí mismo
+        'email': datos['email'],
+        'password': datos['password'],
+        'nombre': datos['nombre'],
+        'documento': datos['documento'],
+        'telefono': datos['telefono'],
+        'direccion': datos['direccion'],
+        'empresa': null,
+        'nit_empresa': null,
+        'role': 'NATURAL',
+        'status': 'UNDER_REVIEW',
+        'app_mode': 'PERSONAL',
+        'beneficiaries': [],
+      };
+      _dbUsuarios.add(newUserMap);
+      _currentUser = User.fromMap(newUserMap);
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   // ===========================================================================
-  // 4. MÉTODOS DE COMPATIBILIDAD (LEGACY / OTROS SCREENS)
+  // 4. LOGIN & LOGOUT (Lógica Modificada para Test)
   // ===========================================================================
 
-  // Restaurado para login_screen.dart
-  static Future<bool> checkEmailExists(String email) async {
-    await Future.delayed(const Duration(milliseconds: 300));
-    return _dbUsuarios.any((u) => u['email'] == email) ||
-        _emailsRegistrados.contains(email);
+  static Future<Map<String, dynamic>> login(
+    String email,
+    String password,
+  ) async {
+    await Future.delayed(const Duration(seconds: 1));
+
+    // 1. Buscar usuario
+    final userMap = _dbUsuarios.firstWhere(
+      (u) => u['email'] == email && u['password'] == password,
+      orElse: () => {},
+    );
+
+    if (userMap.isEmpty) return {'status': AuthResponseStatus.notFound};
+
+    // 2. Convertir a Modelo
+    final tempUser = User.fromMap(userMap);
+    _currentUser = tempUser;
+
+    // 3. Evaluar estado (Coincide con UserVerificationStatus en tu user_model)
+    switch (tempUser.verificationStatus) {
+      case UserVerificationStatus.VERIFIED:
+        return {'status': AuthResponseStatus.active, 'user': tempUser};
+
+      case UserVerificationStatus.CREATED:
+        // Caso típico: Empleado registrado esperando aprobación de la empresa
+        return {'status': AuthResponseStatus.pending};
+
+      case UserVerificationStatus.UNDER_REVIEW:
+      case UserVerificationStatus.DOCS_UPLOADED:
+        // Caso típico: Natural esperando revisión de Vamos
+        return {'status': AuthResponseStatus.underReview};
+
+      case UserVerificationStatus.REJECTED:
+        return {'status': AuthResponseStatus.rejected};
+
+      case UserVerificationStatus.REVOKED:
+        return {'status': AuthResponseStatus.revoked};
+
+      default:
+        return {'status': AuthResponseStatus.incomplete};
+    }
   }
 
-  // Restaurado para referral_screen.dart
+  static Future<void> logout() async {
+    _currentUser = null;
+  }
+
+  // ===========================================================================
+  // 5. UTILIDADES
+  // ===========================================================================
+
   static Future<bool> sendReferralCode(String code) async {
     await Future.delayed(const Duration(seconds: 1));
-    return code.toUpperCase() != "ERROR";
+    return code.trim().isNotEmpty;
   }
 
-  // Restaurados para corporate_link_widget.dart (Aunque lo borremos después, para que compile hoy)
-  static Future<String?> checkCorporateDomain(String email) async {
-    if (email.contains('bancolombia')) return 'Bancolombia S.A.';
-    return null;
+  static Future<bool> checkEmailExists(String email) async {
+    await Future.delayed(const Duration(milliseconds: 300));
+    return _dbUsuarios.any((u) => u['email'] == email);
   }
 
-  static Future<bool> sendCorporateOTP(String email) async => true;
-  static Future<bool> verifyCorporateOTP(String e, String o) async =>
-      o == "123456";
-
-  // Restaurado para company_register_screen.dart
-  static Future<bool> requestCompanyAffiliation(
-    Map<String, dynamic> data,
-  ) async => true;
+  static Future<bool> sendEmailOTP(String email) async => true;
+  static Future<bool> verifyEmailOTP(String e, String o) async => o == "123456";
 
   // ===========================================================================
-  // 5. MÉTODOS DE VINCULACIÓN CORPORATIVA (NUEVO)
+  // 6. GESTIÓN DE PERFIL Y MODOS
   // ===========================================================================
 
-  /// Simula la búsqueda de una empresa por NIT
+  static bool toggleAppMode(bool isTargetCorporate) {
+    if (_currentUser == null) return false;
+    _currentUser!.appMode = isTargetCorporate
+        ? AppMode.CORPORATE
+        : AppMode.PERSONAL;
+    return true;
+  }
+
+  static Future<bool> activateNaturalProfile() async {
+    if (_currentUser == null) return false;
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    _currentUser!.idPassenger = "pas_${DateTime.now().millisecondsSinceEpoch}";
+
+    // Si estaba CREATED (pendiente empresa), al activar natural pasa a VERIFIED como natural?
+    // Esto depende de tu lógica de negocio, asumamos que sí para el test:
+    if (_currentUser!.verificationStatus == UserVerificationStatus.CREATED) {
+      _currentUser!.verificationStatus = UserVerificationStatus.VERIFIED;
+    }
+
+    _currentUser!.appMode = AppMode.PERSONAL;
+    return true;
+  }
+
   static Future<String?> validateCompanyNit(String nit) async {
-    await Future.delayed(const Duration(seconds: 2)); // Simular API
-    if (nit == "900123456") return "Transportes Ejecutivos S.A.S";
-    if (nit == "800") return "Bancolombia S.A.";
-    return null; // NIT no encontrado
+    await Future.delayed(const Duration(milliseconds: 800));
+    try {
+      final company = _mockCompaniesDB.firstWhere(
+        (c) => c['nit'] == nit,
+        orElse: () => {},
+      );
+      return company.isNotEmpty ? company['name'] : null;
+    } catch (e) {
+      return null;
+    }
   }
 
-  /// Vincula la cuenta actual a la empresa y activa el modo corporativo
-  static Future<bool> linkCorporateAccount({
+  static Future<void> linkCorporateAccount({
     required String nit,
     required String emailCorporativo,
     required String empresaNombre,
   }) async {
-    await Future.delayed(const Duration(seconds: 2));
+    if (_currentUser == null) return;
+    await Future.delayed(const Duration(seconds: 1));
 
+    _currentUser!.empresa = empresaNombre;
+    _currentUser!.nitEmpresa = nit;
+    _currentUser!.idResponsable =
+        "resp_${DateTime.now().millisecondsSinceEpoch}";
+    _currentUser!.role = UserRole.EMPLEADO;
+    _currentUser!.appMode = AppMode.CORPORATE;
+  }
+
+  // ===========================================================================
+  // 7. GESTIÓN DE BENEFICIARIOS
+  // ===========================================================================
+
+  static Future<bool> addBeneficiary(String name, String docId) async {
+    if (_currentUser == null) return false;
+    await Future.delayed(const Duration(milliseconds: 500));
+    final newBeneficiary = Beneficiary(
+      id: "ben_${DateTime.now().millisecondsSinceEpoch}",
+      name: name,
+      documentNumber: docId,
+    );
+    _currentUser!.beneficiaries.add(newBeneficiary);
+    return true;
+  }
+
+  static Future<void> removeBeneficiary(String id) async {
+    if (_currentUser == null) return;
+    _currentUser!.beneficiaries.removeWhere((b) => b.id == id);
+  }
+  // ===============================================================
+  // MÉTODO DE VINCULACIÓN AUTOMÁTICA (Simulación Backend)
+  // ===============================================================
+
+  /// Intenta vincular al usuario actual con la empresa seleccionada.
+  /// Retorna TRUE si la cédula está en la "base de datos" de la empresa.
+  /// Retorna FALSE si no aparece en la lista de empleados.
+  static Future<bool> verifyAndLinkCompanyFromBackend({
+    required String nit,
+    required String companyName,
+  }) async {
     if (_currentUser == null) return false;
 
-    // 1. Asignamos un ID Responsable (Simulado) y actualizamos la empresa
-    // 2. Cambiamos el rol visualmente a EMPLEADO (para que persista el switch)
-    // 3. Activamos el modo CORPORATE de inmediato
-    _currentUser = _currentUser!.copyWith(
-      idResponsable: "resp_${DateTime.now().millisecondsSinceEpoch}",
-      empresa: empresaNombre,
-      appMode: AppMode.CORPORATE,
-      // Nota: En un backend real, el rol cambiaría en base de datos.
-      // Aquí forzamos la actualización local para la UI.
-    );
+    // 1. Simular tiempo de espera del servidor (Loading...)
+    await Future.delayed(const Duration(seconds: 3));
 
-    // Hack para simular persistencia en el Mock DB si quisieras
-    final index = _dbUsuarios.indexWhere((u) => u['id'] == _currentUser!.id);
-    if (index != -1) {
-      _dbUsuarios[index]['id_responsable'] = _currentUser!.idResponsable;
-      _dbUsuarios[index]['empresa'] = empresaNombre;
+    // 2. Lógica de Simulación (Backend):
+    // Para efectos de prueba, vamos a decir que la vinculación es EXITOSA
+    // si el documento del usuario NO está vacío.
+    // Si quieres probar el caso de fallo, usa un usuario con documento "0000".
+    bool isEmployeeFound =
+        _currentUser!.documentNumber.isNotEmpty &&
+        _currentUser!.documentNumber != "0000";
+
+    if (isEmployeeFound) {
+      // 3. Éxito: Actualizamos el usuario localmente
+      _currentUser!.empresa = companyName;
+      _currentUser!.nitEmpresa = nit;
+      _currentUser!.idResponsable =
+          "resp_${DateTime.now().millisecondsSinceEpoch}";
+      _currentUser!.role = UserRole.EMPLEADO;
+      _currentUser!.appMode = AppMode.CORPORATE;
+
+      // Si estaba pendiente, lo pasamos a verificado
+      if (_currentUser!.verificationStatus != UserVerificationStatus.VERIFIED) {
+        _currentUser!.verificationStatus = UserVerificationStatus.VERIFIED;
+      }
+      return true;
+    } else {
+      // 4. Fallo: No se encontró en la nómina
+      return false;
     }
+  }
 
-    return true;
+  /// Helper para obtener todas las empresas para el Dropdown
+  static Future<List<Map<String, String>>> getAvailableCompanies() async {
+    // Simula carga de red
+    await Future.delayed(const Duration(milliseconds: 500));
+    return _mockCompaniesDB;
   }
 }

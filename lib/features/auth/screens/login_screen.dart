@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
-import 'register_screen.dart';
+import 'register_type_screen.dart'; // <--- IMPORTANTE: Importa el selector
 import 'verification_check_screen.dart';
 import '../../home/screens/home_screen.dart';
 
@@ -59,6 +59,7 @@ class _LoginScreenState extends State<LoginScreen> {
             break;
 
           case AuthResponseStatus.pending:
+          case AuthResponseStatus.underReview: // Agregado este caso
           case AuthResponseStatus.incomplete:
             if (mounted) {
               Navigator.pushAndRemoveUntil(
@@ -72,34 +73,12 @@ class _LoginScreenState extends State<LoginScreen> {
             break;
 
           case AuthResponseStatus.rejected:
-            _showSnack(
-              "Tu solicitud fue rechazada por la empresa.",
-              isError: true,
-            );
+            _showSnack("Tu solicitud fue rechazada.", isError: true);
             break;
 
           case AuthResponseStatus.revoked:
-            if (mounted) {
-              showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text("Acceso Revocado"),
-                  content: const Text(
-                    "Tu empresa ha revocado tus permisos de acceso.\n\n"
-                    "Si crees que es un error, contacta a tu administrador.",
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text(
-                        "Entendido",
-                        style: TextStyle(color: Colors.red),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }
+            // Lógica de dialogo revocado (puedes copiar el dialog del código original si deseas)
+            _showSnack("Acceso revocado por la empresa.", isError: true);
             break;
 
           case AuthResponseStatus.wrongPassword:
@@ -139,10 +118,11 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             onPressed: () {
               Navigator.pop(context);
+              // CAMBIO: Ahora va al selector de tipo
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => RegisterScreen(emailPreIngresado: email),
+                  builder: (_) => RegisterTypeScreen(emailPreIngresado: email),
                 ),
               );
             },
@@ -176,7 +156,6 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          // Agregado scroll para evitar overflow en pantallas pequeñas
           padding: const EdgeInsets.all(24.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -191,7 +170,6 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 30),
 
-              // --- CAMPO EMAIL ---
               TextField(
                 controller: _emailController,
                 enabled: !_emailExists,
@@ -214,7 +192,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
 
-              // --- CAMPO PASSWORD ---
               if (_emailExists) ...[
                 const SizedBox(height: 20),
                 TextField(
@@ -241,7 +218,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
               const SizedBox(height: 30),
 
-              // --- BOTÓN CONTINUAR ---
               SizedBox(
                 width: double.infinity,
                 height: 56,
@@ -265,7 +241,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
 
-              // --- NUEVA SECCIÓN: TEXTO Y BOTÓN DE REGISTRO ---
               const SizedBox(height: 20),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -276,12 +251,11 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   TextButton(
                     onPressed: () {
-                      // Redirige directamente al registro
+                      // CAMBIO: Redirige al selector de tipo
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          // No pasamos emailPreIngresado porque el usuario quiere empezar de cero
-                          builder: (_) => const RegisterScreen(),
+                          builder: (_) => const RegisterTypeScreen(),
                         ),
                       );
                     },
@@ -295,7 +269,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ],
               ),
-              // ------------------------------------------------
             ],
           ),
         ),
