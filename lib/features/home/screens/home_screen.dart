@@ -993,7 +993,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       ),
                     ),
                     Text(
-                      _currentUser.empresa ?? "N/A",
+                      // Si está vacío muestra "N/A", si no, muestra la empresa
+                      _currentUser.empresa.isEmpty
+                          ? "N/A"
+                          : _currentUser.empresa,
                       style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
                     ),
                   ],
@@ -1544,7 +1547,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _showCorporateLinkingModal() {
     // Variable para guardar la empresa seleccionada del Dropdown
     Map<String, String>? selectedCompany;
-    bool isLoading = false;
 
     // Variable para controlar si mostramos el estado de "Verificando..."
     bool isVerifying = false;
@@ -1828,126 +1830,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  // --- DIÁLOGO DE CONFIRMACIÓN PENDIENTE ---
-  void _showPendingApprovalDialog(String companyName) {
-    showDialog(
-      context: context,
-      barrierDismissible: false, // Obliga a darle OK
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        contentPadding: const EdgeInsets.all(25),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(15),
-              decoration: BoxDecoration(
-                color: Colors.amber[50],
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.hourglass_top_rounded,
-                size: 50,
-                color: Colors.amber[800],
-              ),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              "Solicitud Enviada",
-              style: GoogleFonts.poppins(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 15),
-            Text.rich(
-              TextSpan(
-                text: "Hemos notificado a ",
-                style: GoogleFonts.poppins(color: Colors.grey[600]),
-                children: [
-                  TextSpan(
-                    text: companyName,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const TextSpan(
-                    text:
-                        ".\n\nTu perfil cambiará a MODO CORPORATIVO automáticamente una vez que el administrador de la empresa apruebe tu solicitud.",
-                  ),
-                ],
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-        actions: [
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue[800],
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text(
-                "Entendido",
-                style: TextStyle(color: Colors.white),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-  // ===============================================================
-  // 6. MODAL DE VERIFICACIÓN BIOMÉTRICA (KYC PERSONAL)
-  // ===============================================================
-
-  // Widget auxiliar para los botones de carga
-  Widget _buildUploadButton({
-    required String label,
-    required IconData icon,
-    required bool isUploaded,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: isUploaded ? null : onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 15),
-        decoration: BoxDecoration(
-          color: isUploaded ? Colors.green[50] : Colors.white,
-          border: Border.all(
-            color: isUploaded ? Colors.green : Colors.grey.shade300,
-          ),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              isUploaded ? Icons.check_circle : icon,
-              color: isUploaded ? Colors.green : Colors.grey,
-            ),
-            const SizedBox(width: 15),
-            Expanded(
-              child: Text(
-                isUploaded ? "$label (Cargado)" : "Subir $label",
-                style: GoogleFonts.poppins(
-                  color: isUploaded ? Colors.green[800] : Colors.black87,
-                  fontWeight: isUploaded ? FontWeight.bold : FontWeight.normal,
-                ),
-              ),
-            ),
-            if (!isUploaded)
-              const Icon(Icons.camera_alt, color: Colors.grey, size: 20),
-          ],
-        ),
       ),
     );
   }

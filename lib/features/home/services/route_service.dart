@@ -1,11 +1,10 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart'; // Import necesario para debugPrint
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 class RouteService {
   // URL pública de OSRM (Demo Server)
-  // NOTA: Para producción masiva, deberías montar tu propio docker de OSRM o usar Google,
-  // pero para desarrollo esto funciona perfecto y gratis.
   final String _baseUrl = 'https://router.project-osrm.org/route/v1/driving';
 
   Future<RouteResult?> getRoute(LatLng start, LatLng end) async {
@@ -55,11 +54,13 @@ class RouteService {
           durationSeconds: durationSeconds,
         );
       } else {
-        print("Error en OSRM: ${response.statusCode}");
+        // CORRECCIÓN: Usar debugPrint en lugar de print
+        debugPrint("Error en OSRM: ${response.statusCode}");
         return null;
       }
     } catch (e) {
-      print("Error obteniendo ruta: $e");
+      // CORRECCIÓN: Usar debugPrint en lugar de print
+      debugPrint("Error obteniendo ruta: $e");
       return null;
     }
   }

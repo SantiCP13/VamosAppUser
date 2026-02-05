@@ -63,7 +63,8 @@ class RegisterTypeScreen extends StatelessWidget {
               title: "Usuario Particular",
               subtitle:
                   "Viaja por tu cuenta. Necesitarás tu cédula para validar tu identidad.",
-              color: AppColors.primaryGreen.withOpacity(0.1),
+
+              color: AppColors.primaryGreen.withValues(alpha: 0.1),
               iconColor: AppColors.primaryGreen,
               onTap: () {
                 Navigator.push(
@@ -114,7 +115,8 @@ class _OptionCard extends StatelessWidget {
           border: Border.all(color: Colors.grey.shade200),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
+              // CORRECCIÓN 2: Usar withValues(alpha: ...)
+              color: Colors.black.withValues(alpha: 0.05),
               blurRadius: 10,
               offset: const Offset(0, 4),
             ),

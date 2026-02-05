@@ -265,9 +265,6 @@ class AuthService {
 
       case UserVerificationStatus.REVOKED:
         return {'status': AuthResponseStatus.revoked};
-
-      default:
-        return {'status': AuthResponseStatus.incomplete};
     }
   }
 
