@@ -396,11 +396,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _tripDuration = "${minutes.round()} min";
 
         // --- VARIABLES DE PRECIO ---
-        double base = 3800; // Precio Base
-        double costoPorKm = 1100; // ValorKm
-        double costoPorMin = 250; // ValorMinuto
+        double base = 3800; // Precio Base(ejemplo)
+        double costoPorKm = 1100; // ValorKm(ejemplo)
+        double costoPorMin = 250; // ValorMinuto(ejemplo)
         double valorPeajes =
-            0; // <--- OJO: Debes obtener esto de tu API o ponerlo manual
+            0; // <--- Debemos obtener esto de tu API o ponerlo manual
         double valorRecargo = 2500; // Valor del recargo (ejemplo)
 
         // --- CÁLCULOS BÁSICOS ---
