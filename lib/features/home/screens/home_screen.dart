@@ -391,13 +391,42 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _routePoints = result.points;
         double km = result.distanceMeters / 1000;
         double minutes = result.durationSeconds / 60;
+
         _tripDistance = "${km.toStringAsFixed(1)} km";
         _tripDuration = "${minutes.round()} min";
 
-        double base = 3800;
-        double valKm = km * 1100;
-        double valMin = minutes * 250;
-        _tripPrice = ((base + valKm + valMin) / 100).ceil() * 100;
+        // --- VARIABLES DE PRECIO ---
+        double base = 3800; // Precio Base
+        double costoPorKm = 1100; // ValorKm
+        double costoPorMin = 250; // ValorMinuto
+        double valorPeajes =
+            0; // <--- OJO: Debes obtener esto de tu API o ponerlo manual
+        double valorRecargo = 2500; // Valor del recargo (ejemplo)
+
+        // --- CÁLCULOS BÁSICOS ---
+        double valKm = km * costoPorKm;
+        double valMin = minutes * costoPorMin;
+
+        // --- LÓGICA DE RECARGO (Nocturno / Dominical) ---
+        double recargoTotal = 0;
+        DateTime now = DateTime.now();
+
+        // 1. Es de noche? (Ejemplo: de 8:00 PM a 5:00 AM)
+        bool esNoche = now.hour >= 20 || now.hour < 5;
+
+        // 2. Es Domingo? (Dart: 7 es Domingo)
+        // Nota: Para festivos específicos necesitas una lista de fechas festivas
+        bool esDominical = now.weekday == DateTime.sunday;
+
+        if (esNoche || esDominical) {
+          recargoTotal = valorRecargo;
+        }
+
+        // --- FÓRMULA FINAL (Suma de todo) ---
+        double precioBruto = base + valKm + valMin + valorPeajes + recargoTotal;
+
+        // --- REDONDEO A LA CENTENA (Regla de negocio Colombia) ---
+        _tripPrice = (precioBruto / 100).ceil() * 100;
 
         _tripState = TripState.ROUTE_PREVIEW;
       });

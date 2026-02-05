@@ -150,8 +150,9 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
                 IconData iconData = Icons.location_on;
                 if (place['icon'] == 'home') iconData = Icons.home;
                 if (place['icon'] == 'work') iconData = Icons.work;
-                if (place['icon'] == 'flight')
+                if (place['icon'] == 'flight') {
                   iconData = Icons.airplanemode_active;
+                }
                 if (place['icon'] == 'store') iconData = Icons.store;
                 if (place['icon'] == 'school') iconData = Icons.school;
                 if (place['icon'] == 'park') iconData = Icons.park;

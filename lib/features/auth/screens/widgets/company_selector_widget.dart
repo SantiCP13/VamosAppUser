@@ -66,7 +66,7 @@ class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
             ),
           ),
           icon: const Icon(Icons.arrow_drop_down_circle_outlined),
-          value: _selectedNit,
+          initialValue: _selectedNit,
           hint: Text(
             "Toca para ver lista",
             style: GoogleFonts.poppins(fontSize: 14),

@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import '../../../core/models/user_model.dart';
 // Asegúrate de que la ruta al user_model sea correcta.
 
