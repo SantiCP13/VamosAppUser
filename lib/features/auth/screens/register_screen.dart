@@ -1,11 +1,9 @@
-// lib/features/auth/screens/register_screen.dart
-
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
 import 'verification_check_screen.dart';
-import 'widgets/company_selector_widget.dart'; // Importamos el nuevo widget
+import 'widgets/company_selector_widget.dart';
 
 class RegisterScreen extends StatefulWidget {
   final String? emailPreIngresado;
@@ -18,7 +16,6 @@ class RegisterScreen extends StatefulWidget {
 class _RegisterScreenState extends State<RegisterScreen> {
   bool _isLoading = false;
 
-  // Controladores de Texto
   late TextEditingController _emailController;
   final _passwordController = TextEditingController();
   final _nombreController = TextEditingController();
@@ -26,7 +23,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _telefonoController = TextEditingController();
   final _direccionController = TextEditingController();
 
-  // Variables para la Empresa Seleccionada
   String? _selectedCompanyName;
   String? _selectedCompanyNit;
 
@@ -43,20 +39,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
         _emailController.text.isEmpty ||
         _passwordController.text.isEmpty ||
         _telefonoController.text.isEmpty) {
-      _showError("Por favor completa todos los datos personales");
+      _showError("Por favor completa todos los datos personales.");
       return;
     }
 
-    // 2. Validar Selección de Empresa (Obligatorio)
+    // 2. Validar Selección de Empresa
     if (_selectedCompanyName == null || _selectedCompanyNit == null) {
-      _showError("Es obligatorio seleccionar una empresa para vincularte.");
+      _showError("Es obligatorio seleccionar una empresa.");
       return;
     }
 
     setState(() => _isLoading = true);
 
     try {
-      // 3. Preparar Payload para Backend
       final payload = {
         'tipo_persona': 'CORPORATIVO',
         'email': _emailController.text.trim(),
@@ -65,25 +60,24 @@ class _RegisterScreenState extends State<RegisterScreen> {
         'documento': _docController.text.trim(),
         'telefono': _telefonoController.text.trim(),
         'direccion': _direccionController.text.trim(),
-        // Datos de la empresa seleccionada
         'nombre_empresa': _selectedCompanyName,
         'nit_empresa': _selectedCompanyNit,
       };
 
-      // 4. Enviar al Servicio
+      // 3. Llamada al Servicio
       bool success = await AuthService.registerCorporateUser(payload);
 
       if (!mounted) return;
 
       if (success) {
-        // 5. Éxito -> Ir a Pantalla de "Pendiente de Aprobación"
+        // FLUJO CORRECTO: Navegar a VerificationCheckScreen
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (_) => const VerificationCheckScreen()),
           (route) => false,
         );
       } else {
-        throw Exception("Error al crear la solicitud de registro.");
+        throw Exception("Error al procesar el registro corporativo.");
       }
     } catch (e) {
       _showError(e.toString().replaceAll("Exception: ", ""));
@@ -162,7 +156,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Sección Datos Personales
               Text(
                 "Datos Personales",
                 style: GoogleFonts.poppins(
@@ -213,7 +206,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
               Divider(color: Colors.grey[300], thickness: 1),
               const SizedBox(height: 20),
 
-              // Sección Vinculación Corporativa
               Text(
                 "Vinculación Laboral",
                 style: GoogleFonts.poppins(
@@ -232,7 +224,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ),
               const SizedBox(height: 15),
 
-              // Widget Selector de Empresa
               CompanySelectorWidget(
                 onCompanySelected: (name, nit) {
                   setState(() {
@@ -244,7 +235,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
               const SizedBox(height: 40),
 
-              // Botón de Registro
               SizedBox(
                 width: double.infinity,
                 height: 56,

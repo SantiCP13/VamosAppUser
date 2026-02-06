@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../menu/services/menu_service.dart';
+// Asegúrate de que esta ruta coincida donde creaste el modelo
+import '../../../core/models/trip_model.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -11,23 +13,21 @@ class HistoryScreen extends StatefulWidget {
 }
 
 class _HistoryScreenState extends State<HistoryScreen> {
-  // Instanciamos el servicio
   final MenuService _menuService = MenuService();
-  late Future<List<Map<String, dynamic>>> _historyFuture;
+
+  // CAMBIO 1: Ahora el Future espera una Lista de TripModel, no Maps
+  late Future<List<TripModel>> _historyFuture;
 
   @override
   void initState() {
     super.initState();
-    // Iniciamos la carga de datos al abrir la pantalla
     _historyFuture = _menuService.getTripHistory();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors
-          .grey
-          .shade50, // Un fondo muy levemente gris para resaltar las tarjetas
+      backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
@@ -44,17 +44,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
           ),
         ),
       ),
-      body: FutureBuilder<List<Map<String, dynamic>>>(
+      // CAMBIO 2: FutureBuilder tipado correctamente
+      body: FutureBuilder<List<TripModel>>(
         future: _historyFuture,
         builder: (context, snapshot) {
-          // 1. ESTADO DE CARGA
+          // 1. CARGA
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(
               child: CircularProgressIndicator(color: AppColors.primaryGreen),
             );
           }
 
-          // 2. ESTADO DE ERROR
+          // 2. ERROR
           if (snapshot.hasError) {
             return Center(
               child: Text(
@@ -66,7 +67,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
           final trips = snapshot.data ?? [];
 
-          // 3. ESTADO VACÍO (Sin viajes)
+          // 3. VACÍO
           if (trips.isEmpty) {
             return Center(
               child: Column(
@@ -99,7 +100,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             );
           }
 
-          // 4. LISTA DE VIAJES (Datos cargados)
+          // 4. LISTA
           return ListView.separated(
             padding: const EdgeInsets.all(16),
             itemCount: trips.length,
@@ -114,8 +115,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
     );
   }
 
-  Widget _buildTripCard(Map<String, dynamic> trip) {
-    final bool isCompleted = trip['status'] == 'Completado';
+  // CAMBIO 3: Recibimos el Objeto Modelo en lugar de un Map
+  Widget _buildTripCard(TripModel trip) {
+    // Ya no necesitamos lógica condicional aquí (if status ==...), el modelo la trae.
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -124,6 +126,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
+            // Compatible con Flutter moderno
             color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 5,
             offset: const Offset(0, 2),
@@ -137,22 +140,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                trip['date'] ?? '',
+                trip.formattedDate, // Usamos el Getter formateado
                 style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: isCompleted
+                  color: trip.isCompleted
                       ? Colors.green.shade50
                       : Colors.red.shade50,
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
-                  trip['status'] ?? '',
+                  trip.statusLabel, // "Completado" o "Cancelado"
                   style: GoogleFonts.poppins(
                     fontSize: 10,
-                    color: isCompleted ? Colors.green : Colors.red,
+                    color: trip.isCompleted ? Colors.green : Colors.red,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -170,7 +173,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  trip['destination'] ?? 'Destino desconocido',
+                  trip.destination,
                   style: GoogleFonts.poppins(
                     fontWeight: FontWeight.w500,
                     fontSize: 14,
@@ -188,11 +191,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                "ID: ${trip['id']}",
+                "ID: ${trip.id}",
                 style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
               ),
               Text(
-                trip['price'] ?? '\$0',
+                trip.formattedPrice, // Usamos el Getter de precio ($ 15.000)
                 style: GoogleFonts.poppins(
                   fontWeight: FontWeight.bold,
                   fontSize: 16,

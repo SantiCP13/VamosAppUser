@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Necesitamos acceso a tu galería para actualizar tu foto de perfil.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Necesitamos acceso a tu cámara para tomar tu foto de perfil.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>VAMOS APP necesita tu ubicación para encontrar conductores cercanos.</string>
 	<key>CFBundleDevelopmentRegion</key>

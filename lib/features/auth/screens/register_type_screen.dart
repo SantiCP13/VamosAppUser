@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
-import 'register_screen.dart'; // Tu registro corporativo actual
-import 'register_natural_screen.dart'; // El nuevo registro natural
+import 'register_screen.dart';
+import 'register_natural_screen.dart';
 
 class RegisterTypeScreen extends StatelessWidget {
   final String? emailPreIngresado;
@@ -36,7 +36,7 @@ class RegisterTypeScreen extends StatelessWidget {
             ),
             const SizedBox(height: 30),
 
-            // OPCIÓN 1: CORPORATIVO (Existente)
+            // CORPORATIVO
             _OptionCard(
               icon: Icons.business_center_outlined,
               title: "Empleado Corporativo",
@@ -57,13 +57,12 @@ class RegisterTypeScreen extends StatelessWidget {
 
             const SizedBox(height: 20),
 
-            // OPCIÓN 2: NATURAL (Nuevo)
+            // NATURAL
             _OptionCard(
               icon: Icons.person_outline,
               title: "Usuario Particular",
               subtitle:
                   "Viaja por tu cuenta. Necesitarás tu cédula para validar tu identidad.",
-
               color: AppColors.primaryGreen.withValues(alpha: 0.1),
               iconColor: AppColors.primaryGreen,
               onTap: () {
@@ -84,7 +83,7 @@ class RegisterTypeScreen extends StatelessWidget {
   }
 }
 
-// Widget auxiliar para las tarjetas
+// Widget auxiliar
 class _OptionCard extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -115,7 +114,6 @@ class _OptionCard extends StatelessWidget {
           border: Border.all(color: Colors.grey.shade200),
           boxShadow: [
             BoxShadow(
-              // CORRECCIÓN 2: Usar withValues(alpha: ...)
               color: Colors.black.withValues(alpha: 0.05),
               blurRadius: 10,
               offset: const Offset(0, 4),

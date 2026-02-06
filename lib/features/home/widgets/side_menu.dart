@@ -8,8 +8,6 @@ import '../../auth/services/auth_service.dart';
 // --- IMPORTS DE PANTALLAS ---
 import '../../menu/screens/profile_screen.dart';
 import '../../menu/screens/history_screen.dart';
-// import '../../menu/screens/wallet_screen.dart'; // Eliminado porque no se usa
-import '../../menu/screens/share_referral_screen.dart';
 import '../../menu/screens/support_screen.dart';
 import '../../auth/screens/welcome_screen.dart';
 
@@ -99,13 +97,6 @@ class SideMenu extends StatelessWidget {
             Icons.history,
             "Mis viajes",
             const HistoryScreen(),
-          ),
-
-          _buildMenuItem(
-            context,
-            Icons.card_giftcard,
-            "Comparte y gana",
-            const ShareReferralScreen(),
           ),
 
           _buildMenuItem(

@@ -1,21 +1,68 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
+import '../services/auth_service.dart';
+import '../../home/screens/home_screen.dart';
 import 'login_screen.dart';
 import 'company_register_screen.dart';
 
-class WelcomeScreen extends StatelessWidget {
+class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({super.key});
+
+  @override
+  State<WelcomeScreen> createState() => _WelcomeScreenState();
+}
+
+class _WelcomeScreenState extends State<WelcomeScreen> {
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkSession();
+  }
+
+  // Intenta recuperar sesión guardada
+  Future<void> _checkSession() async {
+    // Esto llamará al método de AuthService.
+    // Como está en modo Mock devuelve false y muestra los botones.
+    // Cuando tengas backend, si devuelve true, salta al Home.
+    final hasSession = await AuthService.tryAutoLogin();
+
+    if (hasSession && mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const HomeScreen()),
+        (route) => false,
+      );
+    } else {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
 
+    // Loading inicial
+    if (_isLoading) {
+      return const Scaffold(
+        backgroundColor: AppColors.bgColor,
+        body: Center(
+          child: CircularProgressIndicator(color: AppColors.primaryGreen),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: AppColors.bgColor,
       body: Stack(
         children: [
-          // Decoración de fondo
+          // Decoración
           Positioned(
             top: -50,
             right: -50,
@@ -36,7 +83,7 @@ class WelcomeScreen extends StatelessWidget {
                   Hero(
                     tag: 'logo',
                     child: Image.asset(
-                      'assets/images/logo.png', // Asegúrate de tener este asset
+                      'assets/images/logo.png',
                       width: size.width * 0.65,
                       fit: BoxFit.contain,
                       errorBuilder: (context, error, stackTrace) => const Icon(
@@ -81,7 +128,7 @@ class WelcomeScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
 
-                  // BOTÓN 1: EMPRESA (CONTRATANTE)
+                  // BOTÓN 1: EMPRESA
                   _buildRoleButton(
                     context,
                     label: "Registrar mi Empresa",
@@ -97,7 +144,7 @@ class WelcomeScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
 
-                  // BOTÓN 2: PASAJERO / EMPLEADO
+                  // BOTÓN 2: PASAJERO
                   _buildRoleButton(
                     context,
                     label: "Soy Pasajero",

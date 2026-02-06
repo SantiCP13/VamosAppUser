@@ -3,6 +3,7 @@
 // ignore_for_file: constant_identifier_names
 
 enum UserVerificationStatus {
+  PENDING,
   CREATED, // Recién creado
   DOCS_UPLOADED, // Subió documentos
   UNDER_REVIEW, // En revisión
@@ -29,41 +30,46 @@ class Beneficiary {
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
-    'documentNumber': documentNumber,
+    'document_number': documentNumber,
   };
 
   factory Beneficiary.fromJson(Map<String, dynamic> json) {
     return Beneficiary(
-      id: json['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: json['id']?.toString() ?? '',
       name: json['name'] ?? '',
-      documentNumber: json['documentNumber'] ?? '',
+      // Busca primero formato Laravel, si no, formato Mock
+      documentNumber: json['document_number'] ?? json['documentNumber'] ?? '',
     );
   }
 }
 
 class User {
-  final String id; // El ID único no cambia
+  final String id;
 
-  // --- VARIABLES MUTABLES (QUITAMOS 'FINAL') ---
+  // Variables mutables
   String? idPassenger;
   String? idResponsable;
+  String? photoUrl;
 
   final String email;
   final String name;
   final String phone;
   final String documentNumber;
 
-  // Datos de empresa mutables
+  // Datos de empresa
   String empresa;
   String nitEmpresa;
 
-  // Enums mutables
+  // Estados y Roles
   UserRole role;
   UserVerificationStatus verificationStatus;
   AppMode appMode;
 
-  // Lista mutable
+  // Listas
   List<Beneficiary> beneficiaries;
+
+  // TOKEN JWT
+  String? token;
 
   User({
     required this.id,
@@ -73,12 +79,14 @@ class User {
     required this.name,
     required this.phone,
     this.documentNumber = '',
+    this.photoUrl,
     required this.role,
     this.empresa = '',
     this.nitEmpresa = '',
     this.verificationStatus = UserVerificationStatus.CREATED,
-    required this.beneficiaries, // Quitamos 'const []' para permitir listas mutables
+    required this.beneficiaries,
     this.appMode = AppMode.CORPORATE,
+    this.token,
   });
 
   bool get isCorporateMode => appMode == AppMode.CORPORATE;
@@ -86,50 +94,64 @@ class User {
 
   factory User.fromMap(Map<String, dynamic> map) {
     return User(
-      id: map['id'] ?? map['uid'] ?? 'unknown_id',
-      idPassenger: map['id_pasajero'],
-      idResponsable: map['id_responsable'],
-      email: map['email'] ?? '',
-      name: map['nombre'] ?? '',
-      phone: map['telefono'] ?? map['phone'] ?? '',
-      documentNumber: map['documento'] ?? '',
-      empresa: map['empresa'] ?? '',
-      nitEmpresa: map['nit_empresa'] ?? '',
+      id: map['id']?.toString() ?? '',
+      // Mapeo Híbrido (Backend Laravel ?? Mock Local)
+      idPassenger: map['passenger_id']?.toString() ?? map['id_pasajero'],
+      idResponsable: map['manager_id']?.toString() ?? map['id_responsable'],
 
-      role: (map['role'] == 'EMPLEADO' || map['id_responsable'] != null)
+      email: map['email'] ?? '',
+      name: map['name'] ?? map['nombre'] ?? '',
+      photoUrl: map['photo_url'],
+      phone: map['phone'] ?? map['telefono'] ?? '',
+      documentNumber: map['document_number'] ?? map['documento'] ?? '',
+
+      empresa: map['company_name'] ?? map['empresa'] ?? '',
+      nitEmpresa: map['company_nit'] ?? map['nit_empresa'] ?? '',
+
+      role: (map['role'] == 'EMPLEADO' || map['role_id'] == 2)
           ? UserRole.EMPLEADO
           : UserRole.NATURAL,
 
       verificationStatus: _parseStatus(map['status']),
 
-      appMode: map['app_mode'] == 'PERSONAL'
+      appMode: (map['app_mode'] == 'PERSONAL')
           ? AppMode.PERSONAL
           : AppMode.CORPORATE,
 
-      // Aseguramos que sea una lista que se pueda modificar (growable: true)
       beneficiaries:
           (map['beneficiaries'] as List<dynamic>?)
               ?.map((e) => Beneficiary.fromJson(e))
               .toList() ??
           [],
+
+      token: map['access_token'],
     );
   }
 
   static UserVerificationStatus _parseStatus(String? status) {
-    switch (status) {
+    if (status == null) return UserVerificationStatus.CREATED;
+    switch (status.toUpperCase()) {
       case 'ACTIVE':
       case 'VERIFIED':
         return UserVerificationStatus.VERIFIED;
-      case 'UNDER_REVIEW':
+
+      // CAMBIO IMPORTANTE AQUÍ: Separamos PENDING
       case 'PENDING':
+      case 'UNVERIFIED': // Por si Laravel envía este string
+        return UserVerificationStatus.PENDING;
+
+      case 'UNDER_REVIEW':
         return UserVerificationStatus.UNDER_REVIEW;
+
       case 'DOCS_UPLOADED':
         return UserVerificationStatus.DOCS_UPLOADED;
+
       case 'REJECTED':
         return UserVerificationStatus.REJECTED;
+
       case 'REVOKED':
         return UserVerificationStatus.REVOKED;
-      case 'CREATED':
+
       default:
         return UserVerificationStatus.CREATED;
     }
@@ -138,14 +160,12 @@ class User {
   Map<String, dynamic> toMap() {
     return {
       'id': id,
-      'id_pasajero': idPassenger,
-      'id_responsable': idResponsable,
       'email': email,
-      'nombre': name,
-      'telefono': phone,
-      'documento': documentNumber,
-      'empresa': empresa,
-      'nit_empresa': nitEmpresa,
+      'name': name,
+      'phone': phone,
+      'document_number': documentNumber,
+      'company_name': empresa,
+      'company_nit': nitEmpresa,
       'role': role == UserRole.EMPLEADO ? 'EMPLEADO' : 'NATURAL',
       'status': verificationStatus.name,
       'app_mode': appMode == AppMode.CORPORATE ? 'CORPORATE' : 'PERSONAL',

@@ -33,13 +33,14 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
     _emailController = TextEditingController(text: widget.emailPreIngresado);
   }
 
-  // Lógica de Registro
+  // Lógica de Registro Actualizada
   Future<void> _handleRegister() async {
     // 1. Validaciones de Texto
     if (_nombreController.text.isEmpty ||
         _docController.text.isEmpty ||
         _emailController.text.isEmpty ||
-        _passwordController.text.isEmpty) {
+        _passwordController.text.isEmpty ||
+        _telefonoController.text.isEmpty) {
       _showError("Por favor completa todos los campos de texto.");
       return;
     }
@@ -67,38 +68,43 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
         'direccion': _direccionController.text.trim(),
       };
 
-      // Llamada al servicio (Registro Natural)
+      // Llamada al servicio
       bool success = await AuthService.registerNaturalUser(payload);
 
       if (!mounted) return;
 
       if (success) {
-        // Éxito -> Ir a verificación (que mostrará pendiente de VAMOS)
+        // FLUJO CORRECTO: Navegar a VerificationCheckScreen (OTP)
+        // pushAndRemoveUntil asegura que no puedan volver al formulario
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (_) => const VerificationCheckScreen()),
           (route) => false,
         );
       } else {
-        throw Exception("Error al crear la cuenta. Intente nuevamente.");
+        throw Exception(
+          "No se pudo completar el registro. Intenta nuevamente.",
+        );
       }
     } catch (e) {
-      _showError(e.toString());
+      // Manejo de Errores: SnackBar Rojo
+      _showError(e.toString().replaceAll("Exception: ", ""));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
   void _showError(String msg) {
+    if (!mounted) return;
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
   }
 
-  // Simulación de Cámara (Aquí integrarías tu SDK de biometría en el futuro)
+  // Simulación de Cámara
   Future<void> _simulateCamera(bool isBiometric) async {
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(seconds: 2)); // Simulando proceso...
+    await Future.delayed(const Duration(seconds: 2));
 
     if (!mounted) return;
     setState(() {
@@ -122,7 +128,6 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
     );
   }
 
-  // Widget auxiliar para inputs
   Widget _input(
     TextEditingController c,
     String label,
@@ -147,7 +152,6 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
     );
   }
 
-  // Widget auxiliar para tarjetas de verificación
   Widget _verificationCard(
     String title,
     String subtitle,
@@ -287,7 +291,7 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
               ),
               const SizedBox(height: 5),
               Text(
-                "Estos pasos son obligatorios para validar tu identidad como particular.",
+                "Pasos obligatorios para validar tu identidad.",
                 style: GoogleFonts.poppins(
                   fontSize: 12,
                   color: Colors.grey[600],

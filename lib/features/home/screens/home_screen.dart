@@ -16,6 +16,8 @@ import '../widgets/side_menu.dart';
 import '../services/route_service.dart';
 import '../../home/screens/search_destination_screen.dart';
 import '../../auth/services/auth_service.dart';
+import '../../menu/services/menu_service.dart';
+import '../services/osm_service.dart';
 
 enum TripState {
   IDLE,
@@ -44,6 +46,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   LatLng? _currentPosition;
   final LatLng _defaultLocation = const LatLng(4.9183, -74.0258); // Cajicá
   bool _isMapReady = false;
+  bool _isPickingLocation = false; // ¿Estamos moviendo el pin?
+  LatLng? _mapCenterPicker; // Coordenada central del mapa
+  bool _isLoadingAddress = false; // Cargando dirección
+  final OsmService _osmService = OsmService(); // Instancia del servicio
 
   // --- DATOS DEL VIAJE ---
   String? _destinationName;
@@ -483,7 +489,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       drawer: const SideMenu(),
       body: Stack(
         children: [
-          // A. MAPA
+          // ===============================================================
+          // 1. CAPA DEL MAPA
+          // ===============================================================
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
@@ -493,6 +501,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 _isMapReady = true;
                 if (_currentPosition != null) {
                   _mapController.move(_currentPosition!, 15.0);
+                }
+              },
+              // CRÍTICO: Detectar movimiento para el modo "Fijar en Mapa"
+              onPositionChanged: (camera, hasGesture) {
+                if (_isPickingLocation) {
+                  _mapCenterPicker = camera.center;
                 }
               },
               interactionOptions: const InteractionOptions(
@@ -506,69 +520,78 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
                 subdomains: const ['a', 'b', 'c', 'd'],
               ),
-              if (_routePoints.isNotEmpty)
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: _routePoints,
-                      strokeWidth: 5.0,
-                      color: isCorporate
-                          ? Colors.blue[800]!
-                          : AppColors.primaryGreen,
-                    ),
-                  ],
-                ),
-              MarkerLayer(
-                markers: [
-                  if (_currentPosition != null)
-                    Marker(
-                      point: _currentPosition!,
-                      width: 25,
-                      height: 25,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: isCorporate
-                              ? Colors.blue[800]
-                              : AppColors.primaryGreen,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 3),
-                          boxShadow: const [
-                            BoxShadow(blurRadius: 5, color: Colors.black26),
-                          ],
+
+              // Solo mostramos rutas y marcadores normales SI NO estamos eligiendo en el mapa
+              if (!_isPickingLocation) ...[
+                if (_routePoints.isNotEmpty)
+                  PolylineLayer(
+                    polylines: [
+                      Polyline(
+                        points: _routePoints,
+                        strokeWidth: 5.0,
+                        color: isCorporate
+                            ? Colors.blue[800]!
+                            : AppColors.primaryGreen,
+                      ),
+                    ],
+                  ),
+                MarkerLayer(
+                  markers: [
+                    if (_currentPosition != null)
+                      Marker(
+                        point: _currentPosition!,
+                        width: 25,
+                        height: 25,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: isCorporate
+                                ? Colors.blue[800]
+                                : AppColors.primaryGreen,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 3),
+                            boxShadow: const [
+                              BoxShadow(blurRadius: 5, color: Colors.black26),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  if (_destinationCoordinates != null &&
-                      _tripState != TripState.IDLE)
-                    Marker(
-                      point: _destinationCoordinates!,
-                      width: 40,
-                      height: 40,
-                      child: const Icon(
-                        Icons.location_on,
-                        color: Colors.redAccent,
-                        size: 40,
+                    if (_destinationCoordinates != null &&
+                        _tripState != TripState.IDLE)
+                      Marker(
+                        point: _destinationCoordinates!,
+                        width: 40,
+                        height: 40,
+                        child: const Icon(
+                          Icons.location_on,
+                          color: Colors.redAccent,
+                          size: 40,
+                        ),
                       ),
-                    ),
-                  if (_driverPosition != null)
-                    Marker(
-                      point: _driverPosition!,
-                      width: 50,
-                      height: 50,
-                      child: const Icon(
-                        Icons.directions_car_filled,
-                        size: 40,
-                        color: Colors.black,
+                    if (_driverPosition != null)
+                      Marker(
+                        point: _driverPosition!,
+                        width: 50,
+                        height: 50,
+                        child: const Icon(
+                          Icons.directions_car_filled,
+                          size: 40,
+                          color: Colors.black,
+                        ),
                       ),
-                    ),
-                ],
-              ),
+                  ],
+                ),
+              ],
             ],
           ),
 
-          // B. UI LAYERS
+          // ===============================================================
+          // 2. BARRA SUPERIOR (MENÚ Y MODO)
+          // ===============================================================
           Positioned(top: 0, left: 0, right: 0, child: _buildTopHybridBar()),
 
+          // ===============================================================
+          // 3. CONTROLES DEL MAPA (ZOOM Y CENTRAR)
+          // ===============================================================
           Positioned(
             top: 130,
             right: 20,
@@ -583,7 +606,118 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ),
 
-          if (_tripState == TripState.IDLE)
+          // ===============================================================
+          // 4. MODO "FIJAR EN MAPA" (PIN CENTRAL + BOTÓN CONFIRMAR)
+          // ===============================================================
+          if (_isPickingLocation)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.only(
+                  bottom: 35,
+                ), // Levantar para que la punta toque el centro
+                child: Icon(Icons.location_on, size: 50, color: Colors.black),
+              ),
+            ),
+
+          if (_isPickingLocation)
+            Positioned(
+              bottom: 30,
+              left: 20,
+              right: 20,
+              child: SafeArea(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_isLoadingAddress)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(color: Colors.black12, blurRadius: 10),
+                          ],
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 15,
+                              height: 15,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.black,
+                              ),
+                            ),
+                            SizedBox(width: 10),
+                            Text(
+                              "Obteniendo dirección...",
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ElevatedButton(
+                      // LLAMA A LA FUNCIÓN NUEVA QUE TE PASÉ ANTES
+                      onPressed: _isLoadingAddress
+                          ? null
+                          : _confirmMapSelection,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        minimumSize: const Size(double.infinity, 50),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text(
+                        "Confirmar Ubicación",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextButton(
+                      onPressed: () {
+                        setState(() {
+                          _isPickingLocation = false;
+                          _isLoadingAddress = false;
+                        });
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.8),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          "Cancelar",
+                          style: TextStyle(
+                            color: Colors.red,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // ===============================================================
+          // 5. BARRA DE BÚSQUEDA (SOLO SI NO ESTAMOS EN MODO PICKER)
+          // ===============================================================
+          if (_tripState == TripState.IDLE && !_isPickingLocation)
             Positioned(
               bottom: 30,
               left: 20,
@@ -591,6 +725,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               child: _buildSearchWidget(),
             ),
 
+          // ===============================================================
+          // 6. PANELES DESLIZANTES (ESTADOS DEL VIAJE)
+          // ===============================================================
           if (_tripState == TripState.ROUTE_PREVIEW)
             Positioned(
               bottom: 0,
@@ -1404,11 +1541,75 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
       // Si está muy cerca, termina la simulación
       if (distLat < 0.0001 && distLng < 0.0001) {
-        debugPrint("🚖 El conductor ha llegado");
         timer.cancel();
-        // Aquí podrías cambiar el estado a 'ARRIVED'
+
+        // Simular pequeño delay de "Viaje en curso" y luego finalizar
+        setState(() => _tripState = TripState.IN_TRIP);
+
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) _finishTripAndSave(); // <--- LLAMADA A LA NUEVA FUNCIÓN
+        });
       }
     });
+  }
+
+  void _finishTripAndSave() {
+    // 1. Guardar en el Historial (MenuService)
+    if (_destinationName != null) {
+      // Instanciamos el servicio y guardamos
+      MenuService().addCompletedTrip(_destinationName!, _tripPrice);
+    }
+
+    // 2. Mostrar confirmación visual (Recibo simple)
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Column(
+          children: [
+            Icon(Icons.check_circle, color: Colors.green, size: 60),
+            SizedBox(height: 10),
+            Text("¡Llegaste!", style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text("Destino: $_destinationName"),
+            const SizedBox(height: 10),
+            Text(
+              "\$ ${_formatCurrency(_tripPrice)}",
+              style: GoogleFonts.poppins(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Colors.blue[800],
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              "El viaje se ha guardado en tu historial.",
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.black,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx); // Cerrar diálogo
+              _resetApp(); // Reiniciar mapa
+            },
+            child: const Text("Aceptar", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _resetApp() {
@@ -1459,14 +1660,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     onTap: () async {
       final result = await Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => const SearchDestinationScreen()),
+        MaterialPageRoute(
+          builder: (_) => SearchDestinationScreen(
+            currentPosition: _currentPosition, // <--- ESTO ES LA CLAVE
+          ),
+        ),
       );
+
       if (result != null) {
-        setState(() {
-          _destinationName = result['name'];
-          _destinationCoordinates = LatLng(result['lat'], result['lng']);
-        });
-        if (mounted) _calculateRouteAndPrice(_destinationCoordinates!);
+        // CASO A: El usuario eligió "Fijar en mapa"
+        if (result['isMapPick'] == true) {
+          setState(() {
+            _isPickingLocation = true; // Activamos el modo Picker
+            _mapCenterPicker =
+                _mapController.camera.center; // Iniciamos donde esté la cámara
+          });
+        }
+        // CASO B: Eligió una dirección de la lista
+        else {
+          setState(() {
+            _destinationName = result['name'];
+            _destinationCoordinates = LatLng(result['lat'], result['lng']);
+          });
+          if (mounted) _calculateRouteAndPrice(_destinationCoordinates!);
+        }
       }
     },
     child: Container(
@@ -1832,5 +2049,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ],
       ),
     );
+  }
+
+  Future<void> _confirmMapSelection() async {
+    if (_mapCenterPicker == null) return;
+
+    setState(() => _isLoadingAddress = true);
+
+    // Llamamos al servicio para traducir coordenadas a texto
+    String address = await _osmService.getAddressFromCoordinates(
+      _mapCenterPicker!,
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _isLoadingAddress = false;
+      _isPickingLocation = false; // Salimos del modo picker
+
+      // Seteamos el destino
+      _destinationName = address;
+      _destinationCoordinates = _mapCenterPicker;
+    });
+
+    // Calculamos la ruta inmediatamente
+    _calculateRouteAndPrice(_destinationCoordinates!);
   }
 }
