@@ -18,6 +18,8 @@ import '../../home/screens/search_destination_screen.dart';
 import '../../auth/services/auth_service.dart';
 import '../../menu/services/menu_service.dart';
 import '../services/osm_service.dart';
+import '../../payment/services/payment_service.dart';
+import '../../payment/widgets/payment_panel.dart';
 
 enum TripState {
   IDLE,
@@ -26,6 +28,7 @@ enum TripState {
   SEARCHING_DRIVER,
   DRIVER_ON_WAY,
   IN_TRIP,
+  PAYMENT,
 }
 
 class HomeScreen extends StatefulWidget {
@@ -50,7 +53,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   LatLng? _mapCenterPicker; // Coordenada central del mapa
   bool _isLoadingAddress = false; // Cargando dirección
   final OsmService _osmService = OsmService(); // Instancia del servicio
-
+  // --- PAGO ---
+  List<PaymentMethod> _availablePaymentMethods = [];
+  bool _isLoadingPaymentMethods = false;
   // --- DATOS DEL VIAJE ---
   String? _destinationName;
   LatLng? _destinationCoordinates;
@@ -757,6 +762,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               color: Colors.black12,
               child: const Center(
                 child: CircularProgressIndicator(color: Colors.black),
+              ),
+            ),
+          if (_tripState == TripState.PAYMENT)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: _buildPanelContainer(
+                _isLoadingPaymentMethods
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(20),
+                          child: CircularProgressIndicator(color: Colors.black),
+                        ),
+                      )
+                    : PaymentPanel(
+                        // Aquí se usa la variable _tripPrice
+                        amount: _tripPrice,
+                        // Aquí se usa la variable _availablePaymentMethods (Adiós advertencia 1)
+                        methods: _availablePaymentMethods,
+                        // Aquí se usa la función _finishTripAndSave (Adiós advertencia 2)
+                        onPaymentSuccess: _finishTripAndSave,
+                      ),
               ),
             ),
         ],
@@ -1542,25 +1570,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       // Si está muy cerca, termina la simulación
       if (distLat < 0.0001 && distLng < 0.0001) {
         timer.cancel();
-
-        // Simular pequeño delay de "Viaje en curso" y luego finalizar
         setState(() => _tripState = TripState.IN_TRIP);
 
         Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) _finishTripAndSave(); // <--- LLAMADA A LA NUEVA FUNCIÓN
+          if (mounted) {
+            _initiatePaymentFlow();
+          } // <--- ASÍ SE USA LA LÓGICA DE PAGO
         });
       }
     });
   }
 
+  Future<void> _initiatePaymentFlow() async {
+    setState(() {
+      _tripState = TripState
+          .PAYMENT; // Asegúrate de haber agregado PAYMENT al Enum TripState
+      _isLoadingPaymentMethods = true;
+    });
+
+    try {
+      // Aquí se usan las variables que te daban error de "unused"
+      final methods = await PaymentService.getPaymentMethods(_currentUser);
+      if (!mounted) return;
+      setState(() {
+        _availablePaymentMethods = methods;
+        _isLoadingPaymentMethods = false;
+      });
+    } catch (e) {
+      debugPrint("Error cargando pagos: $e");
+      setState(() => _isLoadingPaymentMethods = false);
+    }
+  }
+
   void _finishTripAndSave() {
-    // 1. Guardar en el Historial (MenuService)
+    // 1. Guardar en el Historial
     if (_destinationName != null) {
-      // Instanciamos el servicio y guardamos
       MenuService().addCompletedTrip(_destinationName!, _tripPrice);
     }
 
-    // 2. Mostrar confirmación visual (Recibo simple)
+    // 2. Mostrar confirmación de PAGO Y VIAJE
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -1570,26 +1618,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           children: [
             Icon(Icons.check_circle, color: Colors.green, size: 60),
             SizedBox(height: 10),
-            Text("¡Llegaste!", style: TextStyle(fontWeight: FontWeight.bold)),
+            Text(
+              "¡Pago Exitoso!",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ), // Texto cambiado
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text("Destino: $_destinationName"),
+            const Text("Gracias por viajar con VAMOS."),
             const SizedBox(height: 10),
             Text(
-              "\$ ${_formatCurrency(_tripPrice)}",
-              style: GoogleFonts.poppins(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: Colors.blue[800],
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              "El viaje se ha guardado en tu historial.",
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              "Total Pagado: \$ ${_formatCurrency(_tripPrice)}",
+              style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey[800]),
             ),
           ],
         ),
@@ -1602,10 +1644,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
             onPressed: () {
-              Navigator.pop(ctx); // Cerrar diálogo
-              _resetApp(); // Reiniciar mapa
+              Navigator.pop(ctx);
+              _resetApp();
             },
-            child: const Text("Aceptar", style: TextStyle(color: Colors.white)),
+            child: const Text(
+              "Finalizar",
+              style: TextStyle(color: Colors.white),
+            ),
           ),
         ],
       ),
