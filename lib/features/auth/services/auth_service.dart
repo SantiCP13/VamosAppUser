@@ -465,6 +465,90 @@ class AuthService {
     return true;
   }
 
+  // ===========================================================================
+  // 6. RECUPERACIÓN DE CONTRASEÑA (MOCK + PREPARACIÓN LARAVEL)
+  // ===========================================================================
+
+  /// 1. Simula el envío de un código al correo
+  static Future<bool> sendPasswordRecoveryEmail(String email) async {
+    await Future.delayed(const Duration(seconds: 2)); // Simular red
+
+    // VALIDACIÓN MOCK: Verificamos si el correo existe en la BD local
+    final userExists = _dbUsuarios.any((u) => u['email'] == email);
+
+    if (!userExists) return false;
+
+    // CONECTAR LARAVEL:
+    /*
+    final response = await http.post(
+      Uri.parse('$_baseUrl/auth/forgot-password'),
+      body: jsonEncode({'email': email}),
+      headers: ...
+    );
+    return response.statusCode == 200;
+    */
+
+    return true;
+  }
+
+  /// 2. Simula la verificación del código (OTP)
+  static Future<bool> verifyRecoveryToken(String email, String token) async {
+    await Future.delayed(const Duration(seconds: 1));
+
+    // MOCK: Aceptamos el código "1234" como válido para pruebas
+    if (token == "1234") return true;
+
+    // CONECTAR LARAVEL:
+    /*
+    final response = await http.post(
+      Uri.parse('$_baseUrl/auth/verify-token'),
+      body: jsonEncode({'email': email, 'token': token}),
+      ...
+    );
+    return response.statusCode == 200;
+    */
+
+    return false;
+  }
+
+  /// 3. Cambia la contraseña en la BD Mock
+  static Future<bool> changePassword(String email, String newPassword) async {
+    await Future.delayed(const Duration(seconds: 2));
+
+    try {
+      // LOGICA MOCK: Buscamos el usuario y actualizamos su password
+      final userIndex = _dbUsuarios.indexWhere((u) => u['email'] == email);
+
+      if (userIndex != -1) {
+        _dbUsuarios[userIndex]['password'] = newPassword;
+        // También actualizamos el currentUser si es el mismo
+        if (_currentUser?.email == email) {
+          // Nota: En una app real forzaríamos logout, pero aquí actualizamos
+          // No podemos actualizar _currentUser directamente porque sus campos son final
+          // pero al hacer login de nuevo funcionará.
+        }
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+
+    // CONECTAR LARAVEL:
+    /*
+    final response = await http.post(
+      Uri.parse('$_baseUrl/auth/reset-password'),
+      body: jsonEncode({
+        'email': email, 
+        'password': newPassword,
+        'password_confirmation': newPassword
+      }),
+      ...
+    );
+    return response.statusCode == 200;
+    */
+  }
+
   static Map<String, dynamic> _mapStatus(UserVerificationStatus status) {
     switch (status) {
       // 1. Usuario activo y feliz

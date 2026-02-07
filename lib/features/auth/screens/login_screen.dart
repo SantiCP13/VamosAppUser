@@ -5,6 +5,7 @@ import '../services/auth_service.dart';
 import 'register_type_screen.dart';
 import 'verification_check_screen.dart';
 import '../../home/screens/home_screen.dart';
+import 'forgot_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -322,9 +323,16 @@ class _LoginScreenState extends State<LoginScreen> {
                       Align(
                         alignment: Alignment.centerRight,
                         child: TextButton(
-                          onPressed: () => _showSnack(
-                            "Funcionalidad disponible próximamente",
-                          ),
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ForgotPasswordScreen(
+                                  emailPreloadded: _emailController.text,
+                                ),
+                              ),
+                            );
+                          },
                           child: Text(
                             "¿Olvidaste tu contraseña?",
                             style: GoogleFonts.poppins(
