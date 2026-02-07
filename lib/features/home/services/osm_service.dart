@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
@@ -13,7 +14,6 @@ class OsmService {
     String urlString =
         'https://photon.komoot.io/api/?q=$query&limit=10&lang=es';
 
-    // SI TENEMOS UBICACIÓN, LA AGREGAMOS PARA PRIORIZAR RESULTADOS CERCANOS
     if (userLocation != null) {
       urlString +=
           '&lat=${userLocation.latitude}&lon=${userLocation.longitude}';
@@ -36,10 +36,17 @@ class OsmService {
           String details = "";
 
           List<String> parts = [];
-          if (props['housenumber'] != null)
+
+          // CORRECCIÓN 1: Agregadas las llaves {} a los condicionales
+          if (props['housenumber'] != null) {
             parts.add("#${props['housenumber']}");
-          if (props['city'] != null) parts.add(props['city']);
-          if (props['state'] != null) parts.add(props['state']);
+          }
+          if (props['city'] != null) {
+            parts.add(props['city']);
+          }
+          if (props['state'] != null) {
+            parts.add(props['state']);
+          }
 
           // Si el nombre es igual a la calle, intentamos no repetir info
           if (name == props['street']) {
@@ -58,7 +65,8 @@ class OsmService {
         }).toList();
       }
     } catch (e) {
-      print("Error buscando en OSM: $e");
+      // CORRECCIÓN 2: Uso de debugPrint en lugar de print
+      debugPrint("Error buscando en OSM: $e");
     }
     return [];
   }
@@ -93,7 +101,8 @@ class OsmService {
         return result.trim().isEmpty ? "Ubicación en mapa" : result;
       }
     } catch (e) {
-      print("Error Reverse Geocoding: $e");
+      // CORRECCIÓN 3: Uso de debugPrint en lugar de print
+      debugPrint("Error Reverse Geocoding: $e");
     }
     return "Ubicación seleccionada";
   }

@@ -25,7 +25,7 @@ class _PaymentPanelState extends State<PaymentPanel> {
   @override
   void initState() {
     super.initState();
-    // Pre-seleccionar el método por defecto
+
     if (widget.methods.isNotEmpty) {
       _selectedMethodId = widget.methods.first.id;
     }
@@ -98,10 +98,10 @@ class _PaymentPanelState extends State<PaymentPanel> {
 
         // LISTA DE MÉTODOS
         SizedBox(
-          height: 160, // Altura fija o flexible
+          height: 160,
           child: ListView.separated(
             itemCount: widget.methods.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            separatorBuilder: (context, index) => const SizedBox(height: 8),
             itemBuilder: (context, index) {
               final method = widget.methods[index];
               final bool isSelected = method.id == _selectedMethodId;
@@ -114,10 +114,13 @@ class _PaymentPanelState extends State<PaymentPanel> {
                   borderRadius: BorderRadius.circular(12),
                   color: isSelected ? Colors.grey.shade50 : Colors.white,
                 ),
+                // SOLUCIÓN: Usamos la forma estándar y silenciamos la advertencia
                 child: RadioListTile<String>(
                   value: method.id,
+                  // ignore: deprecated_member_use
                   groupValue: _selectedMethodId,
                   activeColor: Colors.black,
+                  // ignore: deprecated_member_use
                   onChanged: (val) => setState(() => _selectedMethodId = val),
                   title: Text(
                     method.name,
@@ -126,7 +129,7 @@ class _PaymentPanelState extends State<PaymentPanel> {
                       fontSize: 14,
                     ),
                   ),
-                  subtitle: method.type == PaymentMethodType.CARD
+                  subtitle: method.type == PaymentMethodType.card
                       ? Text(
                           "**** ${method.last4}",
                           style: const TextStyle(fontSize: 12),
@@ -181,11 +184,11 @@ class _PaymentPanelState extends State<PaymentPanel> {
 
   IconData _getIconForMethod(PaymentMethodType type) {
     switch (type) {
-      case PaymentMethodType.CASH:
+      case PaymentMethodType.cash:
         return Icons.attach_money;
-      case PaymentMethodType.CARD:
+      case PaymentMethodType.card:
         return Icons.credit_card;
-      case PaymentMethodType.CORPORATE_VOUCHER:
+      case PaymentMethodType.corporateVoucher:
         return Icons.business_center;
     }
   }

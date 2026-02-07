@@ -1,7 +1,8 @@
 import 'dart:async';
 import '../../../core/models/user_model.dart'; // Asegura importar tu User Model
 
-enum PaymentMethodType { CASH, CARD, CORPORATE_VOUCHER }
+// CORRECCIÓN: Dart moderno usa lowerCamelCase para los valores del Enum
+enum PaymentMethodType { cash, card, corporateVoucher }
 
 class PaymentMethod {
   final String id;
@@ -32,7 +33,8 @@ class PaymentService {
         PaymentMethod(
           id: "voucher_corp_01",
           name: "Vale Corporativo - ${user.empresa}",
-          type: PaymentMethodType.CORPORATE_VOUCHER,
+          // CORRECCIÓN: Actualizado a corporateVoucher
+          type: PaymentMethodType.corporateVoucher,
           isDefault: true,
         ),
       ];
@@ -42,20 +44,23 @@ class PaymentService {
         PaymentMethod(
           id: "cash",
           name: "Efectivo",
-          type: PaymentMethodType.CASH,
+          // CORRECCIÓN: Actualizado a cash
+          type: PaymentMethodType.cash,
           isDefault: true,
         ),
         PaymentMethod(
           id: "card_visa_1234",
           name: "Visa Débito",
           last4: "4242",
-          type: PaymentMethodType.CARD,
+          // CORRECCIÓN: Actualizado a card
+          type: PaymentMethodType.card,
         ),
         PaymentMethod(
           id: "card_master_9876",
           name: "Mastercard Gold",
           last4: "8899",
-          type: PaymentMethodType.CARD,
+          // CORRECCIÓN: Actualizado a card
+          type: PaymentMethodType.card,
         ),
       ];
     }

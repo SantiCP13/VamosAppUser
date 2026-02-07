@@ -200,8 +200,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // ===========================================================================
   @override
   Widget build(BuildContext context) {
-    if (user == null)
+    // CORRECCIÓN 1: Se agregaron las llaves {} al if
+    if (user == null) {
       return const Scaffold(body: Center(child: Text("Cargando...")));
+    }
+
     final isCorp = user?.isCorporateMode ?? false;
 
     return Scaffold(
@@ -338,9 +341,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 title: _getStatusText(user?.verificationStatus),
                 subtitle: "Estado de la cuenta",
                 color: _getStatusColor(user?.verificationStatus),
+                // CORRECCIÓN 2: Reemplazo de withOpacity por withValues(alpha: ...)
                 bgColor: _getStatusColor(
                   user?.verificationStatus,
-                ).withOpacity(0.1),
+                ).withValues(alpha: 0.1),
               ),
 
               const SizedBox(height: 40),
