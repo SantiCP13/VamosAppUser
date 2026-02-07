@@ -74,6 +74,7 @@ class AuthService {
       'nombre': 'Pedro Pendiente',
       'documento': '102',
       'telefono': '3001001002',
+      'direccion': 'Calle Falsa 123',
       'empresa': 'Bancolombia S.A.',
       'nit_empresa': '890903938',
       'role': 'EMPLEADO',

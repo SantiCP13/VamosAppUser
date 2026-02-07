@@ -4,12 +4,12 @@
 
 enum UserVerificationStatus {
   PENDING,
-  CREATED, // Recién creado
-  DOCS_UPLOADED, // Subió documentos
-  UNDER_REVIEW, // En revisión
-  VERIFIED, // Aprobado y activo
-  REJECTED, // Rechazado
-  REVOKED, // Acceso revocado
+  CREATED,
+  DOCS_UPLOADED,
+  UNDER_REVIEW,
+  VERIFIED,
+  REJECTED,
+  REVOKED,
 }
 
 enum UserRole { NATURAL, EMPLEADO }
@@ -37,7 +37,6 @@ class Beneficiary {
     return Beneficiary(
       id: json['id']?.toString() ?? '',
       name: json['name'] ?? '',
-      // Busca primero formato Laravel, si no, formato Mock
       documentNumber: json['document_number'] ?? json['documentNumber'] ?? '',
     );
   }
@@ -55,6 +54,9 @@ class User {
   final String name;
   final String phone;
   final String documentNumber;
+
+  // CORRECCIÓN 1: La variable 'address' estaba declarada pero no se usaba
+  final String address;
 
   // Datos de empresa
   String empresa;
@@ -79,6 +81,8 @@ class User {
     required this.name,
     required this.phone,
     this.documentNumber = '',
+    // CORRECCIÓN 2: Inicializamos address en el constructor (valor por defecto vacío)
+    this.address = '',
     this.photoUrl,
     required this.role,
     this.empresa = '',
@@ -95,7 +99,6 @@ class User {
   factory User.fromMap(Map<String, dynamic> map) {
     return User(
       id: map['id']?.toString() ?? '',
-      // Mapeo Híbrido (Backend Laravel ?? Mock Local)
       idPassenger: map['passenger_id']?.toString() ?? map['id_pasajero'],
       idResponsable: map['manager_id']?.toString() ?? map['id_responsable'],
 
@@ -104,6 +107,9 @@ class User {
       photoUrl: map['photo_url'],
       phone: map['phone'] ?? map['telefono'] ?? '',
       documentNumber: map['document_number'] ?? map['documento'] ?? '',
+
+      // CORRECCIÓN 3: Leemos la dirección desde el JSON (intenta 'address' o 'direccion')
+      address: map['address'] ?? map['direccion'] ?? '',
 
       empresa: map['company_name'] ?? map['empresa'] ?? '',
       nitEmpresa: map['company_nit'] ?? map['nit_empresa'] ?? '',
@@ -134,24 +140,17 @@ class User {
       case 'ACTIVE':
       case 'VERIFIED':
         return UserVerificationStatus.VERIFIED;
-
-      // CAMBIO IMPORTANTE AQUÍ: Separamos PENDING
       case 'PENDING':
-      case 'UNVERIFIED': // Por si Laravel envía este string
+      case 'UNVERIFIED':
         return UserVerificationStatus.PENDING;
-
       case 'UNDER_REVIEW':
         return UserVerificationStatus.UNDER_REVIEW;
-
       case 'DOCS_UPLOADED':
         return UserVerificationStatus.DOCS_UPLOADED;
-
       case 'REJECTED':
         return UserVerificationStatus.REJECTED;
-
       case 'REVOKED':
         return UserVerificationStatus.REVOKED;
-
       default:
         return UserVerificationStatus.CREATED;
     }
@@ -164,6 +163,7 @@ class User {
       'name': name,
       'phone': phone,
       'document_number': documentNumber,
+      'address': address, // CORRECCIÓN 4: Enviamos la dirección de vuelta
       'company_name': empresa,
       'company_nit': nitEmpresa,
       'role': role == UserRole.EMPLEADO ? 'EMPLEADO' : 'NATURAL',

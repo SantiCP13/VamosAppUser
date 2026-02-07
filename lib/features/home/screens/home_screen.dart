@@ -1605,7 +1605,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _finishTripAndSave() {
     // 1. Guardar en el Historial
     if (_destinationName != null) {
-      MenuService().addCompletedTrip(_destinationName!, _tripPrice);
+      MenuService().addCompletedTrip(
+        "Ubicación Actual",
+        _destinationName!,
+        _tripPrice,
+      );
     }
 
     // 2. Mostrar confirmación de PAGO Y VIAJE

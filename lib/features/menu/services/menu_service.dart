@@ -34,10 +34,11 @@ class MenuService {
   }
 
   // --- MÉTODO: GUARDAR VIAJE REAL ---
-  void addCompletedTrip(String destination, double price) {
+  void addCompletedTrip(String origin, String destination, double price) {
     final newTrip = TripModel(
       id: "REAL-${DateTime.now().millisecondsSinceEpoch}",
       dateRaw: DateTime.now().toIso8601String(),
+      origin: origin,
       destination: destination,
       price: price,
       status: "COMPLETED",
