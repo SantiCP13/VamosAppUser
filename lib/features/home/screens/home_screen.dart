@@ -20,6 +20,7 @@ import '../../menu/services/menu_service.dart';
 import '../services/osm_service.dart';
 import '../../payment/services/payment_service.dart';
 import '../../payment/widgets/payment_panel.dart';
+import '../../trips/services/trip_service.dart';
 
 enum TripState {
   IDLE,
@@ -1265,7 +1266,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  // --- NUEVO: MANEJADOR DE SOLICITUD DE VIAJE ---
+  // --- MANEJADOR DE SOLICITUD DE VIAJE (FUSIONADO: UI LEGAL + BACKEND) ---
   void _handleTripRequest() {
     bool isCorp = _currentUser.isCorporateMode;
 
@@ -1301,6 +1302,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 style: GoogleFonts.poppins(fontSize: 13),
               ),
               const SizedBox(height: 10),
+              // --- TU DISEÑO ORIGINAL DEL CONTAINER ---
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
@@ -1359,7 +1361,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ElevatedButton(
               onPressed: () {
                 Navigator.pop(ctx); // Cierra dialogo
-                _startSearchingDriver(); // Continua flujo
+
+                // --- CAMBIO CLAVE: Aquí llamamos al proceso del Backend ---
+                _processTripCreation();
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blue[800],
@@ -1372,14 +1376,54 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ],
         ),
       );
-      debugPrint("Solicitando Viaje:");
-      debugPrint(
-        "Categoría: $_selectedServiceCategory",
-      ); // STANDARD, PREMIUM, VAN
-      debugPrint("Pasajeros: $_totalPassengers");
-      debugPrint("Precio: $_tripPrice");
     } else {
+      // Si no es caso especial, procesamos directo
+      _processTripCreation();
+    }
+  }
+
+  // --- NUEVO MÉTODO AUXILIAR PARA NO REPETIR CÓDIGO ---
+  Future<void> _processTripCreation() async {
+    // 1. Mostrar Feedback Visual
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Conectando con la central..."),
+        duration: Duration(seconds: 1),
+      ),
+    );
+
+    // 2. Instanciar el servicio
+    // Asegúrate de importar: import '../../trips/services/trip_service.dart';
+    final tripService = TripService();
+
+    // 3. Ejecutar llamada al Backend (Simulada o Real)
+    bool success = await tripService.createTripRequest(
+      currentUser: _currentUser,
+      origin: _currentPosition!,
+      destination: _destinationCoordinates!,
+      originAddress:
+          "Ubicación Actual", // Opcional: Podrías pasar la dirección real si la tienes
+      destinationAddress: _destinationName!,
+      serviceCategory: _selectedServiceCategory,
+      estimatedPrice: _tripPrice,
+      passengerIds: _selectedPassengerIds.toList(),
+      includeMyself: _includeMyself,
+    );
+
+    if (!mounted) return;
+
+    // 4. Decidir qué hacer según el resultado
+    if (success) {
+      // Éxito: Pasamos a buscar conductor (tu flujo original visual)
       _startSearchingDriver();
+    } else {
+      // Error: Avisamos al usuario
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("❌ Error al crear la solicitud. Intenta nuevamente."),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 

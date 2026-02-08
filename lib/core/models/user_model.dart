@@ -54,11 +54,12 @@ class User {
   final String name;
   final String phone;
   final String documentNumber;
-
-  // CORRECCIÓN 1: La variable 'address' estaba declarada pero no se usaba
   final String address;
 
-  // Datos de empresa
+  // CORRECCIÓN ER: Necesario para relacionar la tabla TRIPS con COMPANIES
+  final String? companyUuid;
+
+  // Datos de empresa (Visuales / NIT)
   String empresa;
   String nitEmpresa;
 
@@ -86,6 +87,7 @@ class User {
     required this.role,
     this.empresa = '',
     this.nitEmpresa = '',
+    this.companyUuid, // Nuevo campo
     this.verificationStatus = UserVerificationStatus.CREATED,
     required this.beneficiaries,
     this.appMode = AppMode.CORPORATE,
@@ -106,12 +108,13 @@ class User {
       photoUrl: map['photo_url'],
       phone: map['phone'] ?? map['telefono'] ?? '',
       documentNumber: map['document_number'] ?? map['documento'] ?? '',
-
-      // CORRECCIÓN 3: Leemos la dirección desde el JSON (intenta 'address' o 'direccion')
       address: map['address'] ?? map['direccion'] ?? '',
 
+      // Mapeo de Empresa
       empresa: map['company_name'] ?? map['empresa'] ?? '',
       nitEmpresa: map['company_nit'] ?? map['nit_empresa'] ?? '',
+      // CORRECCIÓN: El backend debe devolver el ID de la tabla companies
+      companyUuid: map['company_id'],
 
       role: (map['role'] == 'EMPLEADO' || map['role_id'] == 2)
           ? UserRole.EMPLEADO
@@ -125,7 +128,7 @@ class User {
 
       beneficiaries:
           (map['beneficiaries'] as List<dynamic>?)
-              ?.map((e) => Beneficiary.fromJson(e))
+              ?.map((e) => Beneficiary.fromJson(Map<String, dynamic>.from(e)))
               .toList() ??
           [],
 
@@ -162,9 +165,10 @@ class User {
       'name': name,
       'phone': phone,
       'document_number': documentNumber,
-      'address': address, // CORRECCIÓN 4: Enviamos la dirección de vuelta
+      'address': address,
       'company_name': empresa,
       'company_nit': nitEmpresa,
+      'company_id': companyUuid, // Incluir en persistencia local
       'role': role == UserRole.EMPLEADO ? 'EMPLEADO' : 'NATURAL',
       'status': verificationStatus.name,
       'app_mode': appMode == AppMode.CORPORATE ? 'CORPORATE' : 'PERSONAL',
