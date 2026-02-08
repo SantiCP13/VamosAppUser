@@ -81,7 +81,6 @@ class User {
     required this.name,
     required this.phone,
     this.documentNumber = '',
-    // CORRECCIÓN 2: Inicializamos address en el constructor (valor por defecto vacío)
     this.address = '',
     this.photoUrl,
     required this.role,

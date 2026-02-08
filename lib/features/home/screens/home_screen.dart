@@ -77,6 +77,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Timer? _simulationTimer;
   final String _driverEta = "5 min";
 
+  // --- NUEVAS VARIABLES PARA CATEGORÍAS ---
+  // Guardamos el precio base calculado por distancia/tiempo
+  double _baseRoutePrice = 0;
+
+  // Categoría seleccionada: 'STANDARD' (Auto), 'PREMIUM' (Camioneta), 'VAN' (Buseta)
+  String _selectedServiceCategory = 'STANDARD';
+
+  // Mapa de multiplicadores de tarifa según categoría
+  final Map<String, double> _categoryMultipliers = {
+    'STANDARD': 1.0, // Precio normal
+    'PREMIUM': 1.35, // +35%
+    'VAN': 1.8, // +80%
+  };
+
   @override
   void initState() {
     super.initState();
@@ -375,13 +389,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   // ===============================================================
-  // 2. LÓGICA DE RUTAS
+  // 2. LÓGICA DE RUTAS (CORREGIDA)
   // ===============================================================
 
+  /// Calcula el precio final basado en la categoría seleccionada (Standard, Premium, Van)
+  void _updateFinalPrice() {
+    // 1. Obtener multiplicador según el ERD (VEHICLES -> nivel_servicio o capacidad)
+    double multiplier = _categoryMultipliers[_selectedServiceCategory] ?? 1.0;
+
+    // 2. Calcular sobre el precio base de la ruta
+    double finalRaw = _baseRoutePrice * multiplier;
+
+    setState(() {
+      // Redondeo a la centena más cercana para mejor UX
+      _tripPrice = (finalRaw / 100).ceil() * 100;
+    });
+  }
+
   Future<void> _calculateRouteAndPrice(LatLng destination) async {
+    // 1. Validar posición
     if (_currentPosition == null) await _determinePosition();
     if (_currentPosition == null) return;
 
+    // 2. Validar reglas de negocio (ERD: USERS -> app_mode)
     bool allowed = await _isTripAllowed(_currentPosition!, destination);
     if (!mounted || !allowed) {
       setState(() {
@@ -394,56 +424,59 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     setState(() => _tripState = TripState.CALCULATING);
 
+    // 3. Obtener ruta del servicio
     final result = await _routeService.getRoute(_currentPosition!, destination);
+
     if (!mounted) return;
 
     if (result != null) {
+      // --- CÁLCULO BASE (Distancia y Tiempo) ---
+      _routePoints = result.points;
+      double km = result.distanceMeters / 1000;
+      double minutes = result.durationSeconds / 60;
+
+      _tripDistance = "${km.toStringAsFixed(1)} km";
+      _tripDuration = "${minutes.round()} min";
+
+      // Tarifas base (Configuración del sistema)
+      double base = 3800;
+      double costoPorKm = 1100;
+      double costoPorMin = 250;
+      double valorRecargo = 2500;
+
+      double valKm = km * costoPorKm;
+      double valMin = minutes * costoPorMin;
+
+      // Recargos (Nocturno / Dominical)
+      double recargoTotal = 0;
+      DateTime now = DateTime.now();
+      bool esNoche = now.hour >= 20 || now.hour < 5;
+      bool esDominical = now.weekday == DateTime.sunday;
+      if (esNoche || esDominical) recargoTotal = valorRecargo;
+
+      // Guardamos el PRECIO BASE (sin el factor del tipo de vehículo)
+      _baseRoutePrice = base + valKm + valMin + recargoTotal;
+
       setState(() {
-        _routePoints = result.points;
-        double km = result.distanceMeters / 1000;
-        double minutes = result.durationSeconds / 60;
-
-        _tripDistance = "${km.toStringAsFixed(1)} km";
-        _tripDuration = "${minutes.round()} min";
-
-        // --- VARIABLES DE PRECIO ---
-        double base = 3800; // Precio Base(ejemplo)
-        double costoPorKm = 1100; // ValorKm(ejemplo)
-        double costoPorMin = 250; // ValorMinuto(ejemplo)
-        double valorPeajes =
-            0; // <--- Debemos obtener esto de tu API o ponerlo manual
-        double valorRecargo = 2500; // Valor del recargo (ejemplo)
-
-        // --- CÁLCULOS BÁSICOS ---
-        double valKm = km * costoPorKm;
-        double valMin = minutes * costoPorMin;
-
-        // --- LÓGICA DE RECARGO (Nocturno / Dominical) ---
-        double recargoTotal = 0;
-        DateTime now = DateTime.now();
-
-        // 1. Es de noche? (Ejemplo: de 8:00 PM a 5:00 AM)
-        bool esNoche = now.hour >= 20 || now.hour < 5;
-
-        // 2. Es Domingo? (Dart: 7 es Domingo)
-        // Nota: Para festivos específicos necesitas una lista de fechas festivas
-        bool esDominical = now.weekday == DateTime.sunday;
-
-        if (esNoche || esDominical) {
-          recargoTotal = valorRecargo;
-        }
-
-        // --- FÓRMULA FINAL (Suma de todo) ---
-        double precioBruto = base + valKm + valMin + valorPeajes + recargoTotal;
-
-        // --- REDONDEO A LA CENTENA (Regla de negocio Colombia) ---
-        _tripPrice = (precioBruto / 100).ceil() * 100;
-
         _tripState = TripState.ROUTE_PREVIEW;
+
+        // Lógica automática según capacidad (ERD: VEHICLES -> capacidad_pasajeros)
+        if (_totalPassengers > 4) {
+          _selectedServiceCategory = 'VAN';
+        } else {
+          _selectedServiceCategory = 'STANDARD';
+        }
       });
+
+      // Calculamos el precio final visual
+      _updateFinalPrice();
       _fitCameraToRoute();
     } else {
+      // Si falla la ruta
       setState(() => _tripState = TripState.IDLE);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("No se pudo calcular la ruta")),
+      );
     }
   }
 
@@ -795,6 +828,133 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // ===============================================================
   // 4. WIDGETS Y LÓGICA DE INTERFAZ
   // ===============================================================
+  Widget _buildVehicleSelector() {
+    // Definimos las opciones disponibles
+    final List<Map<String, dynamic>> options = [
+      {
+        'id': 'STANDARD',
+        'label': 'Económico',
+        'icon': Icons.directions_car, // Podrías usar imágenes assets aquí
+        'capacity': '1-4',
+        'desc': 'Automóvil básico',
+      },
+      {
+        'id': 'PREMIUM',
+        'label': 'Confort',
+        'icon': Icons.local_taxi, // Icono diferente o asset de camioneta
+        'capacity': '1-4',
+        'desc': 'Camioneta / SUV',
+      },
+      {
+        'id': 'VAN',
+        'label': 'Van',
+        'icon': Icons.airport_shuttle,
+        'capacity': '5-10',
+        'desc': 'Grupos grandes',
+      },
+    ];
+
+    return SizedBox(
+      height: 110,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: options.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 10),
+        itemBuilder: (context, index) {
+          final opt = options[index];
+          bool isSelected = _selectedServiceCategory == opt['id'];
+          bool isDisabled = false;
+
+          // REGLA DE NEGOCIO: Si hay más de 4 pax, bloquear Standard y Premium
+          if (_totalPassengers > 4 && opt['id'] != 'VAN') {
+            isDisabled = true;
+          }
+
+          // Calculamos precio estimado para esta tarjeta
+          double mult = _categoryMultipliers[opt['id']]!;
+          double priceEst = ((_baseRoutePrice * mult) / 100).ceil() * 100;
+
+          return GestureDetector(
+            onTap: isDisabled
+                ? null
+                : () {
+                    setState(() {
+                      _selectedServiceCategory = opt['id'];
+                    });
+                    _updateFinalPrice();
+                  },
+            child: Container(
+              width: 110,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? (_currentUser.isCorporateMode
+                          ? Colors.blue[50]
+                          : Colors.green[50])
+                    : (isDisabled ? Colors.grey[100] : Colors.white),
+                border: Border.all(
+                  color: isSelected
+                      ? (_currentUser.isCorporateMode
+                            ? Colors.blue[800]!
+                            : AppColors.primaryGreen)
+                      : (isDisabled ? Colors.grey[200]! : Colors.grey[300]!),
+                  width: isSelected ? 2 : 1,
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Opacity(
+                opacity: isDisabled ? 0.5 : 1.0,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      opt['icon'],
+                      color: isSelected ? Colors.black : Colors.grey[600],
+                      size: 28,
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      opt['label'],
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    Text(
+                      "\$ ${_formatCurrency(priceEst)}",
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 1,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[200],
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        "${opt['capacity']} pax",
+                        style: const TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
 
   Widget _buildTopHybridBar() {
     bool isCorp = _currentUser.isCorporateMode;
@@ -1049,7 +1209,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
         ),
         const SizedBox(height: 10),
-
+        const Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            "Selecciona vehículo:",
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+              color: Colors.grey,
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        _buildVehicleSelector(),
+        const SizedBox(height: 15),
         Text(
           "$_tripDistance • $_tripDuration",
           style: GoogleFonts.poppins(color: Colors.grey, fontSize: 14),
@@ -1199,8 +1372,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ],
         ),
       );
+      debugPrint("Solicitando Viaje:");
+      debugPrint(
+        "Categoría: $_selectedServiceCategory",
+      ); // STANDARD, PREMIUM, VAN
+      debugPrint("Pasajeros: $_totalPassengers");
+      debugPrint("Precio: $_tripPrice");
     } else {
-      // Flujo normal (Personal o Corporativo con titular a bordo)
       _startSearchingDriver();
     }
   }
@@ -1294,7 +1472,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         setModalState(() {
                           _includeMyself = val ?? false;
                         });
-                        setState(() {});
+                        setState(() {
+                          // LÓGICA DE AUTO-SELECCIÓN DE VAN
+                          if (_totalPassengers > 4) {
+                            _selectedServiceCategory = 'VAN';
+                          } else if (_selectedServiceCategory == 'VAN' &&
+                              _totalPassengers <= 4) {
+                            // Opcional: Volver a Standard si bajan los pasajeros
+                            _selectedServiceCategory = 'STANDARD';
+                          }
+                          _updateFinalPrice(); // Recalcular precio
+                        });
                       },
                     ),
                   ),
@@ -1412,7 +1600,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                           _selectedPassengerIds.remove(b.id);
                                         }
                                       });
-                                      setState(() {});
+                                      setState(() {
+                                        // LÓGICA DE AUTO-SELECCIÓN DE VAN
+                                        if (_totalPassengers > 4) {
+                                          _selectedServiceCategory = 'VAN';
+                                        }
+                                        _updateFinalPrice(); // Recalcular precio
+                                      });
                                     },
                                   ),
                                 ),

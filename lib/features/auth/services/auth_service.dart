@@ -1,6 +1,6 @@
 import 'dart:async';
 // ignore: unused_import
-import 'dart:convert'; // DESCOMENTAR AL TENER BACKEND (Se usa para jsonEncode)
+import 'dart:convert'; // DESCOMENTAR AL TENER BACKEND
 // import 'package:http/http.dart' as http; // DESCOMENTAR AL TENER BACKEND
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../../core/models/user_model.dart';
@@ -38,11 +38,27 @@ class AuthService {
   // 1. BASES DE DATOS MOCK (DATA FALSA PARA MVP)
   // ===========================================================================
 
-  static final List<Map<String, String>> _mockCompaniesDB = [
-    {'nit': '900123456', 'name': 'Transportes Ejecutivos S.A.S'},
-    {'nit': '890903938', 'name': 'Bancolombia S.A.'},
-    {'nit': '800222333', 'name': 'Ecopetrol'},
-    {'nit': '111222333', 'name': 'Vamos App Demo'},
+  static final List<Map<String, dynamic>> _mockCompaniesDB = [
+    // CLIENTES (Corporativos que piden viajes)
+    {
+      'nit': '890903938',
+      'name': 'Bancolombia S.A.',
+      'type': 'CLIENT',
+      'contract_id': 'AB-100', // Contrato Moviltrack
+    },
+    {
+      'nit': '800222333',
+      'name': 'Ecopetrol',
+      'type': 'CLIENT',
+      'contract_id': 'AB-200',
+    },
+    // TRANSPORTADORAS (Dueños de los vehículos - FUEC)
+    {
+      'nit': '900123456',
+      'name': 'Transportes Ejecutivos S.A.S',
+      'type': 'PROVIDER',
+      'contract_id': 'TRANS-99',
+    },
   ];
 
   static final List<Map<String, dynamic>> _dbUsuarios = [
@@ -144,29 +160,7 @@ class AuthService {
     String password,
   ) async {
     try {
-      // ----------------------------------------------------
-      // [OPCIÓN A] CONEXIÓN REAL A LARAVEL
-      // ----------------------------------------------------
-      /*
-      final response = await http.post(
-        Uri.parse('$_baseUrl/login'),
-        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-        body: jsonEncode({'email': email, 'password': password}),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        _token = data['access_token']; 
-        await _storage.write(key: 'auth_token', value: _token);
-
-        _currentUser = User.fromMap(data['user']);
-        return _mapStatus(_currentUser!.verificationStatus);
-      } 
-      */
-
-      // ----------------------------------------------------
-      // [OPCIÓN B] MOCK ACTUAL
-      // ----------------------------------------------------
+      // MOCK LOGIN
       await Future.delayed(const Duration(seconds: 1));
 
       final userMap = _dbUsuarios.firstWhere(
@@ -197,21 +191,6 @@ class AuthService {
     try {
       final storedToken = await _storage.read(key: 'auth_token');
       if (storedToken == null) return false;
-
-      // ----------------------------------------------------
-      // [OPCIÓN A] VALIDAR TOKEN CON LARAVEL
-      // ----------------------------------------------------
-      /*
-      final response = await http.get(
-        Uri.parse('$_baseUrl/user'),
-        headers: {
-          'Authorization': 'Bearer $storedToken',
-          // ...
-        },
-      );
-      if (response.statusCode == 200) return true;
-      */
-
       return false; // Retornamos false para probar MVP
     } catch (e) {
       return false;
@@ -241,7 +220,7 @@ class AuthService {
         'nombre': datos['nombre'],
         'documento': datos['documento'],
         'telefono': datos['telefono'],
-        'direccion': datos['direccion'],
+        'direccion': datos['direccion'] ?? 'Dirección Pendiente',
         'empresa': datos['nombre_empresa'],
         'nit_empresa': datos['nit_empresa'],
         'role': 'EMPLEADO',
@@ -270,7 +249,7 @@ class AuthService {
         'nombre': datos['nombre'],
         'documento': datos['documento'],
         'telefono': datos['telefono'],
-        'direccion': datos['direccion'],
+        'direccion': datos['direccion'] ?? 'Dirección Pendiente',
         'empresa': null,
         'nit_empresa': null,
         'role': 'NATURAL',
@@ -288,14 +267,24 @@ class AuthService {
 
   static Future<List<Map<String, String>>> searchCompanies(String query) async {
     await Future.delayed(const Duration(milliseconds: 300));
+
     if (query.isEmpty) {
-      return _mockCompaniesDB;
+      return _mockCompaniesDB
+          .map(
+            (c) => {'nit': c['nit'].toString(), 'name': c['name'].toString()},
+          )
+          .toList();
     }
+
     final q = query.toLowerCase();
+
     return _mockCompaniesDB
         .where(
-          (c) => c['name']!.toLowerCase().contains(q) || c['nit']!.contains(q),
+          (c) =>
+              c['name'].toString().toLowerCase().contains(q) ||
+              c['nit'].toString().contains(q),
         )
+        .map((c) => {'nit': c['nit'].toString(), 'name': c['name'].toString()})
         .toList();
   }
 
@@ -404,17 +393,18 @@ class AuthService {
   }
 
   static Future<List<Map<String, String>>> getAvailableCompanies() async {
-    // Simular delay de red
     await Future.delayed(const Duration(milliseconds: 800));
 
-    // Retornamos una lista Mock de empresas
-    return [
+    final rawList = [
       {'name': 'Tech Solutions SAS', 'nit': '900123456'},
       {'name': 'Constructora Global', 'nit': '900654321'},
       {'name': 'Servicios Médicos Ltda', 'nit': '800987654'},
       {'name': 'Bancolombia', 'nit': '890903938'},
       {'name': 'Ecopetrol', 'nit': '899999068'},
     ];
+
+    // Convertimos explícitamente
+    return rawList.map((e) => Map<String, String>.from(e)).toList();
   }
 
   /// Simula la verificación y vinculación de un usuario a una empresa
@@ -422,40 +412,31 @@ class AuthService {
     required String nit,
     required String companyName,
   }) async {
-    // 1. Simular delay de procesamiento
     await Future.delayed(const Duration(seconds: 2));
 
-    // 2. Validación Mock:
-    // Supongamos que si el NIT termina en '000', falla (para probar errores).
     if (nit.endsWith('000')) {
       return false;
     }
 
-    // 3. ÉXITO: Actualizar el usuario localmente (Lógica Híbrida)
-    // Al vincularse, le asignamos un ID de responsable y el nombre de la empresa.
     if (_currentUser != null) {
+      // CORRECCIÓN: Agregamos el campo address faltante
       _currentUser = User(
         id: _currentUser!.id,
         email: _currentUser!.email,
         name: _currentUser!.name,
         phone: _currentUser!.phone,
         documentNumber: _currentUser!.documentNumber,
-        photoUrl: _currentUser!.photoUrl, // Mantenemos la foto si existe
-        // --- CORRECCIONES BASADAS EN TU MODELO ---
+        address: _currentUser!.address, // Agregado para coincidir con el modelo
+        photoUrl: _currentUser!.photoUrl,
 
-        // 1. Role: Usamos el Enum, no un String
+        // Datos nuevos de vinculación
         role: UserRole.EMPLEADO,
-
-        // 2. Datos de Empresa:
         empresa: companyName,
-        nitEmpresa: nit, // Tu modelo tiene este campo, lo llenamos también
-        // 3. ID Responsable (Generado Mock)
+        nitEmpresa: nit,
         idResponsable: 'CORP-${DateTime.now().millisecondsSinceEpoch}',
-
-        // 4. AppMode: Usamos el Enum, no un bool
         appMode: AppMode.CORPORATE,
 
-        // 5. Mantener datos existentes
+        // Mantenemos lo demás
         verificationStatus: _currentUser!.verificationStatus,
         beneficiaries: _currentUser!.beneficiaries,
         idPassenger: _currentUser!.idPassenger,
@@ -467,112 +448,49 @@ class AuthService {
   }
 
   // ===========================================================================
-  // 6. RECUPERACIÓN DE CONTRASEÑA (MOCK + PREPARACIÓN LARAVEL)
+  // 6. RECUPERACIÓN DE CONTRASEÑA
   // ===========================================================================
 
-  /// 1. Simula el envío de un código al correo
   static Future<bool> sendPasswordRecoveryEmail(String email) async {
-    await Future.delayed(const Duration(seconds: 2)); // Simular red
-
-    // VALIDACIÓN MOCK: Verificamos si el correo existe en la BD local
+    await Future.delayed(const Duration(seconds: 2));
     final userExists = _dbUsuarios.any((u) => u['email'] == email);
-
     if (!userExists) return false;
-
-    // CONECTAR LARAVEL:
-    /*
-    final response = await http.post(
-      Uri.parse('$_baseUrl/auth/forgot-password'),
-      body: jsonEncode({'email': email}),
-      headers: ...
-    );
-    return response.statusCode == 200;
-    */
-
     return true;
   }
 
-  /// 2. Simula la verificación del código (OTP)
   static Future<bool> verifyRecoveryToken(String email, String token) async {
     await Future.delayed(const Duration(seconds: 1));
-
-    // MOCK: Aceptamos el código "1234" como válido para pruebas
     if (token == "1234") return true;
-
-    // CONECTAR LARAVEL:
-    /*
-    final response = await http.post(
-      Uri.parse('$_baseUrl/auth/verify-token'),
-      body: jsonEncode({'email': email, 'token': token}),
-      ...
-    );
-    return response.statusCode == 200;
-    */
-
     return false;
   }
 
-  /// 3. Cambia la contraseña en la BD Mock
   static Future<bool> changePassword(String email, String newPassword) async {
     await Future.delayed(const Duration(seconds: 2));
-
     try {
-      // LOGICA MOCK: Buscamos el usuario y actualizamos su password
       final userIndex = _dbUsuarios.indexWhere((u) => u['email'] == email);
-
       if (userIndex != -1) {
         _dbUsuarios[userIndex]['password'] = newPassword;
-        // También actualizamos el currentUser si es el mismo
-        if (_currentUser?.email == email) {
-          // Nota: En una app real forzaríamos logout, pero aquí actualizamos
-          // No podemos actualizar _currentUser directamente porque sus campos son final
-          // pero al hacer login de nuevo funcionará.
-        }
         return true;
       }
       return false;
     } catch (e) {
       return false;
     }
-
-    // CONECTAR LARAVEL:
-    /*
-    final response = await http.post(
-      Uri.parse('$_baseUrl/auth/reset-password'),
-      body: jsonEncode({
-        'email': email, 
-        'password': newPassword,
-        'password_confirmation': newPassword
-      }),
-      ...
-    );
-    return response.statusCode == 200;
-    */
   }
 
   static Map<String, dynamic> _mapStatus(UserVerificationStatus status) {
     switch (status) {
-      // 1. Usuario activo y feliz
       case UserVerificationStatus.VERIFIED:
         return {'status': AuthResponseStatus.active, 'user': _currentUser};
-
-      // 2. Usuario nuevo, falta OTP (El caso que daba error)
       case UserVerificationStatus.PENDING:
         return {'status': AuthResponseStatus.incomplete};
-
-      // 3. Usuario verificó email, falta aprobación de Empresa
       case UserVerificationStatus.CREATED:
         return {'status': AuthResponseStatus.pending};
-
-      // 4. Usuario subió papeles, VAMOS está revisando
       case UserVerificationStatus.UNDER_REVIEW:
-      case UserVerificationStatus.DOCS_UPLOADED: // Agrupamos ambos aquí
+      case UserVerificationStatus.DOCS_UPLOADED:
         return {'status': AuthResponseStatus.underReview};
-
-      // 5. Casos tristes
       case UserVerificationStatus.REJECTED:
         return {'status': AuthResponseStatus.rejected};
-
       case UserVerificationStatus.REVOKED:
         return {'status': AuthResponseStatus.revoked};
     }

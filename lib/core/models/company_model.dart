@@ -1,4 +1,5 @@
 class Company {
+  final String? id;
   final String nit;
   final String razonSocial;
   final String ciudad;
@@ -6,8 +7,10 @@ class Company {
   final String email;
   final String telefono;
   final bool isVerified;
+  final String? contratoMoviltrackId;
 
   Company({
+    this.id,
     required this.nit,
     required this.razonSocial,
     required this.ciudad,
@@ -15,9 +18,9 @@ class Company {
     required this.email,
     required this.telefono,
     this.isVerified = false,
+    this.contratoMoviltrackId,
   });
 
-  // Factory para crear desde el Map que envía tu formulario
   factory Company.fromRegistrationMap(Map<String, dynamic> map) {
     final datosEmpresa = map['empresa'];
     return Company(
@@ -27,11 +30,12 @@ class Company {
       direccion: datosEmpresa['direccion'],
       email: datosEmpresa['email_corporativo'],
       telefono: datosEmpresa['telefono_corporativo'],
-      isVerified: true, // Asumimos true para el mock inmediato
+      isVerified: true,
+      // En registro manual aun no hay contrato, se asigna luego en administración
+      contratoMoviltrackId: null,
     );
   }
 
-  // Convertir a Map simple para el Dropdown (name, nit)
   Map<String, String> toSimpleMap() {
     return {'nit': nit, 'name': razonSocial};
   }
