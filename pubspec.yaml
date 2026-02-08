@@ -42,6 +42,9 @@ dependencies:
   image_picker: ^1.0.4
   intl: ^0.18.0
   flutter_secure_storage: ^10.0.0
+  dio: ^5.4.0            # Cliente HTTP potente (reemplaza a http)
+  flutter_dotenv: ^5.1.0 # Para leer archivo .env
+  # pusher_channels_flutter: ^2.2.0  # (Descomentar cuando instales sockets)
   
 dev_dependencies:
   flutter_test:
@@ -68,6 +71,7 @@ flutter:
   # To add assets to your application, add an assets section, like this:
   assets:
     - assets/images/
+    - .env
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

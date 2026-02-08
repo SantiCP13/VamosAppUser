@@ -13,17 +13,15 @@ class CompanyRegisterScreen extends StatefulWidget {
 class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
   bool _isLoading = false;
 
-  // ---Controladores Empresa (Información Legal) ---
+  // --- CONTROLADORES ---
   final _razonSocialController = TextEditingController();
   final _nitController = TextEditingController();
   final _direccionEmpresaController = TextEditingController();
   final _telefonoEmpresaController = TextEditingController();
   final _emailEmpresaController = TextEditingController();
 
-  // Variable para la Ciudad (Dropdown)
   String? _ciudadSeleccionada;
 
-  // Lista de ciudades de Colombia
   final List<String> _ciudadesColombia = [
     'Bogotá D.C.',
     'Medellín',
@@ -49,18 +47,9 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
     'Florencia',
     'Yopal',
     'Quibdó',
-    'Arauca',
-    'Mocoa',
-    'San Andrés',
-    'Leticia',
-    'Mitú',
-    'Puerto Carreño',
-    'Inírida',
-    'San José del Guaviare',
     'Otras',
   ];
 
-  // --- Controladores Contacto Administrativo ---
   final _nombreContactoController = TextEditingController();
   final _telefonoContactoController = TextEditingController();
   final _emailContactoController = TextEditingController();
@@ -79,36 +68,7 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
   }
 
   Future<void> _handleCompanyRequest() async {
-    // 1. Validaciones con bloques {} para evitar advertencias
-    if (_razonSocialController.text.isEmpty) {
-      debugPrint("Falta Razón Social");
-    }
-    if (_nitController.text.isEmpty) {
-      debugPrint("Falta NIT");
-    }
-    if (_ciudadSeleccionada == null) {
-      debugPrint("Falta Ciudad");
-    }
-    if (_direccionEmpresaController.text.isEmpty) {
-      debugPrint("Falta Dirección");
-    }
-    if (_telefonoEmpresaController.text.isEmpty) {
-      debugPrint("Falta Tel Empresa");
-    }
-    if (_emailEmpresaController.text.isEmpty) {
-      debugPrint("Falta Email Empresa");
-    }
-    if (_nombreContactoController.text.isEmpty) {
-      debugPrint("Falta Nombre Contacto");
-    }
-    if (_telefonoContactoController.text.isEmpty) {
-      debugPrint("Falta Tel Contacto");
-    }
-    if (_emailContactoController.text.isEmpty) {
-      debugPrint("Falta Email Contacto");
-    }
-
-    // Validación general
+    // Validación básica
     if (_razonSocialController.text.isEmpty ||
         _nitController.text.isEmpty ||
         _ciudadSeleccionada == null ||
@@ -118,13 +78,10 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
         _nombreContactoController.text.isEmpty ||
         _telefonoContactoController.text.isEmpty ||
         _emailContactoController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            "Por favor completa todos los campos de la empresa y del encargado.",
-          ),
-          backgroundColor: Colors.redAccent,
-        ),
+      // USAMOS EL NUEVO AVISO
+      _showSnack(
+        "Por favor completa todos los campos obligatorios.",
+        isError: true,
       );
       return;
     }
@@ -151,7 +108,6 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
         'fecha_solicitud': DateTime.now().toIso8601String(),
       };
 
-      // Llamada al servicio (Ahora sí existe el método)
       bool success = await AuthService.requestCompanyAffiliation(
         requestPayload,
       );
@@ -160,12 +116,14 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
 
       if (success) {
         _showSuccessDialog();
+      } else {
+        // USAMOS EL NUEVO AVISO
+        _showSnack("Error al enviar solicitud.", isError: true);
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
-        );
+        // USAMOS EL NUEVO AVISO
+        _showSnack("Error: $e", isError: true);
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -194,8 +152,7 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
           ],
         ),
         content: Text(
-          "Hemos registrado la solicitud para ${_razonSocialController.text} en la ciudad de $_ciudadSeleccionada.\n\n"
-          "Enviaremos la confirmación al correo: ${_emailEmpresaController.text}.",
+          "Datos registrados correctamente. Un asesor te contactará pronto.",
           textAlign: TextAlign.center,
           style: GoogleFonts.poppins(fontSize: 14),
         ),
@@ -210,8 +167,8 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
                 ),
               ),
               onPressed: () {
-                Navigator.pop(context); // Cierra dialogo
-                Navigator.pop(context); // Vuelve atrás
+                Navigator.pop(context);
+                Navigator.pop(context);
               },
               child: const Text(
                 "Entendido",
@@ -224,6 +181,42 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
     );
   }
 
+  void _showSnack(String msg, {bool isError = false}) {
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.only(bottom: 30, left: 20, right: 20),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        backgroundColor: isError
+            ? const Color(0xFFE53935)
+            : AppColors.primaryGreen,
+        elevation: 6,
+        content: Row(
+          children: [
+            Icon(
+              isError ? Icons.cancel_outlined : Icons.check_circle_outline,
+              color: Colors.white,
+              size: 24,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                msg,
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -232,33 +225,43 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: const BackButton(color: Colors.black),
-        title: Text(
-          "Afiliación Corporativa",
-          style: GoogleFonts.poppins(
-            color: Colors.black,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.symmetric(horizontal: 24.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ---- DATOS DE LA EMPRESA ---
+              const SizedBox(height: 10),
               Text(
-                "Información de la Empresa",
+                "Afiliación Corporativa",
                 style: GoogleFonts.poppins(
+                  fontSize: 28,
                   fontWeight: FontWeight.bold,
-                  fontSize: 16,
+                  color: AppColors.primaryGreen,
+                  height: 1.2,
                 ),
               ),
+              const SizedBox(height: 8),
+              Text(
+                "Completa el formulario para registrar tu empresa.",
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  color: Colors.grey.shade600,
+                ),
+              ),
+              const SizedBox(height: 32),
+
+              // --- SECCIÓN 1 ---
+              _buildSectionTitle("Información Legal"),
               const SizedBox(height: 16),
+
               _buildTextField(
                 _razonSocialController,
                 "Razón Social",
                 Icons.domain,
+                capitalization:
+                    TextCapitalization.words, // Mayúsculas automáticas
               ),
               const SizedBox(height: 16),
               _buildTextField(
@@ -269,103 +272,114 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Dropdown
+              // Dropdown Ciudad - MEJORADO VISUALMENTE
               DropdownButtonFormField<String>(
                 initialValue: _ciudadSeleccionada,
-                icon: const Icon(Icons.keyboard_arrow_down),
-                decoration: InputDecoration(
-                  labelText: "Ciudad Sede",
-                  prefixIcon: const Icon(
-                    Icons.location_city,
-                    size: 20,
-                    color: Colors.grey,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 16,
-                  ),
+                isExpanded:
+                    true, // Esto evita errores si el nombre de la ciudad es muy largo
+                menuMaxHeight:
+                    350, // Limita la altura para que se vea como un menú elegante
+                icon: const Icon(
+                  Icons
+                      .keyboard_arrow_down_rounded, // Icono de flecha más suave
+                  color: AppColors.primaryGreen,
                 ),
+                decoration: _getInputDecoration(
+                  "Ciudad Sede",
+                  Icons.location_city,
+                ),
+                dropdownColor: Colors.white,
+                borderRadius: BorderRadius.circular(16),
                 items: _ciudadesColombia.map((String ciudad) {
                   return DropdownMenuItem<String>(
                     value: ciudad,
-                    child: Text(
-                      ciudad,
-                      style: GoogleFonts.poppins(fontSize: 14),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            ciudad,
+                            style: GoogleFonts.poppins(
+                              fontSize: 15,
+                              color: Colors.grey.shade800,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
                     ),
                   );
                 }).toList(),
-                onChanged: (String? newValue) =>
-                    setState(() => _ciudadSeleccionada = newValue),
+                onChanged: (val) => setState(() => _ciudadSeleccionada = val),
               ),
+
               const SizedBox(height: 16),
               _buildTextField(
                 _direccionEmpresaController,
-                "Dirección",
+                "Dirección Principal",
                 Icons.map,
+                capitalization: TextCapitalization.sentences,
               ),
               const SizedBox(height: 16),
               _buildTextField(
                 _telefonoEmpresaController,
-                "Telefono Corporativo",
+                "Teléfono Fijo",
                 Icons.phone_in_talk,
                 type: TextInputType.phone,
               ),
               const SizedBox(height: 16),
               _buildTextField(
                 _emailEmpresaController,
-                "Correo de la Empresa",
+                "Email Corporativo",
                 Icons.alternate_email,
                 type: TextInputType.emailAddress,
               ),
 
               const SizedBox(height: 30),
-              Divider(color: Colors.grey.shade300, thickness: 1),
-              const SizedBox(height: 20),
+              Divider(color: Colors.grey.shade200, thickness: 2),
+              const SizedBox(height: 30),
 
-              // --- CONTACTO ---
-              Text(
-                "Información del Representante",
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
+              // --- SECCIÓN 2 ---
+              _buildSectionTitle("Administrador de Cuenta"),
               const SizedBox(height: 16),
+
               _buildTextField(
                 _nombreContactoController,
                 "Nombre Completo",
                 Icons.person,
+                capitalization: TextCapitalization.words,
               ),
               const SizedBox(height: 16),
               _buildTextField(
                 _telefonoContactoController,
-                "Celular Encargado",
+                "Celular Contacto",
                 Icons.smartphone,
                 type: TextInputType.phone,
               ),
               const SizedBox(height: 16),
               _buildTextField(
                 _emailContactoController,
-                "Email Encargado",
+                "Email Personal",
                 Icons.email_outlined,
                 type: TextInputType.emailAddress,
               ),
 
-              const SizedBox(height: 30),
+              const SizedBox(height: 40),
+
+              // BOTÓN (CORREGIDO)
               SizedBox(
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
                   onPressed: _isLoading ? null : _handleCompanyRequest,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor:
-                        AppColors.primaryGreen, // Ajuste al color standard
+                    backgroundColor: AppColors.primaryGreen,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(15),
                     ),
+                    elevation: 4,
+                    // CORRECCIÓN 2: Se reemplazó .withOpacity() por .withValues(alpha: ...)
+                    shadowColor: AppColors.primaryGreen.withValues(alpha: 0.4),
                   ),
                   child: _isLoading
                       ? const CircularProgressIndicator(color: Colors.white)
@@ -379,10 +393,22 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
                         ),
                 ),
               ),
-              const SizedBox(height: 30),
+              const SizedBox(height: 40),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String title) {
+    return Text(
+      title.toUpperCase(),
+      style: GoogleFonts.poppins(
+        fontWeight: FontWeight.bold,
+        fontSize: 13,
+        color: Colors.grey.shade500,
+        letterSpacing: 1.2,
       ),
     );
   }
@@ -392,19 +418,40 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
     String label,
     IconData icon, {
     TextInputType type = TextInputType.text,
+    TextCapitalization capitalization = TextCapitalization.none,
   }) {
     return TextField(
       controller: controller,
       keyboardType: type,
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: Icon(icon, size: 20, color: Colors.grey.shade600),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: 16,
-        ),
+      textCapitalization: capitalization,
+      textInputAction: TextInputAction.next,
+      decoration: _getInputDecoration(label, icon),
+    );
+  }
+
+  InputDecoration _getInputDecoration(String label, IconData icon) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: GoogleFonts.poppins(
+        fontSize: 14,
+        color: Colors.grey.shade600,
       ),
+      prefixIcon: Icon(icon, size: 20, color: AppColors.primaryGreen),
+      filled: true,
+      fillColor: Colors.grey.shade50,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade200),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.primaryGreen, width: 1.5),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
     );
   }
 }

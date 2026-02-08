@@ -14,6 +14,7 @@ class RegisterNaturalScreen extends StatefulWidget {
 
 class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
   bool _isLoading = false;
+  bool _obscurePass = true;
 
   // Controladores
   late TextEditingController _emailController;
@@ -33,7 +34,77 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
     _emailController = TextEditingController(text: widget.emailPreIngresado);
   }
 
-  // Lógica de Registro Actualizada
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    _nombreController.dispose();
+    _docController.dispose();
+    _telefonoController.dispose();
+    _direccionController.dispose();
+    super.dispose();
+  }
+
+  // --- ESTILOS & UTILIDADES ---
+
+  void _showSnack(String msg, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              isError ? Icons.cancel_outlined : Icons.check_circle_outline,
+              color: Colors.white,
+            ),
+            const SizedBox(width: 10),
+            Expanded(child: Text(msg, style: GoogleFonts.poppins())),
+          ],
+        ),
+        backgroundColor: isError
+            ? const Color(0xFFE53935)
+            : AppColors.primaryGreen,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(20),
+      ),
+    );
+  }
+
+  InputDecoration _getInputStyle({
+    required String label,
+    required IconData icon,
+    Widget? suffixIcon,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: GoogleFonts.poppins(
+        fontSize: 14,
+        color: Colors.grey.shade600,
+      ),
+      prefixIcon: Icon(icon, size: 20, color: AppColors.primaryGreen),
+      filled: true,
+      fillColor: Colors.grey.shade50,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade200),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.primaryGreen, width: 1.5),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      suffixIcon: suffixIcon,
+    );
+  }
+
+  // --- LÓGICA ---
+
   Future<void> _handleRegister() async {
     // 1. Validaciones de Texto
     if (_nombreController.text.isEmpty ||
@@ -41,17 +112,20 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
         _emailController.text.isEmpty ||
         _passwordController.text.isEmpty ||
         _telefonoController.text.isEmpty) {
-      _showError("Por favor completa todos los campos de texto.");
+      _showSnack(
+        "Por favor completa todos los campos de texto.",
+        isError: true,
+      );
       return;
     }
 
     // 2. Validaciones de Biometría
     if (!_cedulaUploaded) {
-      _showError("Debes tomar la foto de tu cédula para continuar.");
+      _showSnack("Debes tomar la foto de tu cédula.", isError: true);
       return;
     }
     if (!_biometricVerified) {
-      _showError("Debes completar la verificación facial.");
+      _showSnack("Debes completar la verificación facial.", isError: true);
       return;
     }
 
@@ -74,41 +148,36 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
       if (!mounted) return;
 
       if (success) {
-        // FLUJO CORRECTO: Navegar a VerificationCheckScreen (OTP)
-        // pushAndRemoveUntil asegura que no puedan volver al formulario
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (_) => const VerificationCheckScreen()),
           (route) => false,
         );
       } else {
-        throw Exception(
-          "No se pudo completar el registro. Intenta nuevamente.",
-        );
+        throw Exception("No se pudo completar el registro.");
       }
     } catch (e) {
-      // Manejo de Errores: SnackBar Rojo
-      _showError(e.toString().replaceAll("Exception: ", ""));
+      _showSnack(e.toString().replaceAll("Exception: ", ""), isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _showError(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
-  }
-
-  // Simulación de Cámara
   Future<void> _simulateCamera(bool isBiometric) async {
-    setState(() => _isLoading = true);
-    await Future.delayed(const Duration(seconds: 2));
+    // Simula carga de cámara
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (c) => const Center(
+        child: CircularProgressIndicator(color: AppColors.primaryGreen),
+      ),
+    );
 
+    await Future.delayed(const Duration(seconds: 2));
     if (!mounted) return;
+    Navigator.pop(context); // Cierra loader
+
     setState(() {
-      _isLoading = false;
       if (isBiometric) {
         _biometricVerified = true;
       } else {
@@ -116,102 +185,7 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
       }
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          isBiometric
-              ? "Biometría completada exitosamente"
-              : "Cédula guardada correctamente",
-        ),
-        backgroundColor: Colors.green,
-      ),
-    );
-  }
-
-  Widget _input(
-    TextEditingController c,
-    String label,
-    IconData icon, {
-    bool isPass = false,
-    TextInputType type = TextInputType.text,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 15),
-      child: TextField(
-        controller: c,
-        obscureText: isPass,
-        keyboardType: type,
-        decoration: InputDecoration(
-          labelText: label,
-          prefixIcon: Icon(icon, size: 20, color: Colors.grey),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-          filled: true,
-          fillColor: Colors.grey[50],
-        ),
-      ),
-    );
-  }
-
-  Widget _verificationCard(
-    String title,
-    String subtitle,
-    IconData icon,
-    bool isDone,
-    VoidCallback onTap,
-  ) {
-    return InkWell(
-      onTap: isDone ? null : onTap,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 15),
-        padding: const EdgeInsets.all(15),
-        decoration: BoxDecoration(
-          color: isDone ? Colors.green.shade50 : Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isDone ? Colors.green : Colors.grey.shade300,
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: isDone ? Colors.green : Colors.grey.shade200,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                isDone ? Icons.check : icon,
-                color: isDone ? Colors.white : Colors.grey[700],
-              ),
-            ),
-            const SizedBox(width: 15),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-                  ),
-                  Text(
-                    isDone ? "Completado" : subtitle,
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (!isDone)
-              const Icon(
-                Icons.camera_alt_outlined,
-                color: AppColors.primaryGreen,
-              ),
-          ],
-        ),
-      ),
-    );
+    _showSnack(isBiometric ? "Biometría completada" : "Cédula guardada");
   }
 
   @override
@@ -219,25 +193,40 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text(
-          "Registro Personal",
-          style: GoogleFonts.poppins(
-            color: Colors.black,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
         backgroundColor: Colors.white,
         elevation: 0,
         leading: const BackButton(color: Colors.black),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const SizedBox(height: 10),
+              // Encabezado H1
               Text(
-                "Datos Básicos",
+                "Crear cuenta como Natural",
+                style: GoogleFonts.poppins(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primaryGreen,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0, bottom: 30),
+                child: Text(
+                  "Ingresa tus datos y verifica tu identidad para empezar a viajar.",
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ),
+
+              // --- DATOS BÁSICOS ---
+              Text(
+                "Datos Personales",
                 style: GoogleFonts.poppins(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
@@ -246,41 +235,84 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
               ),
               const SizedBox(height: 15),
 
-              _input(
-                _nombreController,
-                "Nombre Completo",
-                Icons.person_outline,
+              TextField(
+                controller: _nombreController,
+                textCapitalization: TextCapitalization.words,
+                style: GoogleFonts.poppins(),
+                decoration: _getInputStyle(
+                  label: "Nombre Completo",
+                  icon: Icons.person_outline,
+                ),
               ),
-              _input(
-                _docController,
-                "Número de Cédula",
-                Icons.badge_outlined,
-                type: TextInputType.number,
+              const SizedBox(height: 15),
+
+              TextField(
+                controller: _docController,
+                keyboardType: TextInputType.number,
+                style: GoogleFonts.poppins(),
+                decoration: _getInputStyle(
+                  label: "Número de Cédula",
+                  icon: Icons.badge_outlined,
+                ),
               ),
-              _input(
-                _telefonoController,
-                "Celular",
-                Icons.phone_android,
-                type: TextInputType.phone,
+              const SizedBox(height: 15),
+
+              TextField(
+                controller: _telefonoController,
+                keyboardType: TextInputType.phone,
+                style: GoogleFonts.poppins(),
+                decoration: _getInputStyle(
+                  label: "Celular",
+                  icon: Icons.phone_android_outlined,
+                ),
               ),
-              _input(_direccionController, "Dirección", Icons.map_outlined),
-              _input(
-                _emailController,
-                "Correo Electrónico",
-                Icons.email_outlined,
-                type: TextInputType.emailAddress,
+              const SizedBox(height: 15),
+
+              TextField(
+                controller: _direccionController,
+                textCapitalization: TextCapitalization.sentences,
+                style: GoogleFonts.poppins(),
+                decoration: _getInputStyle(
+                  label: "Dirección",
+                  icon: Icons.map_outlined,
+                ),
               ),
-              _input(
-                _passwordController,
-                "Contraseña",
-                Icons.lock_outline,
-                isPass: true,
+              const SizedBox(height: 15),
+
+              TextField(
+                controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
+                style: GoogleFonts.poppins(),
+                decoration: _getInputStyle(
+                  label: "Correo Electrónico",
+                  icon: Icons.email_outlined,
+                ),
+              ),
+              const SizedBox(height: 15),
+
+              TextField(
+                controller: _passwordController,
+                obscureText: _obscurePass,
+                style: GoogleFonts.poppins(),
+                decoration: _getInputStyle(
+                  label: "Contraseña",
+                  icon: Icons.lock_outline,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscurePass ? Icons.visibility_off : Icons.visibility,
+                      color: Colors.grey,
+                    ),
+                    onPressed: () =>
+                        setState(() => _obscurePass = !_obscurePass),
+                  ),
+                ),
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 30),
               Divider(thickness: 1, color: Colors.grey[200]),
               const SizedBox(height: 20),
 
+              // --- VERIFICACIÓN ---
               Text(
                 "Seguridad y Verificación",
                 style: GoogleFonts.poppins(
@@ -293,33 +325,35 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
               Text(
                 "Pasos obligatorios para validar tu identidad.",
                 style: GoogleFonts.poppins(
-                  fontSize: 12,
+                  fontSize: 13,
                   color: Colors.grey[600],
                 ),
               ),
               const SizedBox(height: 15),
 
-              // 1. Tarjeta Cédula
-              _verificationCard(
-                "Foto de Cédula",
-                "Toma una foto clara de tu documento",
-                Icons.credit_card,
-                _cedulaUploaded,
-                () => _simulateCamera(false),
+              // Tarjeta 1: Cédula
+              _buildVerificationCard(
+                title: "Foto de Cédula",
+                subtitle: "Toma una foto clara de tu documento",
+                icon: Icons.credit_card,
+                isDone: _cedulaUploaded,
+                onTap: () => _simulateCamera(false),
               ),
 
-              // 2. Tarjeta Biometría
-              _verificationCard(
-                "Verificación Facial",
-                "Selfie para validar que eres tú",
-                Icons.face,
-                _biometricVerified,
-                () => _simulateCamera(true),
+              const SizedBox(height: 12),
+
+              // Tarjeta 2: Biometría
+              _buildVerificationCard(
+                title: "Verificación Facial",
+                subtitle: "Selfie para validar que eres tú",
+                icon: Icons.face,
+                isDone: _biometricVerified,
+                onTap: () => _simulateCamera(true),
               ),
 
-              const SizedBox(height: 30),
+              const SizedBox(height: 40),
 
-              // Botón Final
+              // --- BOTÓN FINAL ---
               SizedBox(
                 width: double.infinity,
                 height: 56,
@@ -328,11 +362,20 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryGreen,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(15),
                     ),
+                    elevation: 4,
+                    shadowColor: AppColors.primaryGreen.withValues(alpha: 0.4),
                   ),
                   child: _isLoading
-                      ? const CircularProgressIndicator(color: Colors.white)
+                      ? const SizedBox(
+                          height: 24,
+                          width: 24,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        )
                       : Text(
                           "Crear Cuenta",
                           style: GoogleFonts.poppins(
@@ -343,9 +386,99 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
                         ),
                 ),
               ),
+              const SizedBox(height: 30),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildVerificationCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required bool isDone,
+    required VoidCallback onTap,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDone ? Colors.green.shade50 : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDone ? AppColors.primaryGreen : Colors.grey.shade200,
+        ),
+        boxShadow: [
+          if (!isDone)
+            BoxShadow(
+              color: Colors.grey.withValues(alpha: 0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+        ],
+      ),
+      child: Row(
+        children: [
+          // Icono Circular
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isDone ? Colors.white : Colors.grey.shade100,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isDone ? Icons.check : icon,
+              color: isDone ? AppColors.primaryGreen : Colors.grey[600],
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 16),
+
+          // Textos
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                    color: isDone ? AppColors.primaryGreen : Colors.black87,
+                  ),
+                ),
+                if (!isDone)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      subtitle,
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: Colors.grey[500],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+          // Botón de Acción (si no está hecho)
+          if (!isDone)
+            IconButton(
+              onPressed: onTap,
+              style: IconButton.styleFrom(
+                backgroundColor: AppColors.primaryGreen.withValues(alpha: 0.1),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              icon: const Icon(
+                Icons.camera_alt_outlined,
+                color: AppColors.primaryGreen,
+              ),
+            ),
+        ],
       ),
     );
   }

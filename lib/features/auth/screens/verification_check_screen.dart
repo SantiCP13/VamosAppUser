@@ -39,7 +39,6 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
 
   void _checkStatus() async {
     await Future.delayed(const Duration(milliseconds: 500));
-    // Solución advertencia async gap: verificar mounted
     if (!mounted) return;
 
     final user = AuthService.currentUser;
@@ -85,11 +84,11 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // MOCK LOCAL (Activo para MVP)
+      // MOCK LOCAL
       await Future.delayed(const Duration(seconds: 2));
 
       if (code == "123456") {
-        if (!mounted) return; // Seguridad extra
+        if (!mounted) return;
         setState(() {
           _status = UserVerificationStatus.VERIFIED;
         });
@@ -98,18 +97,16 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
         throw "Código incorrecto (Prueba con 123456)";
       }
     } catch (e) {
-      // ========================================================
-      // SOLUCIÓN ADVERTENCIA AZUL:
-      // Verificamos si el widget sigue "montado" antes de usar context
-      // ========================================================
       if (!mounted) return;
-
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(e.toString()),
-          backgroundColor: Colors.red,
+          backgroundColor: const Color(0xFFE53935),
           behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
         ),
       );
     }
@@ -122,11 +119,41 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
 
     await Future.delayed(const Duration(seconds: 1));
 
-    // Verificación de seguridad
     if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Código reenviado (Mock: usa 123456)")),
+      SnackBar(
+        content: const Text("Código reenviado (Mock: usa 123456)"),
+        backgroundColor: AppColors.primaryGreen,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  // Helper para estilo de inputs consistente
+  InputDecoration _getOtpInputStyle() {
+    return InputDecoration(
+      filled: true,
+      fillColor: Colors.grey.shade50,
+      counterText: "",
+      hintText: "000000",
+      hintStyle: GoogleFonts.poppins(
+        color: Colors.grey.shade300,
+        letterSpacing: 8,
+      ),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade200),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.primaryGreen, width: 1.5),
+      ),
+      contentPadding: const EdgeInsets.symmetric(vertical: 20),
     );
   }
 
@@ -141,7 +168,6 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
       );
     }
 
-    // AHORA EL ENUM 'PENDING' YA EXISTIRÁ EN TU MODELO
     if (_status == UserVerificationStatus.PENDING) {
       return _buildOtpScreen();
     }
@@ -162,18 +188,18 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
       return _buildRejectionScreen();
     }
 
-    // Fallback
     return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 
+  // --- PANTALLA OTP CON ESTILO ACTUALIZADO ---
   Widget _buildOtpScreen() {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black),
+        leading: BackButton(
+          color: Colors.black,
           onPressed: () {
             Navigator.pushReplacement(
               context,
@@ -188,35 +214,42 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const SizedBox(height: 20),
+
               Text(
                 "Verifica tu correo",
                 style: GoogleFonts.poppins(
-                  fontSize: 26,
+                  fontSize: 28, // Tamaño grande consistente
                   fontWeight: FontWeight.bold,
                   color: AppColors.primaryGreen,
                 ),
               ),
-              const SizedBox(height: 10),
-              RichText(
-                text: TextSpan(
-                  style: GoogleFonts.poppins(
-                    fontSize: 14,
-                    color: Colors.grey[600],
-                  ),
-                  children: [
-                    const TextSpan(text: "Ingresa el código enviado a "),
-                    TextSpan(
-                      text: _currentUser?.email ?? "tu correo",
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
+
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0, bottom: 40),
+                child: RichText(
+                  text: TextSpan(
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      color: Colors.grey[600],
+                      height: 1.5,
                     ),
-                  ],
+                    children: [
+                      const TextSpan(
+                        text: "Ingresa el código de 6 dígitos enviado a ",
+                      ),
+                      TextSpan(
+                        text: _currentUser?.email ?? "tu correo",
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const TextSpan(text: "."),
+                    ],
+                  ),
                 ),
               ),
-
-              const SizedBox(height: 40),
 
               TextField(
                 controller: _codeController,
@@ -225,29 +258,16 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
                 textAlign: TextAlign.center,
                 style: GoogleFonts.poppins(
                   fontSize: 24,
-                  fontWeight: FontWeight.bold,
+                  fontWeight: FontWeight.w600,
                   letterSpacing: 8,
+                  color: Colors.black87,
                 ),
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: InputDecoration(
-                  counterText: "",
-                  hintText: "000000",
-                  hintStyle: TextStyle(color: Colors.grey[300]),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(
-                      color: AppColors.primaryGreen,
-                      width: 2,
-                    ),
-                  ),
-                ),
+                decoration: _getOtpInputStyle(),
                 onSubmitted: (_) => _verifyCode(),
               ),
 
-              const SizedBox(height: 40),
+              const SizedBox(height: 50),
 
               SizedBox(
                 width: double.infinity,
@@ -259,7 +279,8 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(15),
                     ),
-                    elevation: 0,
+                    elevation: 4,
+                    shadowColor: AppColors.primaryGreen.withValues(alpha: 0.4),
                   ),
                   child: _isLoading
                       ? const SizedBox(
@@ -275,20 +296,23 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
                           style: GoogleFonts.poppins(
                             color: Colors.white,
                             fontSize: 16,
-                            fontWeight: FontWeight.w600,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
                 ),
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 30),
 
               Center(
                 child: TextButton(
                   onPressed: _isLoading ? null : _resendCode,
                   child: Text(
                     "¿No recibiste el código? Reenviar",
-                    style: GoogleFonts.poppins(color: AppColors.primaryGreen),
+                    style: GoogleFonts.poppins(
+                      color: AppColors.primaryGreen,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
@@ -299,41 +323,84 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
     );
   }
 
+  // --- PANTALLA REJECTION CON ESTILO ACTUALIZADO ---
   Widget _buildRejectionScreen() {
     return Scaffold(
       backgroundColor: Colors.white,
-      body: Padding(
-        padding: const EdgeInsets.all(30.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.block, size: 80, color: Colors.red[300]),
-            const SizedBox(height: 30),
-            Text(
-              "Acceso Restringido",
-              style: GoogleFonts.poppins(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const SizedBox(height: 60),
+
+              // Ícono consistente con PendingScreen pero rojo
+              Container(
+                padding: const EdgeInsets.all(30),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.block, size: 60, color: Colors.red.shade400),
               ),
-            ),
-            const SizedBox(height: 15),
-            Text(
-              "Tu cuenta ha sido rechazada o suspendida.",
-              textAlign: TextAlign.center,
-              style: GoogleFonts.poppins(color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 40),
-            OutlinedButton(
-              onPressed: () {
-                Navigator.pushAndRemoveUntil(
-                  context,
-                  MaterialPageRoute(builder: (_) => const WelcomeScreen()),
-                  (route) => false,
-                );
-              },
-              child: const Text("Cerrar Sesión"),
-            ),
-          ],
+
+              const SizedBox(height: 40),
+
+              Text(
+                "Acceso Restringido",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFFE53935),
+                ),
+              ),
+
+              Padding(
+                padding: const EdgeInsets.only(top: 12.0, bottom: 40.0),
+                child: Text(
+                  "Tu solicitud ha sido rechazada o tu cuenta ha sido suspendida. Por favor contacta a soporte para más información.",
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                    height: 1.5,
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              SizedBox(
+                width: double.infinity,
+                height: 56,
+                child: OutlinedButton(
+                  onPressed: () {
+                    Navigator.pushAndRemoveUntil(
+                      context,
+                      MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+                      (route) => false,
+                    );
+                  },
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFFE53935)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                  ),
+                  child: Text(
+                    "Cerrar Sesión",
+                    style: GoogleFonts.poppins(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFFE53935),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

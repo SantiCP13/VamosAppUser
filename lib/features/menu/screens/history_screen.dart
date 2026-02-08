@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../menu/services/menu_service.dart';
-// Asegúrate de que esta ruta coincida donde creaste el modelo
 import '../../../core/models/trip_model.dart';
 
 class HistoryScreen extends StatefulWidget {
@@ -14,8 +13,6 @@ class HistoryScreen extends StatefulWidget {
 
 class _HistoryScreenState extends State<HistoryScreen> {
   final MenuService _menuService = MenuService();
-
-  // CAMBIO 1: Ahora el Future espera una Lista de TripModel, no Maps
   late Future<List<TripModel>> _historyFuture;
 
   @override
@@ -27,182 +24,292 @@ class _HistoryScreenState extends State<HistoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        centerTitle: true,
-        leading: IconButton(
-          icon: const Icon(Icons.close, color: Colors.black),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          "Mis viajes",
-          style: GoogleFonts.poppins(
-            color: Colors.black,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
-      // CAMBIO 2: FutureBuilder tipado correctamente
-      body: FutureBuilder<List<TripModel>>(
-        future: _historyFuture,
-        builder: (context, snapshot) {
-          // 1. CARGA
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(
-              child: CircularProgressIndicator(color: AppColors.primaryGreen),
-            );
-          }
+      backgroundColor: AppColors.bgColor,
+      // Quitamos el AppBar predeterminado para tener control total del espaciado
+      body: SafeArea(
+        child: Column(
+          children: [
+            // --- 1. HEADER PERSONALIZADO CON RESPIRO ---
 
-          // 2. ERROR
-          if (snapshot.hasError) {
-            return Center(
-              child: Text(
-                "Error al cargar historial",
-                style: GoogleFonts.poppins(color: Colors.red),
+            // Este SizedBox da el empujón hacia abajo que pediste
+            const SizedBox(height: 24),
+
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16.0,
+                vertical: 8.0,
               ),
-            );
-          }
-
-          final trips = snapshot.data ?? [];
-
-          // 3. VACÍO
-          if (trips.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+              child: Stack(
+                alignment: Alignment.center,
                 children: [
-                  Container(
-                    height: 150,
-                    width: 250,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade200,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Icon(
-                      Icons.directions_car,
-                      size: 80,
-                      color: Colors.grey,
+                  // Botón Cerrar (Alineado a la izquierda)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: IconButton(
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: AppColors.primaryGreen,
+                        size: 28,
+                      ),
+                      onPressed: () => Navigator.pop(context),
+                      padding: EdgeInsets.zero,
+                      constraints:
+                          const BoxConstraints(), // Elimina padding extra del botón
                     ),
                   ),
-                  const SizedBox(height: 24),
+
+                  // Título (Perfectamente centrado)
                   Text(
-                    "Sin viajes",
+                    "Mis Viajes",
                     style: GoogleFonts.poppins(
-                      fontSize: 18,
                       color: AppColors.primaryGreen,
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 20, // Un poco más grande para mejor presencia
                     ),
                   ),
                 ],
               ),
-            );
-          }
+            ),
 
-          // 4. LISTA
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: trips.length,
-            separatorBuilder: (context, index) => const SizedBox(height: 12),
-            itemBuilder: (context, index) {
-              final trip = trips[index];
-              return _buildTripCard(trip);
-            },
-          );
-        },
+            const SizedBox(height: 10), // Espacio entre título y lista
+            // --- 2. LISTA DE VIAJES ---
+            Expanded(
+              child: FutureBuilder<List<TripModel>>(
+                future: _historyFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: CircularProgressIndicator(
+                        color: AppColors.primaryGreen,
+                      ),
+                    );
+                  }
+
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.error_outline,
+                            size: 48,
+                            color: Colors.red.shade300,
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            "Error al cargar historial",
+                            style: GoogleFonts.poppins(
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  final trips = snapshot.data ?? [];
+
+                  // Empty State
+                  if (trips.isEmpty) {
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            height: 120,
+                            width: 120,
+                            decoration: BoxDecoration(
+                              color: AppColors.primaryGreen.withValues(
+                                alpha: 0.05,
+                              ),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.history_toggle_off,
+                              size: 50,
+                              color: AppColors.primaryGreen.withValues(
+                                alpha: 0.5,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          Text(
+                            "Aún no tienes viajes",
+                            style: GoogleFonts.poppins(
+                              fontSize: 20,
+                              color: AppColors.primaryGreen,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  // Lista de Tarjetas
+                  return ListView.separated(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 10,
+                    ),
+                    itemCount: trips.length,
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: 16),
+                    itemBuilder: (context, index) {
+                      final trip = trips[index];
+                      return _buildTripCard(trip);
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  // CAMBIO 3: Recibimos el Objeto Modelo en lugar de un Map
+  // Tarjeta con Estilos Consistentes (Igual al anterior)
   Widget _buildTripCard(TripModel trip) {
-    // Ya no necesitamos lógica condicional aquí (if status ==...), el modelo la trae.
+    final isCompleted = trip.isCompleted;
+    final statusColor = isCompleted ? AppColors.primaryGreen : Colors.red;
+    final statusBgColor = isCompleted
+        ? AppColors.primaryGreen.withValues(alpha: 0.1)
+        : Colors.red.withValues(alpha: 0.1);
 
     return Container(
-      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            // Compatible con Flutter moderno
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 5,
-            offset: const Offset(0, 2),
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                trip.formattedDate, // Usamos el Getter formateado
-                style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: trip.isCompleted
-                      ? Colors.green.shade50
-                      : Colors.red.shade50,
-                  borderRadius: BorderRadius.circular(4),
+          // Cabecera: Fecha y Estado
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.calendar_today_outlined,
+                      size: 14,
+                      color: Colors.grey.shade500,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      trip.formattedDate,
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
                 ),
-                child: Text(
-                  trip.statusLabel, // "Completado" o "Cancelado"
-                  style: GoogleFonts.poppins(
-                    fontSize: 10,
-                    color: trip.isCompleted ? Colors.green : Colors.red,
-                    fontWeight: FontWeight.w600,
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: statusBgColor,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    trip.statusLabel,
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      color: statusColor,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Icon(
-                Icons.location_on,
-                color: AppColors.primaryGreen,
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  trip.destination,
-                  style: GoogleFonts.poppins(
-                    fontWeight: FontWeight.w500,
-                    fontSize: 14,
+
+          const Divider(height: 1, color: Color(0xFFEEEEEE)),
+
+          // Cuerpo: Destino y Precio
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryGreen.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  child: const Icon(
+                    Icons.location_on,
+                    color: AppColors.primaryGreen,
+                    size: 20,
+                  ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Divider(color: Colors.grey.shade200),
-          const SizedBox(height: 4),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                "ID: ${trip.id}",
-                style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
-              ),
-              Text(
-                trip.formattedPrice, // Usamos el Getter de precio ($ 15.000)
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  color: Colors.black87,
+                const SizedBox(width: 16),
+
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "Destino",
+                        style: GoogleFonts.poppins(
+                          fontSize: 10,
+                          color: Colors.grey.shade400,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      Text(
+                        trip.destination,
+                        style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                          color: Colors.black87,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 12),
+
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            "ID: ${trip.id}",
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              color: Colors.grey.shade400,
+                            ),
+                          ),
+                          Text(
+                            trip.formattedPrice,
+                            style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                              color: AppColors.primaryGreen,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),

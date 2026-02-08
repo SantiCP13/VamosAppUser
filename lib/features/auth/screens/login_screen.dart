@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
+// Pantallas de navegación según el estado del usuario
 import 'register_type_screen.dart';
 import 'verification_check_screen.dart';
 import '../../home/screens/home_screen.dart';
@@ -15,11 +16,14 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  // Controladores y FocusNodes
+  // CONTROLADORES: Manejan el texto que el usuario escribe
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _passwordFocusNode = FocusNode(); // Para mover el foco automáticamente
 
+  // FOCUS NODE
+  final _passwordFocusNode = FocusNode();
+
+  // ESTADOS DE LA UI
   bool _isLoading = false;
   bool _emailExists = false;
   bool _obscurePassword = true;
@@ -32,19 +36,16 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
+  /// LÓGICA CENTRAL DEL LOGIN
   Future<void> _handleContinue() async {
-    // Ocultar teclado para procesar
     FocusScope.of(context).unfocus();
-
     final email = _emailController.text.trim();
 
-    // Validación básica
     if (email.isEmpty || !email.contains('@')) {
       _showSnack("Por favor ingresa un correo válido", isError: true);
       return;
     }
 
-    // Si ya validamos el correo y estamos en fase contraseña, validamos que no esté vacía
     if (_emailExists && _passwordController.text.isEmpty) {
       _showSnack("Ingresa tu contraseña", isError: true);
       _passwordFocusNode.requestFocus();
@@ -55,19 +56,16 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       if (!_emailExists) {
-        // ==========================================
         // FASE 1: Verificar existencia del correo
-        // ==========================================
         bool exists = await AuthService.checkEmailExists(email);
 
-        if (!mounted) return; // Seguridad si el widget se desmontó
+        if (!mounted) return;
         setState(() => _isLoading = false);
 
         if (exists) {
           setState(() {
             _emailExists = true;
           });
-          // UX: Mover foco al campo password automáticamente
           Future.delayed(const Duration(milliseconds: 100), () {
             if (mounted) {
               FocusScope.of(context).requestFocus(_passwordFocusNode);
@@ -77,15 +75,15 @@ class _LoginScreenState extends State<LoginScreen> {
           _showRegisterDialog(email);
         }
       } else {
-        // ==========================================
-        // FASE 2: Iniciar Sesión (Mock o Real)
-        // ==========================================
+        // FASE 2: Iniciar Sesión
         final result = await AuthService.login(email, _passwordController.text);
 
         if (!mounted) return;
         setState(() => _isLoading = false);
 
-        switch (result['status']) {
+        final status = result['status'];
+
+        switch (status) {
           case AuthResponseStatus.active:
             Navigator.pushAndRemoveUntil(
               context,
@@ -93,7 +91,6 @@ class _LoginScreenState extends State<LoginScreen> {
               (r) => false,
             );
             break;
-
           case AuthResponseStatus.pending:
           case AuthResponseStatus.underReview:
           case AuthResponseStatus.incomplete:
@@ -105,35 +102,24 @@ class _LoginScreenState extends State<LoginScreen> {
               (r) => false,
             );
             break;
-
           case AuthResponseStatus.rejected:
             _showSnack("Tu solicitud ha sido rechazada.", isError: true);
             break;
-
           case AuthResponseStatus.revoked:
             _showSnack("Acceso revocado. Contacta soporte.", isError: true);
             break;
-
           case AuthResponseStatus.wrongPassword:
             _showSnack("Contraseña incorrecta", isError: true);
-            // UX: Volver a enfocar contraseña y limpiar campo
             _passwordController.clear();
             _passwordFocusNode.requestFocus();
             break;
-
           case AuthResponseStatus.notFound:
-            // Caso raro: existía hace un segundo y ahora no (concurrencia)
             _showSnack("Usuario no encontrado", isError: true);
             setState(() => _emailExists = false);
             break;
-
           case AuthResponseStatus.networkError:
-            _showSnack(
-              "Error de conexión. Verifica tu internet.",
-              isError: true,
-            );
+            _showSnack("Error de conexión.", isError: true);
             break;
-
           default:
             _showSnack("Ocurrió un error inesperado", isError: true);
         }
@@ -186,23 +172,80 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _showSnack(String msg, {bool isError = false}) {
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(msg),
-        backgroundColor: isError ? Colors.red.shade700 : Colors.grey.shade900,
         behavior: SnackBarBehavior.floating,
+
+        margin: const EdgeInsets.only(bottom: 30, left: 40, right: 40),
+
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+
+        backgroundColor: isError
+            ? const Color(0xFFE53935) // Un rojo material design suave
+            : AppColors.primaryGreen,
+
+        elevation: 6,
+        content: Row(
+          children: [
+            Icon(
+              isError ? Icons.cancel_outlined : Icons.check_circle_outline,
+              color: Colors.white,
+              size: 24,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                msg,
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 3),
       ),
+    );
+  }
+
+  // --- HELPER PARA ESTILOS DE INPUT  ---
+  InputDecoration _getInputStyle({
+    required String label,
+    required IconData icon,
+    Widget? suffixIcon,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: GoogleFonts.poppins(
+        fontSize: 14,
+        color: Colors.grey.shade600,
+      ),
+      prefixIcon: Icon(icon, size: 20, color: AppColors.primaryGreen),
+      filled: true,
+      fillColor: Colors.grey.shade50,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade200),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.primaryGreen, width: 1.5),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      suffixIcon: suffixIcon,
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    // Definir colores y estilos locales
-    const inputBorder = OutlineInputBorder(
-      borderRadius: BorderRadius.all(Radius.circular(12)),
-      borderSide: BorderSide(color: Colors.grey),
-    );
-
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -211,7 +254,6 @@ class _LoginScreenState extends State<LoginScreen> {
         leading: BackButton(
           color: Colors.black,
           onPressed: () {
-            // Si está en paso de contraseña, el "back" vuelve al paso de email
             if (_emailExists) {
               setState(() {
                 _emailExists = false;
@@ -227,62 +269,80 @@ class _LoginScreenState extends State<LoginScreen> {
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: AutofillGroup(
-            // Permite al celular sugerir correos guardados
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // TÍTULO DINÁMICO
                 Text(
-                  _emailExists ? "Hola de nuevo 👋" : "¿Cuál es tu correo?",
+                  _emailExists ? "Hola de nuevo!" : "¿Cuál es tu correo?",
                   style: GoogleFonts.poppins(
-                    fontSize: 26,
+                    fontSize: 28,
                     fontWeight: FontWeight.bold,
                     color: AppColors.primaryGreen,
                   ),
                 ),
+
+                // Subtítulo opcional para mostrar el correo si quieres (puedes quitarlo si usas el campo)
                 if (_emailExists)
-                  Text(
-                    _emailController.text,
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      color: Colors.grey[600],
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8.0, bottom: 30),
+                    child: Text(
+                      "Ingresa tu contraseña para continuar",
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.grey[600],
+                      ),
                     ),
-                  ),
+                  )
+                else
+                  const SizedBox(height: 50),
 
-                const SizedBox(height: 30),
-
-                // CAMPO EMAIL
+                // --- CAMPO EMAIL (UNIFICADO) ---
+                // Usamos un solo TextField y cambiamos sus propiedades según el estado
                 TextField(
                   controller: _emailController,
-                  enabled: !_emailExists, // Se bloquea si ya lo encontramos
+                  // readOnly es MEJOR que enabled:false porque mantiene el estilo visual (no se ve gris/cortado)
+                  readOnly: _emailExists,
                   keyboardType: TextInputType.emailAddress,
                   textInputAction: TextInputAction.next,
                   autofillHints: const [AutofillHints.email],
-                  decoration: InputDecoration(
-                    labelText: "Correo electrónico",
-                    prefixIcon: const Icon(Icons.email_outlined),
-                    border: inputBorder,
-                    enabledBorder: inputBorder.copyWith(
-                      borderSide: BorderSide(color: Colors.grey.shade300),
-                    ),
-                    focusedBorder: inputBorder.copyWith(
-                      borderSide: BorderSide(color: AppColors.primaryGreen),
-                    ),
+                  style: GoogleFonts.poppins(
+                    // Si está en modo lectura, un color gris oscuro, si no, negro
+                    color: _emailExists ? Colors.grey.shade700 : Colors.black,
+                  ),
+                  decoration: _getInputStyle(
+                    label: "Correo electrónico",
+                    icon: Icons.alternate_email,
+                    // AQUÍ ESTÁ LA CLAVE DEL LÁPIZ:
                     suffixIcon: _emailExists
                         ? IconButton(
-                            icon: const Icon(Icons.edit, size: 20),
-                            onPressed: () => setState(() {
-                              _emailExists = false;
-                              _passwordController.clear();
-                            }),
+                            tooltip: "Editar correo",
+                            icon: const Icon(
+                              Icons.edit,
+                              size: 20,
+                              color: AppColors.primaryGreen,
+                            ),
+                            onPressed: () {
+                              // Al presionar, simplemente desbloqueamos el campo
+                              setState(() {
+                                _emailExists = false;
+                                _passwordController.clear();
+                              });
+                            },
                           )
-                        : null,
+                        : null, // Si está escribiendo, no mostramos nada (o podrías poner un botón de borrar X)
                   ),
-                  onSubmitted: (_) => _handleContinue(),
+                  onSubmitted: (_) {
+                    if (!_emailExists) _handleContinue();
+                  },
                 ),
 
-                // CAMPO PASSWORD (Animado)
+                // --- CAMPO PASSWORD (ANIMADO) ---
+                // Usamos AnimatedCrossFade solo para mostrar/ocultar el password
                 AnimatedCrossFade(
-                  firstChild: Container(), // Espacio vacío cuando no hay pass
+                  firstChild: Container(
+                    height: 0,
+                  ), // Espacio vacío cuando no hay password
                   secondChild: Column(
                     children: [
                       const SizedBox(height: 20),
@@ -292,18 +352,10 @@ class _LoginScreenState extends State<LoginScreen> {
                         obscureText: _obscurePassword,
                         autofillHints: const [AutofillHints.password],
                         textInputAction: TextInputAction.done,
-                        decoration: InputDecoration(
-                          labelText: "Contraseña",
-                          prefixIcon: const Icon(Icons.lock_outline),
-                          border: inputBorder,
-                          enabledBorder: inputBorder.copyWith(
-                            borderSide: BorderSide(color: Colors.grey.shade300),
-                          ),
-                          focusedBorder: inputBorder.copyWith(
-                            borderSide: BorderSide(
-                              color: AppColors.primaryGreen,
-                            ),
-                          ),
+                        style: GoogleFonts.poppins(),
+                        decoration: _getInputStyle(
+                          label: "Contraseña",
+                          icon: Icons.lock_outline,
                           suffixIcon: IconButton(
                             icon: Icon(
                               _obscurePassword
@@ -319,7 +371,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         onSubmitted: (_) => _handleContinue(),
                       ),
 
-                      // Opción de "Olvidé mi contraseña" (Visual por ahora)
+                      // LINK: OLVIDÉ MI CONTRASEÑA
                       Align(
                         alignment: Alignment.centerRight,
                         child: TextButton(
@@ -344,15 +396,17 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ],
                   ),
+                  // Lógica de animación
                   crossFadeState: _emailExists
                       ? CrossFadeState.showSecond
                       : CrossFadeState.showFirst,
                   duration: const Duration(milliseconds: 300),
+                  sizeCurve: Curves.easeInOut, // Suaviza el cambio de altura
                 ),
 
                 const SizedBox(height: 30),
 
-                // BOTÓN PRINCIPAL
+                // --- BOTÓN DE ACCIÓN PRINCIPAL ---
                 SizedBox(
                   width: double.infinity,
                   height: 56,
@@ -363,7 +417,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(15),
                       ),
-                      elevation: 2,
+                      elevation: 4,
+                      shadowColor: AppColors.primaryGreen.withValues(
+                        alpha: 0.4,
+                      ),
                     ),
                     child: _isLoading
                         ? const SizedBox(
@@ -379,7 +436,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             style: GoogleFonts.poppins(
                               color: Colors.white,
                               fontSize: 16,
-                              fontWeight: FontWeight.w600,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                   ),
@@ -387,34 +444,42 @@ class _LoginScreenState extends State<LoginScreen> {
 
                 const SizedBox(height: 20),
 
-                // PIE DE PÁGINA: REGISTRO
-                if (!_emailExists)
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        "¿No tienes cuenta?",
-                        style: GoogleFonts.poppins(color: Colors.grey[600]),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const RegisterTypeScreen(),
+                // --- PIE DE PÁGINA (LINK A REGISTRO) ---
+                // Solo mostramos esto si estamos en la fase 1 (ingresar correo)
+                AnimatedOpacity(
+                  duration: const Duration(milliseconds: 200),
+                  opacity: !_emailExists ? 1.0 : 0.0,
+                  child: !_emailExists
+                      ? Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              "¿No tienes cuenta?",
+                              style: GoogleFonts.poppins(
+                                color: Colors.grey[600],
+                              ),
                             ),
-                          );
-                        },
-                        child: Text(
-                          "Crea tu cuenta aquí",
-                          style: GoogleFonts.poppins(
-                            color: AppColors.primaryGreen,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                            TextButton(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const RegisterTypeScreen(),
+                                  ),
+                                );
+                              },
+                              child: Text(
+                                "Crea tu cuenta aquí",
+                                style: GoogleFonts.poppins(
+                                  color: AppColors.primaryGreen,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      : const SizedBox.shrink(),
+                ),
               ],
             ),
           ),

@@ -1,82 +1,106 @@
-// lib/features/trips/services/trip_service.dart
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-// import 'package:http/http.dart' as http; // Descomentar con backend real
 import 'package:latlong2/latlong.dart';
+import '../../../core/network/api_client.dart'; // Importamos tu nuevo cliente
 import '../../../core/models/user_model.dart';
+import 'dart:developer' as developer;
 
 class TripService {
-  // final String _baseUrl = 'http://10.0.2.2:8000/api';
+  // Instancia única del cliente API
+  final ApiClient _api = ApiClient();
 
+  /// SOLICITAR UN NUEVO VIAJE (HÍBRIDO)
   Future<bool> createTripRequest({
     required User currentUser,
     required LatLng origin,
     required LatLng destination,
     required String originAddress,
     required String destinationAddress,
-    required String serviceCategory, // 'STANDARD', 'COMFORT'
+    required String serviceCategory,
     required double estimatedPrice,
-    required List<String> passengerIds, // IDs de beneficiarios seleccionados
+    required List<String> passengerIds,
     required bool includeMyself,
   }) async {
-    // 1. CÁLCULO DE ASIENTOS (Input Crítico PDF Pág 4)
+    // 1. LÓGICA DE NEGOCIO (Igual que antes)
     final int requiredSeats = (includeMyself ? 1 : 0) + passengerIds.length;
 
-    // 2. REGLA DE NEGOCIO (PDF Pág 5 - Clasificación)
-    // Si puestos > 4, la categoría ES 'VAN', ignorando lo que haya seleccionado el usuario
     String finalServiceLevel = serviceCategory;
     if (requiredSeats > 4) {
       finalServiceLevel = 'VAN';
+      developer.log(
+        "🚍 Categoría forzada a VAN por capacidad ($requiredSeats)",
+        name: 'TRIP_LOGIC',
+      );
     }
 
-    // 3. CONSTRUCCIÓN DEL PAYLOAD (Alineado a Diagrama ER)
+    // 2. CONSTRUCCIÓN DEL PAYLOAD
     final Map<String, dynamic> body = {
-      // FK: Quién solicita el viaje (Tabla USERS)
       'requested_by_user_id': currentUser.id,
-
-      // FK: Empresa responsable (Tabla COMPANIES).
-      // Si es personal, va null. Si es corporativo, va el UUID.
       'company_id': currentUser.isCorporateMode
           ? currentUser.companyUuid
           : null,
-
-      // FK: Pasajero Principal (Tabla TRIPS - ER exige un ID único aquí)
       'passenger_user_id': currentUser.id,
-
-      // LISTA: Para generar el FUEC (El backend procesará esto aparte para Moviltrack)
       'manifest_passenger_ids': passengerIds,
       'include_requester_in_manifest': includeMyself,
-
-      // Ubicaciones
       'origin_address': originAddress,
       'destination_address': destinationAddress,
       'origin_lat': origin.latitude,
       'origin_lng': origin.longitude,
       'dest_lat': destination.latitude,
       'dest_lng': destination.longitude,
-
-      // Datos Financieros y Operativos
       'estimated_price': estimatedPrice,
-      'service_level': finalServiceLevel, // STANDARD | COMFORT | VAN
-      'required_seats':
-          requiredSeats, // Filtro crítico para búsqueda de vehículos
-      'app_mode': currentUser.appMode
-          .toString()
-          .split('.')
-          .last, // PERSONAL | CORPORATE
+      'service_level': finalServiceLevel,
+      'required_seats': requiredSeats,
+      'app_mode': currentUser.appMode.name,
     };
 
-    try {
-      // AQUÍ IRÍA LA LLAMADA HTTP: post('$_baseUrl/trips', body: body)...
+    // 3. INTENTO DE CONEXIÓN REAL (Si aplica)
+    if (_api.shouldAttemptRealConnection) {
+      try {
+        // Usamos api.dio para tener los timeouts configurados
+        final response = await _api.dio.post('/trips', data: body);
 
-      debugPrint("📡 ENVIANDO SOLICITUD DE VIAJE (ER Compliant):");
-      debugPrint(jsonEncode(body));
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          developer.log(
+            "✅ Viaje creado exitosamente en Backend Real",
+            name: 'TRIP_SERVICE',
+          );
+          return true;
+        }
+      } catch (e) {
+        developer.log(
+          "⚠️ Falló conexión con Backend: $e",
+          name: 'TRIP_SERVICE',
+        );
 
-      await Future.delayed(const Duration(seconds: 1)); // Simulación
-      return true;
-    } catch (e) {
-      debugPrint("Error creando viaje: $e");
-      return false;
+        // Si es PROD, el error es fatal. Si es HYBRID, continuamos al fallback.
+        if (_api.envType == 'PROD') {
+          return false;
+        }
+      }
     }
+
+    // 4. FALLBACK / MOCK (Simulación)
+    // Si llegamos aquí es porque estamos en modo MOCK o falló el modo HYBRID.
+    return _simulateSuccessfulTripCreation(body);
+  }
+
+  /// Simula una respuesta exitosa del servidor para demos
+  Future<bool> _simulateSuccessfulTripCreation(
+    Map<String, dynamic> body,
+  ) async {
+    developer.log(
+      "🎭 Ejecutando SIMULACIÓN de Viaje (Fallback)",
+      name: 'TRIP_MOCK',
+    );
+
+    // Debug visual del payload
+    debugPrint("📦 PAYLOAD SIMULADO:");
+    debugPrint(const JsonEncoder.withIndent('  ').convert(body));
+
+    // Usamos el delay centralizado del ApiClient para consistencia
+    await _api.simulateDelay(2000);
+
+    return true; // Simula éxito siempre
   }
 }

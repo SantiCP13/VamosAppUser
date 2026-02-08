@@ -12,146 +12,182 @@ class RegisterTypeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor:
+          Colors.white, // O AppColors.bgColor si prefieres el gris muy suave
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
         leading: const BackButton(color: Colors.black),
-        title: Text(
-          "Elige tu perfil",
-          style: GoogleFonts.poppins(
-            color: Colors.black,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          children: [
-            Text(
-              "¿Cómo deseas registrarte en Vamos?",
-              textAlign: TextAlign.center,
-              style: GoogleFonts.poppins(fontSize: 18, color: Colors.grey[700]),
-            ),
-            const SizedBox(height: 30),
-
-            // CORPORATIVO
-            _OptionCard(
-              icon: Icons.business_center_outlined,
-              title: "Empleado Corporativo",
-              subtitle:
-                  "Vincúlate con el código o NIT de tu empresa para viajes de negocios.",
-              color: Colors.blue.shade50,
-              iconColor: Colors.blue.shade800,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        RegisterScreen(emailPreIngresado: emailPreIngresado),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 10),
+              // Título Grande Estilo H1
+              Text(
+                "Elige tu perfil",
+                style: GoogleFonts.poppins(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primaryGreen,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0, bottom: 40),
+                child: Text(
+                  "Selecciona cómo ingresar a la plataforma para personalizar tu experiencia.",
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    color: Colors.grey[600],
                   ),
-                );
-              },
-            ),
+                ),
+              ),
 
-            const SizedBox(height: 20),
-
-            // NATURAL
-            _OptionCard(
-              icon: Icons.person_outline,
-              title: "Usuario Particular",
-              subtitle:
-                  "Viaja por tu cuenta. Necesitarás tu cédula para validar tu identidad.",
-              color: AppColors.primaryGreen.withValues(alpha: 0.1),
-              iconColor: AppColors.primaryGreen,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => RegisterNaturalScreen(
-                      emailPreIngresado: emailPreIngresado,
+              // OPCIÓN 1: CORPORATIVO
+              _OptionCard(
+                icon: Icons.business_center_outlined,
+                title: "Empleado Corporativo",
+                subtitle:
+                    "Vincúlate con tu empresa para gestionar viajes Corporativos.",
+                // Usamos un azul corporativo pero suavizado, o podrías usar el Green si prefieres todo verde
+                accentColor: const Color(0xFF1976D2),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          RegisterScreen(emailPreIngresado: emailPreIngresado),
                     ),
-                  ),
-                );
-              },
-            ),
-          ],
+                  );
+                },
+              ),
+
+              const SizedBox(height: 20),
+
+              // OPCIÓN 2: NATURAL
+              _OptionCard(
+                icon: Icons.person_outline,
+                title: "Usuario Natural",
+                subtitle:
+                    "Viaja por tu cuenta. Gestiona tus propios trayectos.",
+                accentColor: AppColors.primaryGreen,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => RegisterNaturalScreen(
+                        emailPreIngresado: emailPreIngresado,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-// Widget auxiliar
+// Widget auxiliar rediseñado
 class _OptionCard extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
-  final Color color;
-  final Color iconColor;
+  final Color accentColor;
   final VoidCallback onTap;
 
   const _OptionCard({
     required this.icon,
     required this.title,
     required this.subtitle,
-    required this.color,
-    required this.iconColor,
+    required this.accentColor,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: Colors.white,
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        // Sombra suave similar a la elevación de los botones
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withValues(alpha: 0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          onTap: onTap,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.grey.shade200),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              child: Icon(icon, size: 28, color: iconColor),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: GoogleFonts.poppins(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+          // Efecto visual al presionar usando el color de acento
+          splashColor: accentColor.withValues(alpha: 0.1),
+          highlightColor: accentColor.withValues(alpha: 0.05),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(
+              children: [
+                // Ícono con fondo circular suave
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: accentColor.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                      color: Colors.grey[600],
-                    ),
+                  child: Icon(icon, size: 28, color: accentColor),
+                ),
+                const SizedBox(width: 16),
+
+                // Textos
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: GoogleFonts.poppins(
+                          fontSize: 16,
+                          fontWeight:
+                              FontWeight.w600, // Semi-bold para jerarquía
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        subtitle,
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                          height: 1.4, // Mejor legibilidad
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+
+                // Flecha indicadora
+                Padding(
+                  padding: const EdgeInsets.only(left: 8.0),
+                  child: Icon(
+                    Icons.arrow_forward_ios_rounded,
+                    size: 18,
+                    color: Colors.grey.shade300,
+                  ),
+                ),
+              ],
             ),
-            const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
-          ],
+          ),
         ),
       ),
     );

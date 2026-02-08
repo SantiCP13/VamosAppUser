@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../../../core/theme/app_colors.dart'; // Asegúrate que la ruta sea correcta
+import '../../../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
@@ -44,18 +44,31 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   }
 
   void _showSnack(String msg, {bool isError = false}) {
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(msg),
-        backgroundColor: isError ? Colors.red.shade700 : Colors.green.shade700,
+        content: Row(
+          children: [
+            Icon(
+              isError ? Icons.cancel_outlined : Icons.check_circle_outline,
+              color: Colors.white,
+            ),
+            const SizedBox(width: 10),
+            Expanded(child: Text(msg, style: GoogleFonts.poppins())),
+          ],
+        ),
+        backgroundColor: isError
+            ? const Color(0xFFE53935)
+            : AppColors.primaryGreen,
         behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(20),
       ),
     );
   }
 
-  // --- LOGICA DE PASOS ---
+  // --- LOGICA DE PASOS (INTACTA) ---
 
-  // PASO 1: Enviar correo
   Future<void> _sendCode() async {
     final email = _emailController.text.trim();
     if (email.isEmpty || !email.contains('@')) {
@@ -68,14 +81,13 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     setState(() => _isLoading = false);
 
     if (success) {
-      _showSnack("Código enviado. (Para pruebas usa: 1234)");
+      _showSnack("Código enviado.");
       _nextPage();
     } else {
       _showSnack("El correo no está registrado.", isError: true);
     }
   }
 
-  // PASO 2: Verificar Código
   Future<void> _verifyCode() async {
     final code = _otpController.text.trim();
     if (code.length < 4) {
@@ -91,11 +103,10 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     if (success) {
       _nextPage();
     } else {
-      _showSnack("Código incorrecto. Intenta con 1234", isError: true);
+      _showSnack("Código incorrecto.", isError: true);
     }
   }
 
-  // PASO 3: Cambiar Contraseña
   Future<void> _changePassword() async {
     final p1 = _passController.text;
     final p2 = _confirmPassController.text;
@@ -116,9 +127,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
     if (success) {
       _showSnack("¡Contraseña actualizada! Inicia sesión.");
-      if (mounted) Navigator.pop(context); // Vuelve al Login
+      if (mounted) Navigator.pop(context);
     } else {
-      _showSnack("Error al actualizar. Intenta de nuevo.", isError: true);
+      _showSnack("Error al actualizar.", isError: true);
     }
   }
 
@@ -128,6 +139,39 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       curve: Curves.easeInOut,
     );
     setState(() => _currentStep++);
+  }
+
+  // --- ESTILOS VISUALES COPIADOS DEL LOGIN ---
+
+  InputDecoration _getInputStyle({
+    required String label,
+    required IconData icon,
+    Widget? suffixIcon,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: GoogleFonts.poppins(
+        fontSize: 14,
+        color: Colors.grey.shade600,
+      ),
+      prefixIcon: Icon(icon, size: 20, color: AppColors.primaryGreen),
+      filled: true,
+      fillColor: Colors.grey.shade50,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade200),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.primaryGreen, width: 1.5),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      suffixIcon: suffixIcon,
+    );
   }
 
   @override
@@ -151,31 +195,36 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
             }
           },
         ),
+        // Quitamos el título del AppBar para dejar el diseño limpio como el Login
+        // o lo dejamos muy sutil.
         title: Text(
-          "Recuperar Cuenta",
-          style: GoogleFonts.poppins(
-            color: Colors.black,
-            fontWeight: FontWeight.w600,
-            fontSize: 16,
-          ),
+          "Recuperación",
+          style: GoogleFonts.poppins(color: Colors.grey[400], fontSize: 14),
         ),
         centerTitle: true,
       ),
       body: SafeArea(
         child: Column(
           children: [
-            // Indicador de pasos simple
-            LinearProgressIndicator(
-              value: (_currentStep + 1) / 3,
-              backgroundColor: Colors.grey.shade100,
-              color: AppColors.primaryGreen, // Usa tu variable AppColors
-            ),
+            // Barra de progreso sutil
+            if (_currentStep < 3)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: (_currentStep + 1) / 3,
+                    backgroundColor: Colors.grey.shade100,
+                    color: AppColors.primaryGreen,
+                    minHeight: 4,
+                  ),
+                ),
+              ),
 
             Expanded(
               child: PageView(
                 controller: _pageController,
-                physics:
-                    const NeverScrollableScrollPhysics(), // Evita deslizar con el dedo
+                physics: const NeverScrollableScrollPhysics(),
                 children: [
                   _buildEmailStep(),
                   _buildOtpStep(),
@@ -189,148 +238,169 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     );
   }
 
-  // WIDGET PASO 1
+  // --- WIDGETS DE PASOS REDISEÑADOS ---
+
   Widget _buildEmailStep() {
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(24.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            "¿Olvidaste tu contraseña?",
-            style: GoogleFonts.poppins(
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
           const SizedBox(height: 10),
           Text(
-            "Ingresa tu correo para recibir un código de recuperación.",
-            style: GoogleFonts.poppins(color: Colors.grey),
+            "Recuperar cuenta",
+            style: GoogleFonts.poppins(
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+              color: AppColors.primaryGreen,
+            ),
           ),
-          const SizedBox(height: 30),
+          Padding(
+            padding: const EdgeInsets.only(top: 8.0, bottom: 40),
+            child: Text(
+              "Ingresa tu correo para buscar tu cuenta y enviarte un código.",
+              style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600]),
+            ),
+          ),
+
           TextField(
             controller: _emailController,
             keyboardType: TextInputType.emailAddress,
-            decoration: _inputDecoration(
-              "Correo electrónico",
-              Icons.email_outlined,
+            style: GoogleFonts.poppins(),
+            decoration: _getInputStyle(
+              label: "Correo electrónico",
+              icon: Icons.alternate_email,
             ),
           ),
-          const Spacer(),
+
+          const SizedBox(height: 50),
           _buildButton("Enviar Código", _sendCode),
         ],
       ),
     );
   }
 
-  // WIDGET PASO 2
   Widget _buildOtpStep() {
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(24.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const SizedBox(height: 10),
           Text(
             "Verifica tu identidad",
             style: GoogleFonts.poppins(
-              fontSize: 22,
+              fontSize: 28,
               fontWeight: FontWeight.bold,
+              color: AppColors.primaryGreen,
             ),
           ),
-          const SizedBox(height: 10),
-          Text(
-            "Hemos enviado un código a ${_emailController.text}",
-            style: GoogleFonts.poppins(color: Colors.grey),
+          Padding(
+            padding: const EdgeInsets.only(top: 8.0, bottom: 40),
+            child: Text(
+              "Hemos enviado un código de 6 dígitos al correo ${_emailController.text}",
+              style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600]),
+            ),
           ),
-          const SizedBox(height: 30),
+
+          // Input de OTP con estilo adaptado
           TextField(
             controller: _otpController,
             keyboardType: TextInputType.number,
             maxLength: 6,
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 24, letterSpacing: 8),
-            decoration: _inputDecoration(
-              "Código (Ej: 1234)",
-              Icons.lock_clock_outlined,
-            ).copyWith(counterText: ""),
+            style: GoogleFonts.poppins(
+              fontSize: 24,
+              letterSpacing: 8,
+              fontWeight: FontWeight.w600,
+            ),
+            decoration:
+                _getInputStyle(
+                  label: "Código de seguridad",
+                  icon: Icons.lock_clock_outlined,
+                ).copyWith(
+                  counterText: "",
+                  contentPadding: const EdgeInsets.symmetric(vertical: 20),
+                ),
           ),
+
           const SizedBox(height: 20),
+
           Center(
             child: TextButton(
               onPressed: () => _showSnack("Código reenviado (Simulado)"),
               child: Text(
                 "¿No recibiste el código?",
-                style: TextStyle(color: AppColors.primaryGreen),
+                style: GoogleFonts.poppins(
+                  color: AppColors.primaryGreen,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
-          const Spacer(),
-          _buildButton("Verificar", _verifyCode),
+
+          const SizedBox(height: 30),
+          _buildButton("Verificar Código", _verifyCode),
         ],
       ),
     );
   }
 
-  // WIDGET PASO 3
   Widget _buildNewPasswordStep() {
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(24.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            "Nueva Contraseña",
-            style: GoogleFonts.poppins(
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
           const SizedBox(height: 10),
           Text(
-            "Crea una contraseña segura para tu cuenta.",
-            style: GoogleFonts.poppins(color: Colors.grey),
+            "Nueva contraseña",
+            style: GoogleFonts.poppins(
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+              color: AppColors.primaryGreen,
+            ),
           ),
-          const SizedBox(height: 30),
+          Padding(
+            padding: const EdgeInsets.only(top: 8.0, bottom: 40),
+            child: Text(
+              "Crea una contraseña segura para proteger tu cuenta.",
+              style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600]),
+            ),
+          ),
+
           TextField(
             controller: _passController,
             obscureText: _obscurePass,
-            decoration: _inputDecoration("Nueva contraseña", Icons.lock_outline)
-                .copyWith(
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                      _obscurePass ? Icons.visibility_off : Icons.visibility,
-                    ),
-                    onPressed: () =>
-                        setState(() => _obscurePass = !_obscurePass),
-                  ),
+            style: GoogleFonts.poppins(),
+            decoration: _getInputStyle(
+              label: "Nueva contraseña",
+              icon: Icons.lock_outline,
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _obscurePass ? Icons.visibility_off : Icons.visibility,
+                  color: Colors.grey,
                 ),
+                onPressed: () => setState(() => _obscurePass = !_obscurePass),
+              ),
+            ),
           ),
+
           const SizedBox(height: 20),
+
           TextField(
             controller: _confirmPassController,
             obscureText: _obscurePass,
-            decoration: _inputDecoration(
-              "Confirmar contraseña",
-              Icons.verified_user_outlined,
+            style: GoogleFonts.poppins(),
+            decoration: _getInputStyle(
+              label: "Confirmar contraseña",
+              icon: Icons.verified_user_outlined,
             ),
           ),
-          const Spacer(),
+
+          const SizedBox(height: 50),
           _buildButton("Actualizar Contraseña", _changePassword),
         ],
-      ),
-    );
-  }
-
-  // ESTILOS COMUNES
-  InputDecoration _inputDecoration(String label, IconData icon) {
-    return InputDecoration(
-      labelText: label,
-      prefixIcon: Icon(icon, color: Colors.grey),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: AppColors.primaryGreen, width: 2),
       ),
     );
   }
@@ -346,14 +416,23 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(15),
           ),
+          elevation: 4,
+          shadowColor: AppColors.primaryGreen.withValues(alpha: 0.4),
         ),
         child: _isLoading
-            ? const CircularProgressIndicator(color: Colors.white)
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 2,
+                ),
+              )
             : Text(
                 text,
                 style: GoogleFonts.poppins(
                   fontSize: 16,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.bold,
                   color: Colors.white,
                 ),
               ),

@@ -24,23 +24,50 @@ class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
   }
 
   Future<void> _loadCompanies() async {
-    // Llamamos con string vacío para traer todas
-    final companies = await AuthService.searchCompanies("");
-    if (mounted) {
-      setState(() {
-        _companies = companies;
-        _isLoading = false;
-      });
+    try {
+      final companies = await AuthService.searchCompanies("");
+      if (mounted) {
+        setState(() {
+          _companies = companies;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        // Opcional: Manejar error visualmente
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    // ESTADO DE CARGA: Simulamos un input desactivado para mantener el diseño estable
     if (_isLoading) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(8.0),
-          child: LinearProgressIndicator(color: AppColors.primaryGreen),
+      return Container(
+        height: 60, // Altura estándar del input
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey.shade200),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.primaryGreen,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              "Cargando empresas...",
+              style: GoogleFonts.poppins(color: Colors.grey.shade500),
+            ),
+          ],
         ),
       );
     }
@@ -49,39 +76,62 @@ class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         DropdownButtonFormField<String>(
+          isExpanded: true, // Importante para evitar overflow en nombres largos
           decoration: InputDecoration(
             labelText: "Seleccionar Empresa",
-            prefixIcon: const Icon(Icons.business_outlined, color: Colors.grey),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade300),
+            labelStyle: GoogleFonts.poppins(
+              fontSize: 14,
+              color: Colors.grey.shade600,
+            ),
+            // Mismo icono y color que los otros inputs
+            prefixIcon: const Icon(
+              Icons.business_center_outlined,
+              size: 20,
+              color: AppColors.primaryGreen,
             ),
             filled: true,
-            fillColor: _selectedNit != null
-                ? Colors.green.shade50
-                : Colors.grey.shade50,
+            fillColor: Colors.grey.shade50,
+            // Bordes unificados con el resto de la app
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: Colors.grey.shade200),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(
+                color: AppColors.primaryGreen,
+                width: 1.5,
+              ),
+            ),
             contentPadding: const EdgeInsets.symmetric(
-              horizontal: 15,
-              vertical: 15,
+              horizontal: 16,
+              vertical: 16,
             ),
           ),
-          icon: const Icon(Icons.arrow_drop_down_circle_outlined),
-          initialValue: _selectedNit,
+          icon: Icon(
+            Icons.keyboard_arrow_down_rounded,
+            color: Colors.grey.shade600,
+          ),
+          value: _selectedNit,
           hint: Text(
-            "Toca para ver lista",
-            style: GoogleFonts.poppins(fontSize: 14),
+            "Toca para ver la lista",
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              color: Colors.grey.shade400,
+            ),
           ),
           items: _companies.map((company) {
             return DropdownMenuItem<String>(
               value: company['nit'],
-              child: SizedBox(
-                width:
-                    MediaQuery.of(context).size.width * 0.6, // Evita overflow
-                child: Text(
-                  company['name']!,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.poppins(fontSize: 14),
-                ),
+              child: Text(
+                company['name'] ?? "Sin Nombre",
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+                style: GoogleFonts.poppins(fontSize: 14, color: Colors.black87),
               ),
             );
           }).toList(),
@@ -102,21 +152,23 @@ class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
           },
         ),
 
+        // Mensaje de validación visual
         if (_selectedNit != null)
           Padding(
-            padding: const EdgeInsets.only(top: 8.0, left: 5),
+            padding: const EdgeInsets.only(top: 8.0, left: 12),
             child: Row(
               children: [
                 const Icon(
-                  Icons.verified_user_outlined,
+                  Icons.check_circle_outline,
                   color: AppColors.primaryGreen,
-                  size: 16,
+                  size: 14,
                 ),
-                const SizedBox(width: 5),
+                const SizedBox(width: 6),
                 Text(
-                  "Empresa seleccionada correctamente.",
+                  "Empresa seleccionada correctamente",
                   style: GoogleFonts.poppins(
-                    fontSize: 11,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                     color: AppColors.primaryGreen,
                   ),
                 ),

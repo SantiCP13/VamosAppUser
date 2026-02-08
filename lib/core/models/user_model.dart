@@ -2,24 +2,42 @@
 
 // ignore_for_file: constant_identifier_names
 
+/// ESTADO DE VERIFICACIÓN
+///
+/// Controla si el usuario puede pedir viajes.
+/// Mapea a la columna 'verification_status' en la tabla USERS.
 enum UserVerificationStatus {
-  PENDING,
-  CREATED,
-  DOCS_UPLOADED,
-  UNDER_REVIEW,
-  VERIFIED,
-  REJECTED,
-  REVOKED,
+  PENDING, // Registrado, email no verificado
+  CREATED, // Email verificado, faltan datos
+  DOCS_UPLOADED, // (Para conductores principalmente)
+  UNDER_REVIEW, // (Para conductores o validación manual de empresas)
+  VERIFIED, // PUEDE PEDIR VIAJES
+  REJECTED, // Rechazado por datos inválidos o falta de documentos
+  REVOKED, // BLOQUEADO por mal uso o fraude (Solo admins pueden cambiar a este estado)
 }
 
-enum UserRole { NATURAL, EMPLEADO }
+/// ROL DEL USUARIO
+enum UserRole {
+  NATURAL, // Usuario particular
+  EMPLEADO, // Usuario corporativo (Asociado a una COMPANY)
+}
 
+/// MODO DE OPERACIÓN
+///
+/// Controla la UI y el flujo de pago.
+/// PERSONAL: Paga en efectivo/wallet.
+/// CORPORATE: El cobro va a la factura de la empresa.
 enum AppMode { PERSONAL, CORPORATE }
 
+/// MODELO DE BENEFICIARIO (PASAJERO ADICIONAL)
+
+/// RESPONSABILIDADES:
+/// 1. Llenar el 'Manifiesto de Pasajeros'
+/// 2. Proveer nombre y CÉDULA para el payload del FUEC.
 class Beneficiary {
-  final String id;
+  final String id; // PK
   final String name;
-  final String documentNumber;
+  final String documentNumber; // Requerido por ley para el FUEC.
 
   Beneficiary({
     required this.id,
@@ -42,36 +60,48 @@ class Beneficiary {
   }
 }
 
-class User {
-  final String id;
+/// MODELO DE USUARIO
 
-  // Variables mutables
+class User {
+  final String id; // PK (UUID)
+
+  // Variables mutables (pueden cambiar en edición de perfil)
   String? idPassenger;
-  String? idResponsable;
+  String? idResponsable; // FK manager_id
   String? photoUrl;
 
-  final String email;
+  final String email; // Unique Login
   final String name;
   final String phone;
+
+  /// Cédula para FUEC.
+  /// Mapea a 'document_number' en USERS.
   final String documentNumber;
+
   final String address;
 
-  // CORRECCIÓN ER: Necesario para relacionar la tabla TRIPS con COMPANIES
+  // --- DATOS CORPORATIVOS (RELACIÓN CON COMPANIES) ---
+
+  /// FK: ID de la empresa en BD.
+  /// Vital para buscar el 'moviltrack_contract_id' cuando appMode = CORPORATE.
   final String? companyUuid;
 
-  // Datos de empresa (Visuales / NIT)
+  // Datos visuales de la empresa (Join simple)
   String empresa;
   String nitEmpresa;
 
-  // Estados y Roles
+  // --- ESTADOS Y CONTROL DE FLUJO ---
+
   UserRole role;
   UserVerificationStatus verificationStatus;
+
+  /// Define si la solicitud de viaje incluye 'company_uuid' o no.
   AppMode appMode;
 
-  // Listas
+  // Lista para selección rápida en "Quién viaja?"
   List<Beneficiary> beneficiaries;
 
-  // TOKEN JWT
+  // Autenticación (No se guarda en BD, solo en sesión local)
   String? token;
 
   User({
@@ -87,19 +117,23 @@ class User {
     required this.role,
     this.empresa = '',
     this.nitEmpresa = '',
-    this.companyUuid, // Nuevo campo
+    this.companyUuid,
     this.verificationStatus = UserVerificationStatus.CREATED,
     required this.beneficiaries,
-    this.appMode = AppMode.CORPORATE,
+    this.appMode =
+        AppMode.CORPORATE, // Por defecto intenta ser corporativo si es empleado
     this.token,
   });
 
+  // Helpers de lógica de negocio
   bool get isCorporateMode => appMode == AppMode.CORPORATE;
   bool get isEmployee => role == UserRole.EMPLEADO || idResponsable != null;
 
   factory User.fromMap(Map<String, dynamic> map) {
     return User(
       id: map['id']?.toString() ?? '',
+
+      // Mapeo flexible para ids que vienen del backend
       idPassenger: map['passenger_id']?.toString() ?? map['id_pasajero'],
       idResponsable: map['manager_id']?.toString() ?? map['id_responsable'],
 
@@ -110,11 +144,12 @@ class User {
       documentNumber: map['document_number'] ?? map['documento'] ?? '',
       address: map['address'] ?? map['direccion'] ?? '',
 
-      // Mapeo de Empresa
+      // --- MAPEADO DE EMPRESA ---
+
+      // El backend debe hacer JOIN con COMPANIES para llenar esto
       empresa: map['company_name'] ?? map['empresa'] ?? '',
       nitEmpresa: map['company_nit'] ?? map['nit_empresa'] ?? '',
-      // CORRECCIÓN: El backend debe devolver el ID de la tabla companies
-      companyUuid: map['company_id'],
+      companyUuid: map['company_id'], // FK Critical
 
       role: (map['role'] == 'EMPLEADO' || map['role_id'] == 2)
           ? UserRole.EMPLEADO
@@ -122,17 +157,19 @@ class User {
 
       verificationStatus: _parseStatus(map['status']),
 
+      // Determina el modo inicial basado en la preferencia guardada o el rol
       appMode: (map['app_mode'] == 'PERSONAL')
           ? AppMode.PERSONAL
           : AppMode.CORPORATE,
 
+      // Carga de beneficiarios (Tabla BENEFICIARIES)
       beneficiaries:
           (map['beneficiaries'] as List<dynamic>?)
               ?.map((e) => Beneficiary.fromJson(Map<String, dynamic>.from(e)))
               .toList() ??
           [],
 
-      token: map['access_token'],
+      token: map['access_token'], // JWT de Laravel Sanctum
     );
   }
 

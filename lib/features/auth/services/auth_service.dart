@@ -1,33 +1,45 @@
+// lib/features/auth/services/auth_service.dart
+
 import 'dart:async';
 // ignore: unused_import
-import 'dart:convert'; // DESCOMENTAR AL TENER BACKEND
-// import 'package:http/http.dart' as http; // DESCOMENTAR AL TENER BACKEND
+import 'dart:convert'; // DESCOMENTAR AL TENER BACKEND REAL
+// import 'package:http/http.dart' as http; // DESCOMENTAR AL TENER BACKEND REAL
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../../core/models/user_model.dart';
 
+/// ESTADOS DE RESPUESTA DE AUTENTICACIÓN
+
+/// Normaliza las respuestas del backend para que la UI sepa qué pantalla mostrar.
 enum AuthResponseStatus {
-  active,
-  pending,
-  underReview,
-  rejected,
-  revoked,
-  incomplete,
-  notFound,
-  wrongPassword,
-  error,
-  networkError,
+  active, // Login exitoso -> Home
+  pending, // Email verificado pero faltan datos -> CompleteProfile
+  underReview, // Esperando aprobación manual (Aprobación Conductores/Empresas)
+  rejected, // Bloqueado
+  revoked, // Baneado
+  incomplete, // Registro a medias
+  notFound, // Usuario no existe
+  wrongPassword, // Contraseña incorrecta
+  error, // Error genérico
+  networkError, // Sin internet
 }
 
+/// SERVICIO DE AUTENTICACIÓN (MOCK MVP)
+
+/// Simula el comportamiento del Backend Laravel + Sanctum.
+/// Gestiona Login, Registro, Recuperación de contraseña y Sesión.
 class AuthService {
   // ===========================================================================
   // CONFIGURACIÓN API
   // ===========================================================================
 
   // ignore: unused_field
-  static const String _baseUrl = 'http://10.0.2.2:8000/api';
 
+  // static const String _baseUrl = 'http://10.0.2.2:8000/api'; // Descomentar con backend real
+
+  // Almacenamiento seguro para el Token JWT
   static const _storage = FlutterSecureStorage();
 
+  // Usuario en memoria (Sesión actual)
   static User? _currentUser;
   static User? get currentUser => _currentUser;
 
@@ -38,13 +50,16 @@ class AuthService {
   // 1. BASES DE DATOS MOCK (DATA FALSA PARA MVP)
   // ===========================================================================
 
+  /// SIMULACIÓN TABLA COMPANIES
+  ///
+  /// Contiene los 'contract_id' necesarios para el FUEC.
   static final List<Map<String, dynamic>> _mockCompaniesDB = [
     // CLIENTES (Corporativos que piden viajes)
     {
       'nit': '890903938',
       'name': 'Bancolombia S.A.',
       'type': 'CLIENT',
-      'contract_id': 'AB-100', // Contrato Moviltrack
+      'contract_id': 'AB-100', // Contrato Moviltrack (Vital para PDF FUEC)
     },
     {
       'nit': '800222333',
@@ -61,8 +76,10 @@ class AuthService {
     },
   ];
 
+  /// SIMULACIÓN TABLA USERS (App Usuario)
+  ///
   static final List<Map<String, dynamic>> _dbUsuarios = [
-    // ESCENARIO 1: Corporativo VERIFICADO
+    // ESCENARIO 1: Corporativo VERIFICADO (Puede pedir viajes de empresa)
     {
       'id': 'user_corp_active',
       'id_pasajero': null,
@@ -80,7 +97,7 @@ class AuthService {
       'app_mode': 'CORPORATE',
       'beneficiaries': [],
     },
-    // ESCENARIO 2: Corporativo PENDIENTE
+    // ESCENARIO 2: Corporativo PENDIENTE (Registrado, esperando aprobación de RRHH)
     {
       'id': 'user_corp_pending',
       'id_pasajero': null,
@@ -94,7 +111,7 @@ class AuthService {
       'empresa': 'Bancolombia S.A.',
       'nit_empresa': '890903938',
       'role': 'EMPLEADO',
-      'status': 'CREATED',
+      'status': 'CREATED', // Aún no verificado
       'app_mode': 'CORPORATE',
       'beneficiaries': [],
     },
@@ -139,7 +156,7 @@ class AuthService {
       'role': 'NATURAL',
       'beneficiaries': [],
     },
-    // ESCENARIO 6: Revocado (Baneado)
+    // ESCENARIO 6: Revocado
     {
       'id': 'user_revoked',
       'email': 'baneado@vamos.com',
@@ -152,7 +169,7 @@ class AuthService {
   ];
 
   // ===========================================================================
-  // 2. LOGIN
+  // 2. LOGIN (POST /login)
   // ===========================================================================
 
   static Future<Map<String, dynamic>> login(
@@ -160,9 +177,10 @@ class AuthService {
     String password,
   ) async {
     try {
-      // MOCK LOGIN
+      // Simula delay de red
       await Future.delayed(const Duration(seconds: 1));
 
+      // Busca en la "BD" local
       final userMap = _dbUsuarios.firstWhere(
         (u) => u['email'] == email && u['password'] == password,
         orElse: () => {},
@@ -172,11 +190,14 @@ class AuthService {
         return {'status': AuthResponseStatus.notFound};
       }
 
+      // Crea el objeto User desde el mapa
       final tempUser = User.fromMap(userMap);
       _currentUser = tempUser;
 
+      // Guarda el token (Simulación de Laravel Sanctum)
       await _storage.write(key: 'auth_token', value: 'mock_token_123');
 
+      // Devuelve estado normalizado
       return _mapStatus(tempUser.verificationStatus);
     } catch (e) {
       return {'status': AuthResponseStatus.networkError};
@@ -191,7 +212,9 @@ class AuthService {
     try {
       final storedToken = await _storage.read(key: 'auth_token');
       if (storedToken == null) return false;
-      return false; // Retornamos false para probar MVP
+
+      // Aquí se llamaría a GET /user para validar el token real
+      return false; // Retornamos false para forzar login en MVP
     } catch (e) {
       return false;
     }
@@ -204,30 +227,33 @@ class AuthService {
   }
 
   // ===========================================================================
-  // 4. REGISTRO NATURAL Y CORPORATIVO
+  // 4. REGISTRO (POST /register)
   // ===========================================================================
 
+  // Registro de EMPLEADO (Requiere validación de NIT Empresa)
   static Future<bool> registerCorporateUser(Map<String, dynamic> datos) async {
     try {
       await Future.delayed(const Duration(seconds: 2));
       final String newId = DateTime.now().millisecondsSinceEpoch.toString();
+
       final newUserMap = {
         'id': newId,
         'id_pasajero': null,
-        'id_responsable': 'resp_$newId',
+        'id_responsable': 'resp_$newId', // Manager ID
         'email': datos['email'],
         'password': datos['password'],
         'nombre': datos['nombre'],
-        'documento': datos['documento'],
+        'documento': datos['documento'], // Vital FUEC
         'telefono': datos['telefono'],
         'direccion': datos['direccion'] ?? 'Dirección Pendiente',
         'empresa': datos['nombre_empresa'],
-        'nit_empresa': datos['nit_empresa'],
+        'nit_empresa': datos['nit_empresa'], // Vinculación
         'role': 'EMPLEADO',
         'status': 'CREATED',
         'app_mode': 'CORPORATE',
         'beneficiaries': [],
       };
+
       _dbUsuarios.add(newUserMap);
       _currentUser = User.fromMap(newUserMap);
       return true;
@@ -236,14 +262,16 @@ class AuthService {
     }
   }
 
+  // Registro de USUARIO NATURAL
   static Future<bool> registerNaturalUser(Map<String, dynamic> datos) async {
     try {
       await Future.delayed(const Duration(seconds: 2));
       final String newId = DateTime.now().millisecondsSinceEpoch.toString();
+
       final newUserMap = {
         'id': newId,
         'id_pasajero': newId,
-        'id_responsable': newId,
+        'id_responsable': newId, // Él mismo es su responsable
         'email': datos['email'],
         'password': datos['password'],
         'nombre': datos['nombre'],
@@ -253,10 +281,11 @@ class AuthService {
         'empresa': null,
         'nit_empresa': null,
         'role': 'NATURAL',
-        'status': 'UNDER_REVIEW',
+        'status': 'UNDER_REVIEW', // Pasa a revisión básica
         'app_mode': 'PERSONAL',
         'beneficiaries': [],
       };
+
       _dbUsuarios.add(newUserMap);
       _currentUser = User.fromMap(newUserMap);
       return true;
@@ -265,6 +294,7 @@ class AuthService {
     }
   }
 
+  // Búsqueda de Empresas para vinculación (Autocompletado por NIT)
   static Future<List<Map<String, String>>> searchCompanies(String query) async {
     await Future.delayed(const Duration(milliseconds: 300));
 
@@ -288,6 +318,7 @@ class AuthService {
         .toList();
   }
 
+  // Solicitud de Alta de Empresa (Si no existe en la BD)
   static Future<bool> requestCompanyAffiliation(
     Map<String, dynamic> payload,
   ) async {
@@ -299,6 +330,7 @@ class AuthService {
 
       final existe = _mockCompaniesDB.any((c) => c['nit'] == nuevoNit);
       if (!existe) {
+        // En backend real esto iría a una tabla 'pending_companies'
         _mockCompaniesDB.add({'nit': nuevoNit, 'name': nuevaRazonSocial});
       }
       return true;
@@ -307,6 +339,7 @@ class AuthService {
     }
   }
 
+  // Validación rápida de NIT (Check existence)
   static Future<String?> validateCompanyNit(String nit) async {
     await Future.delayed(const Duration(milliseconds: 800));
     try {
@@ -324,6 +357,8 @@ class AuthService {
   // 5. PERFIL Y UTILIDADES
   // ===========================================================================
 
+  /// CAMBIO DE MODO (PERSONAL <-> CORPORATIVO)
+
   static bool toggleAppMode(bool isTargetCorporate) {
     if (_currentUser == null) return false;
     _currentUser!.appMode = isTargetCorporate
@@ -332,6 +367,7 @@ class AuthService {
     return true;
   }
 
+  // Activa el modo personal si solo tenía perfil corporativo
   static Future<bool> activateNaturalProfile() async {
     if (_currentUser == null) return false;
     await Future.delayed(const Duration(milliseconds: 500));
@@ -352,22 +388,27 @@ class AuthService {
     String? photoUrl,
   }) async {
     if (_currentUser == null) return false;
+    // Simula PUT /user/profile
     await Future.delayed(const Duration(seconds: 1));
     return true;
   }
 
   static Future<String?> uploadProfileImage(String path) async {
     await Future.delayed(const Duration(seconds: 2));
+    // Simula upload a S3/MinIO
     return "https://i.pravatar.cc/300?u=${DateTime.now().millisecondsSinceEpoch}";
   }
+
+  /// GESTIÓN DE BENEFICIARIOS
 
   static Future<bool> addBeneficiary(String name, String docId) async {
     if (_currentUser == null) return false;
     await Future.delayed(const Duration(milliseconds: 500));
+
     final newBeneficiary = Beneficiary(
       id: "ben_${DateTime.now().millisecondsSinceEpoch}",
       name: name,
-      documentNumber: docId,
+      documentNumber: docId, // Cédula obligatoria
     );
     _currentUser!.beneficiaries.add(newBeneficiary);
     return true;
@@ -378,7 +419,6 @@ class AuthService {
     if (code.toUpperCase() == "ERROR") {
       return false;
     }
-
     return true;
   }
 
@@ -411,39 +451,41 @@ class AuthService {
   static Future<bool> verifyAndLinkCompanyFromBackend({
     required String nit,
     required String companyName,
+    String?
+    backendCompanyId, // <--- AGREGAR ESTO (Simulación del UUID que devuelve el backend)
   }) async {
     await Future.delayed(const Duration(seconds: 2));
 
-    if (nit.endsWith('000')) {
-      return false;
-    }
+    if (nit.endsWith('000')) return false; // Lógica mock de error
 
     if (_currentUser != null) {
-      // CORRECCIÓN: Agregamos el campo address faltante
+      // Simulación: En un entorno real, el backend te devuelve el ID de la empresa en la tabla COMPANIES
+      final String simulatedCompanyUuid =
+          backendCompanyId ?? "comp_uuid_${nit}_mock";
+
       _currentUser = User(
         id: _currentUser!.id,
         email: _currentUser!.email,
         name: _currentUser!.name,
         phone: _currentUser!.phone,
         documentNumber: _currentUser!.documentNumber,
-        address: _currentUser!.address, // Agregado para coincidir con el modelo
+        address: _currentUser!.address,
         photoUrl: _currentUser!.photoUrl,
 
-        // Datos nuevos de vinculación
-        role: UserRole.EMPLEADO,
+        // --- CORRECCIÓN CRÍTICA ---
+        companyUuid: simulatedCompanyUuid, // <--- AHORA SÍ HAY RELACIÓN FK
         empresa: companyName,
         nitEmpresa: nit,
+
+        role: UserRole.EMPLEADO,
         idResponsable: 'CORP-${DateTime.now().millisecondsSinceEpoch}',
         appMode: AppMode.CORPORATE,
-
-        // Mantenemos lo demás
         verificationStatus: _currentUser!.verificationStatus,
         beneficiaries: _currentUser!.beneficiaries,
         idPassenger: _currentUser!.idPassenger,
         token: _currentUser!.token,
       );
     }
-
     return true;
   }
 
@@ -460,7 +502,7 @@ class AuthService {
 
   static Future<bool> verifyRecoveryToken(String email, String token) async {
     await Future.delayed(const Duration(seconds: 1));
-    if (token == "1234") return true;
+    if (token == "123456") return true;
     return false;
   }
 
@@ -478,6 +520,7 @@ class AuthService {
     }
   }
 
+  // Helper para convertir el Enum de modelo a Estado de respuesta simple
   static Map<String, dynamic> _mapStatus(UserVerificationStatus status) {
     switch (status) {
       case UserVerificationStatus.VERIFIED:

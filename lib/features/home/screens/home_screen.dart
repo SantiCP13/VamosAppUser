@@ -21,6 +21,7 @@ import '../services/osm_service.dart';
 import '../../payment/services/payment_service.dart';
 import '../../payment/widgets/payment_panel.dart';
 import '../../trips/services/trip_service.dart';
+import 'package:flutter/services.dart';
 
 enum TripState {
   IDLE,
@@ -50,13 +51,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   LatLng? _currentPosition;
   final LatLng _defaultLocation = const LatLng(4.9183, -74.0258); // Cajicá
   bool _isMapReady = false;
-  bool _isPickingLocation = false; // ¿Estamos moviendo el pin?
-  LatLng? _mapCenterPicker; // Coordenada central del mapa
-  bool _isLoadingAddress = false; // Cargando dirección
-  final OsmService _osmService = OsmService(); // Instancia del servicio
+  bool _isPickingLocation = false;
+  LatLng? _mapCenterPicker;
+  bool _isLoadingAddress = false;
+  final OsmService _osmService = OsmService();
+
   // --- PAGO ---
   List<PaymentMethod> _availablePaymentMethods = [];
   bool _isLoadingPaymentMethods = false;
+
   // --- DATOS DEL VIAJE ---
   String? _destinationName;
   LatLng? _destinationCoordinates;
@@ -64,7 +67,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // --- MODO Y PASAJEROS ---
   final Set<String> _selectedPassengerIds = {};
-  bool _includeMyself = true; // Por defecto el dueño de la cuenta viaja
+  bool _includeMyself = true;
 
   User get _currentUser => AuthService.currentUser!;
 
@@ -77,19 +80,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   LatLng? _driverPosition;
   Timer? _simulationTimer;
   final String _driverEta = "5 min";
+  int _routeIndex = 0;
 
-  // --- NUEVAS VARIABLES PARA CATEGORÍAS ---
-  // Guardamos el precio base calculado por distancia/tiempo
+  // --- CATEGORÍAS ---
   double _baseRoutePrice = 0;
-
-  // Categoría seleccionada: 'STANDARD' (Auto), 'PREMIUM' (Camioneta), 'VAN' (Buseta)
   String _selectedServiceCategory = 'STANDARD';
-
-  // Mapa de multiplicadores de tarifa según categoría
   final Map<String, double> _categoryMultipliers = {
-    'STANDARD': 1.0, // Precio normal
-    'PREMIUM': 1.35, // +35%
-    'VAN': 1.8, // +80%
+    'STANDARD': 1.0,
+    'PREMIUM': 1.35,
+    'VAN': 1.8,
   };
 
   @override
@@ -104,14 +103,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  // Helper para obtener la lista real de objetos seleccionados
   List<Beneficiary> get _selectedBeneficiariesList {
     return _currentUser.beneficiaries
         .where((b) => _selectedPassengerIds.contains(b.id))
         .toList();
   }
 
-  // Helper para contar total de personas
   int get _totalPassengers =>
       (_includeMyself ? 1 : 0) + _selectedPassengerIds.length;
 
@@ -123,10 +120,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     bool serviceEnabled;
     LocationPermission permission;
 
-    // 1. Verificar si el GPS está prendido
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      debugPrint("GPS Apagado -> Usando Default");
       _useDefaultLocation();
       return;
     }
@@ -135,33 +130,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        debugPrint("Permiso denegado -> Usando Default");
         _useDefaultLocation();
         return;
       }
     }
 
     if (permission == LocationPermission.deniedForever) {
-      debugPrint("Permiso denegado por siempre -> Usando Default");
       _useDefaultLocation();
       return;
     }
 
     try {
-      // --- MEJORA 1: Usar Cache (Last Known Position) ---
-      // Esto carga instantáneamente si el GPS ya se usó hace poco
       Position? lastKnown = await Geolocator.getLastKnownPosition();
 
       if (lastKnown != null && mounted) {
-        debugPrint("📍 Usando ubicación en caché (rápida)");
         setState(() {
           _currentPosition = LatLng(lastKnown.latitude, lastKnown.longitude);
         });
         _moveMapToCurrent();
       }
 
-      // --- MEJORA 2: Aumentar Timeout ---
-      // 5 segundos es muy poco. Subimos a 15 segundos.
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
         timeLimit: const Duration(seconds: 15),
@@ -169,33 +157,32 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
       if (!mounted) return;
 
-      debugPrint("📡 Ubicación GPS fresca obtenida");
       setState(() {
         _currentPosition = LatLng(position.latitude, position.longitude);
       });
       _moveMapToCurrent();
     } catch (e) {
-      debugPrint("Error GPS ($e)");
-      // Solo usamos la default si NO logramos obtener ni la caché ni la fresca
       if (_currentPosition == null) {
-        debugPrint("⚠️ Falló todo -> Usando ubicación por defecto (Cajicá)");
         _useDefaultLocation();
       }
     }
   }
 
-  // Nuevo helper para no repetir código
   void _useDefaultLocation() {
     if (!mounted) return;
     setState(() {
-      _currentPosition =
-          _defaultLocation; // Usa la coordenada de Cajicá definida arriba
+      _currentPosition = _defaultLocation;
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("⚠️ GPS no detectado. Usando ubicación aproximada."),
-        duration: Duration(seconds: 2),
+      SnackBar(
+        content: Text(
+          "⚠️ GPS no detectado. Usando ubicación aproximada.",
+          style: GoogleFonts.poppins(),
+        ),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(20),
       ),
     );
     _moveMapToCurrent();
@@ -212,21 +199,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _toggleAppMode(bool isTargetCorporate) {
     if (_tripState != TripState.IDLE) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("No puedes cambiar de modo durante un viaje"),
+        SnackBar(
+          content: Text(
+            "No puedes cambiar de modo durante un viaje",
+            style: GoogleFonts.poppins(),
+          ),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
         ),
       );
       return;
     }
 
-    // --- ESCENARIO 1: Quiere ir a CORPORATIVO ---
     if (isTargetCorporate) {
-      // Si no tiene ID de responsable (no está vinculado), mostramos el modal de NIT
       if (_currentUser.idResponsable == null) {
         _showCorporateLinkingModal();
         return;
       }
-      // Si ya lo tiene, cambio directo
       AuthService.toggleAppMode(true);
       setState(() {
         _resetTripData();
@@ -234,81 +225,87 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       return;
     }
 
-    // --- ESCENARIO 2: Quiere ir a PERSONAL ---
     if (!isTargetCorporate) {
-      // a. Si YA tiene ID de pasajero (Perfil Natural activo) -> Cambio directo
       if (_currentUser.idPassenger != null) {
         AuthService.toggleAppMode(false);
         setState(() {
           _resetTripData();
         });
-      }
-      // b. Si NO tiene ID de pasajero (Es corporativo puro) -> Diálogo de activación simple
-      else {
+      } else {
         _showActivateNaturalDialog();
       }
     }
   }
 
-  // Helper para limpiar datos al cambiar modo
   void _resetTripData() {
     _routePoints = [];
     _destinationCoordinates = null;
     _destinationName = null;
   }
 
-  // --- NUEVO DIÁLOGO SIMPLE (Reemplaza al _showPersonalKYCModal) ---
-  // --- DIÁLOGO DE ACTIVACIÓN SIMPLE (Corregido) ---
   void _showActivateNaturalDialog() {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("Activar Perfil Personal"),
-        content: const Text(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          "Activar Perfil Personal",
+          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+        ),
+        content: Text(
           "Como usuario Corporativo verificado, puedes activar tu perfil Personal inmediatamente.\n\n"
           "Esto te permitirá solicitar viajes particulares pagados por ti.",
+          style: GoogleFonts.poppins(),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text("Cancelar"),
+            child: Text(
+              "Cancelar",
+              style: GoogleFonts.poppins(color: Colors.grey),
+            ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primaryGreen,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
             onPressed: () async {
-              // 1. Cerramos el diálogo primero
               Navigator.pop(ctx);
-
-              // 2. Mostrar indicador de carga (Opcional, pero recomendado)
               if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Procesando solicitud...")),
+                SnackBar(
+                  content: Text(
+                    "Procesando solicitud...",
+                    style: GoogleFonts.poppins(),
+                  ),
+                ),
               );
 
-              // 3. Llamamos al servicio existente
-              // (Este método ya existe en tu AuthService y hace lo correcto:
-              // genera id_pasajero y cambia el modo a PERSONAL)
               await AuthService.activateNaturalProfile();
 
-              // 4. Verificamos si el widget sigue montado antes de usar setState
               if (!mounted) return;
-
-              // 5. Actualizamos la UI
               setState(() {
                 _resetTripData();
               });
 
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text("¡Perfil Personal Activado y en uso!"),
+                SnackBar(
+                  content: Text(
+                    "¡Perfil Personal Activado!",
+                    style: GoogleFonts.poppins(),
+                  ),
                 ),
               );
             },
-            child: const Text(
+            child: Text(
               "Activar Ahora",
-              style: TextStyle(color: Colors.white),
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
         ],
@@ -318,13 +315,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<bool> _isTripAllowed(LatLng start, LatLng end) async {
     if (_currentUser.isCorporateMode) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text("🏢 Modo Corporativo: Viaje Autorizado."),
-          backgroundColor: Colors.blue[800],
-          duration: const Duration(milliseconds: 1500),
-        ),
-      );
       return true;
     }
 
@@ -373,16 +363,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("Viaje No Permitido"),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          "Viaje No Permitido",
+          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+        ),
         content: Text(
           "Estás en MODO PERSONAL.\n\n"
           "Origen: $city\nDestino: $city\n\n"
           "❌ Viajes urbanos bloqueados en este modo.",
+          style: GoogleFonts.poppins(),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text("OK"),
+            child: Text(
+              "OK",
+              style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+            ),
           ),
         ],
       ),
@@ -390,29 +388,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   // ===============================================================
-  // 2. LÓGICA DE RUTAS (CORREGIDA)
+  // 2. LÓGICA DE RUTAS
   // ===============================================================
 
-  /// Calcula el precio final basado en la categoría seleccionada (Standard, Premium, Van)
   void _updateFinalPrice() {
-    // 1. Obtener multiplicador según el ERD (VEHICLES -> nivel_servicio o capacidad)
     double multiplier = _categoryMultipliers[_selectedServiceCategory] ?? 1.0;
-
-    // 2. Calcular sobre el precio base de la ruta
     double finalRaw = _baseRoutePrice * multiplier;
 
     setState(() {
-      // Redondeo a la centena más cercana para mejor UX
       _tripPrice = (finalRaw / 100).ceil() * 100;
     });
   }
 
   Future<void> _calculateRouteAndPrice(LatLng destination) async {
-    // 1. Validar posición
     if (_currentPosition == null) await _determinePosition();
     if (_currentPosition == null) return;
 
-    // 2. Validar reglas de negocio (ERD: USERS -> app_mode)
     bool allowed = await _isTripAllowed(_currentPosition!, destination);
     if (!mounted || !allowed) {
       setState(() {
@@ -425,21 +416,31 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     setState(() => _tripState = TripState.CALCULATING);
 
-    // 3. Obtener ruta del servicio
-    final result = await _routeService.getRoute(_currentPosition!, destination);
+    // --- CAMBIO: Bloque Try-Catch para manejar la nueva lógica del servicio ---
+    try {
+      final result = await _routeService.getRoute(
+        _currentPosition!,
+        destination,
+      );
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    if (result != null) {
-      // --- CÁLCULO BASE (Distancia y Tiempo) ---
+      // Asignamos directamente, ya sabemos que result no es nulo
       _routePoints = result.points;
+
+      // Lógica de visualización (Si es fallback, podríamos mostrar alerta aquí)
+      if (result.isFallback) {
+        debugPrint("⚠️ Usando ruta estimada (Línea recta)");
+      }
+
       double km = result.distanceMeters / 1000;
       double minutes = result.durationSeconds / 60;
 
+      // Corrección de string interpolation innecesaria
       _tripDistance = "${km.toStringAsFixed(1)} km";
       _tripDuration = "${minutes.round()} min";
 
-      // Tarifas base (Configuración del sistema)
+      // --- CÁLCULO DE PRECIOS (Misma lógica tuya) ---
       double base = 3800;
       double costoPorKm = 1100;
       double costoPorMin = 250;
@@ -448,20 +449,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       double valKm = km * costoPorKm;
       double valMin = minutes * costoPorMin;
 
-      // Recargos (Nocturno / Dominical)
       double recargoTotal = 0;
       DateTime now = DateTime.now();
       bool esNoche = now.hour >= 20 || now.hour < 5;
       bool esDominical = now.weekday == DateTime.sunday;
       if (esNoche || esDominical) recargoTotal = valorRecargo;
 
-      // Guardamos el PRECIO BASE (sin el factor del tipo de vehículo)
       _baseRoutePrice = base + valKm + valMin + recargoTotal;
 
       setState(() {
         _tripState = TripState.ROUTE_PREVIEW;
-
-        // Lógica automática según capacidad (ERD: VEHICLES -> capacidad_pasajeros)
         if (_totalPassengers > 4) {
           _selectedServiceCategory = 'VAN';
         } else {
@@ -469,14 +466,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         }
       });
 
-      // Calculamos el precio final visual
       _updateFinalPrice();
       _fitCameraToRoute();
-    } else {
-      // Si falla la ruta
+    } catch (e) {
+      // Manejo de errores (Timeout o fallo total)
       setState(() => _tripState = TripState.IDLE);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("No se pudo calcular la ruta")),
+        SnackBar(
+          content: Text(
+            "No se pudo calcular la ruta: $e",
+            style: GoogleFonts.poppins(),
+          ),
+          backgroundColor: Colors.red,
+        ),
       );
     }
   }
@@ -522,15 +525,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final bool isCorporate = _currentUser.isCorporateMode;
+    // Color principal dinámico según el modo
+    final Color mainColor = isCorporate
+        ? Colors.blue[800]!
+        : AppColors.primaryGreen;
 
     return Scaffold(
       key: _scaffoldKey,
       drawer: const SideMenu(),
       body: Stack(
         children: [
-          // ===============================================================
           // 1. CAPA DEL MAPA
-          // ===============================================================
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
@@ -542,7 +547,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   _mapController.move(_currentPosition!, 15.0);
                 }
               },
-              // CRÍTICO: Detectar movimiento para el modo "Fijar en Mapa"
               onPositionChanged: (camera, hasGesture) {
                 if (_isPickingLocation) {
                   _mapCenterPicker = camera.center;
@@ -560,7 +564,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 subdomains: const ['a', 'b', 'c', 'd'],
               ),
 
-              // Solo mostramos rutas y marcadores normales SI NO estamos eligiendo en el mapa
               if (!_isPickingLocation) ...[
                 if (_routePoints.isNotEmpty)
                   PolylineLayer(
@@ -568,9 +571,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       Polyline(
                         points: _routePoints,
                         strokeWidth: 5.0,
-                        color: isCorporate
-                            ? Colors.blue[800]!
-                            : AppColors.primaryGreen,
+                        color: mainColor,
                       ),
                     ],
                   ),
@@ -583,9 +584,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         height: 25,
                         child: Container(
                           decoration: BoxDecoration(
-                            color: isCorporate
-                                ? Colors.blue[800]
-                                : AppColors.primaryGreen,
+                            color: mainColor,
                             shape: BoxShape.circle,
                             border: Border.all(color: Colors.white, width: 3),
                             boxShadow: const [
@@ -623,14 +622,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ],
           ),
 
-          // ===============================================================
-          // 2. BARRA SUPERIOR (MENÚ Y MODO)
-          // ===============================================================
+          // 2. BARRA SUPERIOR
           Positioned(top: 0, left: 0, right: 0, child: _buildTopHybridBar()),
 
-          // ===============================================================
-          // 3. CONTROLES DEL MAPA (ZOOM Y CENTRAR)
-          // ===============================================================
+          // 3. CONTROLES DEL MAPA
           Positioned(
             top: 130,
             right: 20,
@@ -645,16 +640,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ),
 
-          // ===============================================================
-          // 4. MODO "FIJAR EN MAPA" (PIN CENTRAL + BOTÓN CONFIRMAR)
-          // ===============================================================
+          // 4. MODO "FIJAR EN MAPA"
           if (_isPickingLocation)
             Center(
               child: Padding(
-                padding: const EdgeInsets.only(
-                  bottom: 35,
-                ), // Levantar para que la punta toque el centro
-                child: Icon(Icons.location_on, size: 50, color: Colors.black),
+                padding: const EdgeInsets.only(bottom: 35),
+                child: Icon(Icons.location_on, size: 50, color: mainColor),
               ),
             ),
 
@@ -677,11 +668,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
+                          boxShadow: const [
                             BoxShadow(color: Colors.black12, blurRadius: 10),
                           ],
                         ),
-                        child: const Row(
+                        child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             SizedBox(
@@ -689,36 +680,42 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               height: 15,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
-                                color: Colors.black,
+                                color: mainColor,
                               ),
                             ),
-                            SizedBox(width: 10),
+                            const SizedBox(width: 10),
                             Text(
                               "Obteniendo dirección...",
-                              style: TextStyle(fontWeight: FontWeight.bold),
+                              style: GoogleFonts.poppins(
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ],
                         ),
                       ),
-                    ElevatedButton(
-                      // LLAMA A LA FUNCIÓN NUEVA QUE TE PASÉ ANTES
-                      onPressed: _isLoadingAddress
-                          ? null
-                          : _confirmMapSelection,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        minimumSize: const Size(double.infinity, 50),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                    // BOTÓN ESTILO NUEVO
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        onPressed: _isLoadingAddress
+                            ? null
+                            : _confirmMapSelection,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: mainColor,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(15),
+                          ),
+                          elevation: 4,
+                          shadowColor: mainColor.withValues(alpha: 0.4),
                         ),
-                      ),
-                      child: const Text(
-                        "Confirmar Ubicación",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                        child: Text(
+                          "Confirmar Ubicación",
+                          style: GoogleFonts.poppins(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ),
@@ -736,12 +733,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           vertical: 8,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.8),
+                          color: Colors.white.withValues(alpha: 0.9),
                           borderRadius: BorderRadius.circular(20),
                         ),
-                        child: const Text(
+                        child: Text(
                           "Cancelar",
-                          style: TextStyle(
+                          style: GoogleFonts.poppins(
                             color: Colors.red,
                             fontWeight: FontWeight.bold,
                           ),
@@ -753,9 +750,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-          // ===============================================================
-          // 5. BARRA DE BÚSQUEDA (SOLO SI NO ESTAMOS EN MODO PICKER)
-          // ===============================================================
+          // 5. BARRA DE BÚSQUEDA (ESTILO INPUT)
           if (_tripState == TripState.IDLE && !_isPickingLocation)
             Positioned(
               bottom: 30,
@@ -764,9 +759,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               child: _buildSearchWidget(),
             ),
 
-          // ===============================================================
-          // 6. PANELES DESLIZANTES (ESTADOS DEL VIAJE)
-          // ===============================================================
+          // 6. PANELES DESLIZANTES
           if (_tripState == TripState.ROUTE_PREVIEW)
             Positioned(
               bottom: 0,
@@ -794,9 +787,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           if (_tripState == TripState.CALCULATING)
             Container(
               color: Colors.black12,
-              child: const Center(
-                child: CircularProgressIndicator(color: Colors.black),
-              ),
+              child: Center(child: CircularProgressIndicator(color: mainColor)),
             ),
           if (_tripState == TripState.PAYMENT)
             Positioned(
@@ -805,18 +796,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               right: 0,
               child: _buildPanelContainer(
                 _isLoadingPaymentMethods
-                    ? const Center(
+                    ? Center(
                         child: Padding(
-                          padding: EdgeInsets.all(20),
-                          child: CircularProgressIndicator(color: Colors.black),
+                          padding: const EdgeInsets.all(20),
+                          child: CircularProgressIndicator(color: mainColor),
                         ),
                       )
                     : PaymentPanel(
-                        // Aquí se usa la variable _tripPrice
                         amount: _tripPrice,
-                        // Aquí se usa la variable _availablePaymentMethods (Adiós advertencia 1)
                         methods: _availablePaymentMethods,
-                        // Aquí se usa la función _finishTripAndSave (Adiós advertencia 2)
                         onPaymentSuccess: _finishTripAndSave,
                       ),
               ),
@@ -830,51 +818,49 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // 4. WIDGETS Y LÓGICA DE INTERFAZ
   // ===============================================================
   Widget _buildVehicleSelector() {
-    // Definimos las opciones disponibles
     final List<Map<String, dynamic>> options = [
       {
         'id': 'STANDARD',
         'label': 'Económico',
-        'icon': Icons.directions_car, // Podrías usar imágenes assets aquí
+        'icon': Icons.directions_car,
         'capacity': '1-4',
-        'desc': 'Automóvil básico',
       },
       {
         'id': 'PREMIUM',
         'label': 'Confort',
-        'icon': Icons.local_taxi, // Icono diferente o asset de camioneta
+        'icon': Icons.local_taxi,
         'capacity': '1-4',
-        'desc': 'Camioneta / SUV',
       },
       {
         'id': 'VAN',
         'label': 'Van',
         'icon': Icons.airport_shuttle,
         'capacity': '5-10',
-        'desc': 'Grupos grandes',
       },
     ];
+
+    bool isCorp = _currentUser.isCorporateMode;
+    Color activeColor = isCorp ? Colors.blue[800]! : AppColors.primaryGreen;
 
     return SizedBox(
       height: 110,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: options.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 10),
+        separatorBuilder: (context, index) => const SizedBox(width: 10),
         itemBuilder: (context, index) {
           final opt = options[index];
           bool isSelected = _selectedServiceCategory == opt['id'];
           bool isDisabled = false;
 
-          // REGLA DE NEGOCIO: Si hay más de 4 pax, bloquear Standard y Premium
           if (_totalPassengers > 4 && opt['id'] != 'VAN') {
             isDisabled = true;
           }
 
-          // Calculamos precio estimado para esta tarjeta
           double mult = _categoryMultipliers[opt['id']]!;
           double priceEst = ((_baseRoutePrice * mult) / 100).ceil() * 100;
 
+          // ESTILO CARD SELECCIONABLE
           return GestureDetector(
             onTap: isDisabled
                 ? null
@@ -889,19 +875,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
                 color: isSelected
-                    ? (_currentUser.isCorporateMode
-                          ? Colors.blue[50]
-                          : Colors.green[50])
-                    : (isDisabled ? Colors.grey[100] : Colors.white),
+                    ? activeColor.withValues(alpha: 0.05)
+                    : Colors.white,
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: isSelected
-                      ? (_currentUser.isCorporateMode
-                            ? Colors.blue[800]!
-                            : AppColors.primaryGreen)
-                      : (isDisabled ? Colors.grey[200]! : Colors.grey[300]!),
-                  width: isSelected ? 2 : 1,
+                  color: isSelected ? activeColor : Colors.grey.shade200,
+                  width: isSelected ? 1.5 : 1,
                 ),
-                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  if (!isDisabled)
+                    BoxShadow(
+                      color: Colors.grey.withValues(alpha: 0.05),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                ],
               ),
               child: Opacity(
                 opacity: isDisabled ? 0.5 : 1.0,
@@ -910,7 +898,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   children: [
                     Icon(
                       opt['icon'],
-                      color: isSelected ? Colors.black : Colors.grey[600],
+                      color: isSelected ? activeColor : Colors.grey[600],
                       size: 28,
                     ),
                     const SizedBox(height: 5),
@@ -936,14 +924,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         vertical: 1,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.grey[200],
+                        color: Colors.grey[100],
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
                         "${opt['capacity']} pax",
-                        style: const TextStyle(
+                        style: GoogleFonts.poppins(
                           fontSize: 9,
                           fontWeight: FontWeight.bold,
+                          color: Colors.grey[600],
                         ),
                       ),
                     ),
@@ -959,7 +948,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildTopHybridBar() {
     bool isCorp = _currentUser.isCorporateMode;
-    // bool isEmployee = _currentUser.isEmployee;
 
     return SafeArea(
       child: Container(
@@ -978,7 +966,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
             const SizedBox(width: 12),
-            // --- CAMBIO: Siempre mostramos el Switch, la lógica interna decide si permite cambiar ---
             Expanded(
               child: Container(
                 height: 45,
@@ -1002,7 +989,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               ),
             ),
-            // -------------------------------------------------------------------------------------
           ],
         ),
       ),
@@ -1036,13 +1022,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildRoutePreviewContent() {
     bool isCorp = _currentUser.isCorporateMode;
-    // Definimos el color principal dinámicamente
     Color primaryColor = isCorp ? Colors.blue[800]! : AppColors.primaryGreen;
-    Color lightColor = isCorp
-        ? Colors.blue.withValues(alpha: 0.05)
-        : Colors.green.withValues(alpha: 0.05);
 
-    // Construimos string de nombres para mostrar
     List<String> names = [];
     if (_includeMyself) names.add("Yo");
     for (var b in _selectedBeneficiariesList) {
@@ -1057,7 +1038,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Center(child: Container(width: 40, height: 4, color: Colors.grey[300])),
+        Center(
+          child: Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
         const SizedBox(height: 15),
 
         // DESTINO
@@ -1068,7 +1058,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               children: [
                 const Icon(
                   Icons.location_on,
-                  size: 16,
+                  size: 20,
                   color: Colors.redAccent,
                 ),
                 const SizedBox(width: 8),
@@ -1078,6 +1068,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     style: GoogleFonts.poppins(
                       fontWeight: FontWeight.w500,
                       color: Colors.grey[800],
+                      fontSize: 15,
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -1106,8 +1097,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     Text(
                       "FUEC Activo • Servicio Especial",
                       style: GoogleFonts.poppins(
-                        fontSize: 10,
+                        fontSize: 11,
                         color: Colors.green,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                 ],
@@ -1137,13 +1129,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ],
         ),
 
-        const SizedBox(height: 15),
+        const SizedBox(height: 20),
+        Divider(thickness: 1, color: Colors.grey[200]),
+        const SizedBox(height: 10),
 
-        // --- SELECTOR DE PASAJEROS (PARA AMBOS MODOS) ---
-        const Divider(),
-        const SizedBox(height: 5),
-
-        // --- CORRECCIÓN 2: Eliminación de llaves innecesarias en interpolación ---
+        // SELECTOR DE PASAJEROS (ESTILO INPUT)
         Text(
           "Pasajeros ($_totalPassengers)",
           style: GoogleFonts.poppins(
@@ -1156,23 +1146,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
         InkWell(
           onTap: _showBeneficiarySelector,
+          borderRadius: BorderRadius.circular(12),
           child: Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
-              color: lightColor,
+              color: Colors.grey.shade50,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: primaryColor.withValues(alpha: 0.2)),
+              border: Border.all(color: Colors.grey.shade200),
             ),
             child: Row(
               children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: isCorp ? Colors.blue[100] : Colors.green[100],
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(Icons.groups, color: primaryColor, size: 20),
-                ),
+                Icon(Icons.groups_outlined, color: primaryColor, size: 22),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -1183,65 +1167,75 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             ? "Seleccionar pasajeros"
                             : passengersString,
                         style: GoogleFonts.poppins(
-                          fontWeight: FontWeight.bold,
+                          fontWeight: FontWeight.w600,
                           fontSize: 14,
                           color: Colors.black87,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      Text(
-                        _totalPassengers == 0
-                            ? "⚠️ Selecciona al menos uno"
-                            : "Total: $_totalPassengers personas",
-                        style: GoogleFonts.poppins(
-                          fontSize: 11,
-                          color: _totalPassengers == 0
-                              ? Colors.red
-                              : Colors.grey[600],
+                      if (_totalPassengers == 0)
+                        Text(
+                          "Selecciona al menos uno",
+                          style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            color: Colors.red,
+                          ),
                         ),
-                      ),
                     ],
                   ),
                 ),
-                Icon(Icons.edit, color: primaryColor, size: 20),
+                Icon(Icons.arrow_drop_down, color: Colors.grey[600]),
               ],
             ),
           ),
         ),
-        const SizedBox(height: 10),
-        const Align(
-          alignment: Alignment.centerLeft,
-          child: Text(
-            "Selecciona vehículo:",
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
-              color: Colors.grey,
-            ),
+
+        const SizedBox(height: 15),
+        Text(
+          "Vehículo",
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+            color: Colors.grey[600],
           ),
         ),
         const SizedBox(height: 8),
         _buildVehicleSelector(),
+
         const SizedBox(height: 15),
-        Text(
-          "$_tripDistance • $_tripDuration",
-          style: GoogleFonts.poppins(color: Colors.grey, fontSize: 14),
+        Row(
+          children: [
+            Icon(Icons.access_time, size: 14, color: Colors.grey),
+            const SizedBox(width: 4),
+            Text(
+              "$_tripDuration aprox",
+              style: GoogleFonts.poppins(color: Colors.grey, fontSize: 13),
+            ),
+            const SizedBox(width: 15),
+            Icon(Icons.straighten, size: 14, color: Colors.grey),
+            const SizedBox(width: 4),
+            Text(
+              "$_tripDistance",
+              style: GoogleFonts.poppins(color: Colors.grey, fontSize: 13),
+            ),
+          ],
         ),
-        const Divider(height: 30),
+        const SizedBox(height: 25),
 
         SizedBox(
           width: double.infinity,
+          height: 56,
           child: ElevatedButton(
-            // CAMBIO AQUÍ: Llamamos a _handleTripRequest en lugar de ir directo
             onPressed: _totalPassengers > 0 ? _handleTripRequest : null,
             style: ElevatedButton.styleFrom(
               backgroundColor: primaryColor,
               disabledBackgroundColor: Colors.grey[300],
-              padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(15),
               ),
+              elevation: 4,
+              shadowColor: primaryColor.withValues(alpha: 0.4),
             ),
             child: Text(
               "Solicitar Viaje",
@@ -1253,6 +1247,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ),
         ),
+        const SizedBox(height: 10),
         Center(
           child: TextButton(
             onPressed: _resetApp,
@@ -1266,25 +1261,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  // --- MANEJADOR DE SOLICITUD DE VIAJE (FUSIONADO: UI LEGAL + BACKEND) ---
   void _handleTripRequest() {
     bool isCorp = _currentUser.isCorporateMode;
 
-    // LÓGICA CRÍTICA FUEC
-    // Si es corporativo y el titular (yo) NO viaja, lanzamos advertencia.
     if (isCorp && !_includeMyself) {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: Row(
             children: [
               Icon(Icons.warning_amber_rounded, color: Colors.amber[800]),
               const SizedBox(width: 10),
               const Expanded(
-                child: Text(
-                  "Responsabilidad Legal",
-                  style: TextStyle(fontSize: 18),
-                ),
+                child: Text("Responsabilidad", style: TextStyle(fontSize: 18)),
               ),
             ],
           ),
@@ -1293,28 +1285,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                "Estás solicitando un servicio Corporativo a nombre de terceros.",
+                "Estás solicitando un servicio Corporativo para terceros.",
                 style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 10),
               Text(
-                "Aunque tú no viajes, el FUEC (Contrato de Transporte) se generará con los siguientes datos de responsabilidad:",
+                "El FUEC se generará a nombre de:",
                 style: GoogleFonts.poppins(fontSize: 13),
               ),
               const SizedBox(height: 10),
-              // --- TU DISEÑO ORIGINAL DEL CONTAINER ---
               Container(
-                padding: const EdgeInsets.all(10),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey[300]!),
+                  color: Colors.grey[50],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey.shade200),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      "Titular Responsable:",
+                      "Titular:",
                       style: GoogleFonts.poppins(
                         fontSize: 11,
                         color: Colors.grey,
@@ -1326,14 +1317,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                     const SizedBox(height: 5),
                     Text(
-                      "Empresa Contratante:",
+                      "Empresa:",
                       style: GoogleFonts.poppins(
                         fontSize: 11,
                         color: Colors.grey,
                       ),
                     ),
                     Text(
-                      // Si está vacío muestra "N/A", si no, muestra la empresa
                       _currentUser.empresa.isEmpty
                           ? "N/A"
                           : _currentUser.empresa,
@@ -1342,67 +1332,54 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ],
                 ),
               ),
-              const SizedBox(height: 10),
-              Text(
-                "Tú eres el responsable del servicio ante la autoridad de tránsito.",
-                style: GoogleFonts.poppins(
-                  fontSize: 12,
-                  color: Colors.grey[700],
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
             ],
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text("Volver"),
+              child: Text("Volver", style: GoogleFonts.poppins()),
             ),
             ElevatedButton(
               onPressed: () {
-                Navigator.pop(ctx); // Cierra dialogo
-
-                // --- CAMBIO CLAVE: Aquí llamamos al proceso del Backend ---
+                Navigator.pop(ctx);
                 _processTripCreation();
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blue[800],
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
-              child: const Text(
-                "Entendido y Aceptar",
-                style: TextStyle(color: Colors.white),
+              child: Text(
+                "Aceptar",
+                style: GoogleFonts.poppins(color: Colors.white),
               ),
             ),
           ],
         ),
       );
     } else {
-      // Si no es caso especial, procesamos directo
       _processTripCreation();
     }
   }
 
-  // --- NUEVO MÉTODO AUXILIAR PARA NO REPETIR CÓDIGO ---
   Future<void> _processTripCreation() async {
-    // 1. Mostrar Feedback Visual
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Conectando con la central..."),
-        duration: Duration(seconds: 1),
+      SnackBar(
+        content: Text(
+          "Conectando con la central...",
+          style: GoogleFonts.poppins(),
+        ),
       ),
     );
 
-    // 2. Instanciar el servicio
-    // Asegúrate de importar: import '../../trips/services/trip_service.dart';
     final tripService = TripService();
 
-    // 3. Ejecutar llamada al Backend (Simulada o Real)
     bool success = await tripService.createTripRequest(
       currentUser: _currentUser,
       origin: _currentPosition!,
       destination: _destinationCoordinates!,
-      originAddress:
-          "Ubicación Actual", // Opcional: Podrías pasar la dirección real si la tienes
+      originAddress: "Ubicación Actual",
       destinationAddress: _destinationName!,
       serviceCategory: _selectedServiceCategory,
       estimatedPrice: _tripPrice,
@@ -1412,15 +1389,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     if (!mounted) return;
 
-    // 4. Decidir qué hacer según el resultado
     if (success) {
-      // Éxito: Pasamos a buscar conductor (tu flujo original visual)
       _startSearchingDriver();
     } else {
-      // Error: Avisamos al usuario
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("❌ Error al crear la solicitud. Intenta nuevamente."),
+        SnackBar(
+          content: Text(
+            "❌ Error al crear la solicitud.",
+            style: GoogleFonts.poppins(),
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -1434,14 +1411,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
       ),
       builder: (context) {
         return StatefulBuilder(
           builder: (BuildContext context, StateSetter setModalState) {
             return Container(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
               height: MediaQuery.of(context).size.height * 0.7,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1450,7 +1428,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     child: Container(
                       width: 40,
                       height: 4,
-                      color: Colors.grey[300],
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 20),
@@ -1470,8 +1451,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           Navigator.pop(context);
                         },
                         child: Text(
-                          "Confirmar",
-                          style: TextStyle(
+                          "Listo",
+                          style: GoogleFonts.poppins(
                             fontWeight: FontWeight.bold,
                             fontSize: 16,
                             color: primaryColor,
@@ -1486,46 +1467,54 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   Container(
                     decoration: BoxDecoration(
                       color: _includeMyself
-                          ? primaryColor.withValues(alpha: 0.1)
-                          : Colors.white,
-                      borderRadius: BorderRadius.circular(12),
+                          ? primaryColor.withValues(alpha: 0.05)
+                          : Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(16),
                       border: Border.all(
                         color: _includeMyself
                             ? primaryColor
-                            : Colors.grey.shade300,
+                            : Colors.grey.shade200,
                       ),
                     ),
                     child: CheckboxListTile(
                       value: _includeMyself,
                       activeColor: primaryColor,
                       title: Text(
-                        "Viajo yo (${_currentUser.name})",
+                        "Viajo yo",
                         style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
                       ),
-                      subtitle: isCorp
-                          ? const Text(
-                              "Responsable del FUEC",
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.grey,
-                              ),
-                            )
-                          : null,
-                      secondary: const Icon(Icons.person),
+                      subtitle: Text(
+                        _currentUser.name,
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                      secondary: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        child: Icon(
+                          Icons.person,
+                          color: primaryColor,
+                          size: 20,
+                        ),
+                      ),
                       onChanged: (bool? val) {
                         setModalState(() {
                           _includeMyself = val ?? false;
                         });
                         setState(() {
-                          // LÓGICA DE AUTO-SELECCIÓN DE VAN
                           if (_totalPassengers > 4) {
                             _selectedServiceCategory = 'VAN';
                           } else if (_selectedServiceCategory == 'VAN' &&
                               _totalPassengers <= 4) {
-                            // Opcional: Volver a Standard si bajan los pasajeros
                             _selectedServiceCategory = 'STANDARD';
                           }
-                          _updateFinalPrice(); // Recalcular precio
+                          _updateFinalPrice();
                         });
                       },
                     ),
@@ -1533,11 +1522,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
                   const SizedBox(height: 20),
                   Text(
-                    "Tus Pasajeros Guardados",
+                    "Tus Pasajeros",
                     style: GoogleFonts.poppins(
-                      fontSize: 12,
+                      fontSize: 14,
                       fontWeight: FontWeight.bold,
-                      color: Colors.grey,
+                      color: Colors.black87,
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -1547,12 +1536,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ? Center(
                             child: Text(
                               "No tienes pasajeros agregados",
-                              style: TextStyle(color: Colors.grey[400]),
+                              style: GoogleFonts.poppins(
+                                color: Colors.grey[400],
+                              ),
                             ),
                           )
                         : ListView.separated(
                             itemCount: _currentUser.beneficiaries.length,
-                            // --- CORRECCIÓN 4: Uso de nombres explícitos para evitar warning de guiones bajos ---
                             separatorBuilder: (context, index) =>
                                 const SizedBox(height: 10),
                             itemBuilder: (ctx, index) {
@@ -1569,7 +1559,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   padding: const EdgeInsets.only(right: 20),
                                   decoration: BoxDecoration(
                                     color: Colors.red[100],
-                                    borderRadius: BorderRadius.circular(12),
+                                    borderRadius: BorderRadius.circular(16),
                                   ),
                                   child: const Icon(
                                     Icons.delete,
@@ -1580,22 +1570,36 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   return await showDialog(
                                     context: context,
                                     builder: (ctx) => AlertDialog(
-                                      title: const Text("¿Borrar pasajero?"),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      title: Text(
+                                        "¿Borrar?",
+                                        style: GoogleFonts.poppins(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
                                       content: Text(
                                         "Se eliminará a ${b.name}.",
+                                        style: GoogleFonts.poppins(),
                                       ),
                                       actions: [
                                         TextButton(
                                           onPressed: () =>
                                               Navigator.pop(ctx, false),
-                                          child: const Text("Cancelar"),
+                                          child: Text(
+                                            "Cancelar",
+                                            style: GoogleFonts.poppins(),
+                                          ),
                                         ),
                                         TextButton(
                                           onPressed: () =>
                                               Navigator.pop(ctx, true),
-                                          child: const Text(
+                                          child: Text(
                                             "Borrar",
-                                            style: TextStyle(color: Colors.red),
+                                            style: GoogleFonts.poppins(
+                                              color: Colors.red,
+                                            ),
                                           ),
                                         ),
                                       ],
@@ -1613,9 +1617,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 child: Container(
                                   decoration: BoxDecoration(
                                     color: isSelected
-                                        ? primaryColor.withValues(alpha: 0.1)
-                                        : Colors.white,
-                                    borderRadius: BorderRadius.circular(12),
+                                        ? primaryColor.withValues(alpha: 0.05)
+                                        : Colors.grey.shade50,
+                                    borderRadius: BorderRadius.circular(16),
                                     border: Border.all(
                                       color: isSelected
                                           ? primaryColor
@@ -1635,7 +1639,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                       "CC: ${b.documentNumber}",
                                       style: GoogleFonts.poppins(fontSize: 12),
                                     ),
-                                    secondary: const Icon(Icons.person_pin),
+                                    secondary: Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: Colors.grey.shade200,
+                                        ),
+                                      ),
+                                      child: Icon(
+                                        Icons.person_outline,
+                                        color: Colors.grey[600],
+                                        size: 20,
+                                      ),
+                                    ),
                                     onChanged: (bool? val) {
                                       setModalState(() {
                                         if (val == true) {
@@ -1645,11 +1663,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                         }
                                       });
                                       setState(() {
-                                        // LÓGICA DE AUTO-SELECCIÓN DE VAN
                                         if (_totalPassengers > 4) {
                                           _selectedServiceCategory = 'VAN';
                                         }
-                                        _updateFinalPrice(); // Recalcular precio
+                                        _updateFinalPrice();
                                       });
                                     },
                                   ),
@@ -1662,17 +1679,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   const SizedBox(height: 10),
                   SizedBox(
                     width: double.infinity,
+                    height: 56,
                     child: OutlinedButton.icon(
                       onPressed: () {
                         _showAddBeneficiaryDialog(setModalState);
                       },
                       icon: const Icon(Icons.add),
-                      label: const Text("Agregar Nuevo Pasajero"),
+                      label: Text(
+                        "Agregar Nuevo Pasajero",
+                        style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+                      ),
                       style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.all(16),
                         side: BorderSide(color: primaryColor),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(15),
                         ),
                         foregroundColor: primaryColor,
                       ),
@@ -1691,45 +1711,115 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final nameCtrl = TextEditingController();
     final docCtrl = TextEditingController();
 
+    // Estilo local para inputs
+    InputDecoration inputDeco(String label) {
+      return InputDecoration(
+        labelText: label,
+        labelStyle: GoogleFonts.poppins(
+          fontSize: 14,
+          color: Colors.grey.shade600,
+        ),
+        filled: true,
+        fillColor: Colors.grey.shade50,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey.shade200),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(
+            color: AppColors.primaryGreen,
+            width: 1.5,
+          ),
+        ),
+      );
+    }
+
     showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text("Nuevo Pasajero"),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          "Nuevo Pasajero",
+          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
               controller: nameCtrl,
-              decoration: const InputDecoration(labelText: "Nombre Completo"),
+              style: GoogleFonts.poppins(),
+              decoration: inputDeco("Nombre Completo"),
+              textCapitalization: TextCapitalization.words,
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 15),
             TextField(
               controller: docCtrl,
-              decoration: const InputDecoration(
-                labelText: "Identificación (CC)",
-              ),
+              style: GoogleFonts.poppins(),
+              decoration: inputDeco("Identificación (CC)"),
               keyboardType: TextInputType.number,
+              // --- CAMBIO CLAVE: Restricción estricta de Input ---
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly, // Solo 0-9
+                LengthLimitingTextInputFormatter(
+                  10,
+                ), // Máx 10 dígitos (CC estándar)
+              ],
             ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
-            child: const Text("Cancelar"),
+            child: Text(
+              "Cancelar",
+              style: GoogleFonts.poppins(color: Colors.grey),
+            ),
           ),
           ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryGreen,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
             onPressed: () async {
-              if (nameCtrl.text.isNotEmpty && docCtrl.text.isNotEmpty) {
-                await AuthService.addBeneficiary(nameCtrl.text, docCtrl.text);
+              final name = nameCtrl.text.trim();
+              final doc = docCtrl.text.trim();
 
-                if (!dialogContext.mounted) return;
-                Navigator.pop(dialogContext);
+              // Validaciones simples antes de enviar
+              if (name.isEmpty) return;
 
-                parentModalState(() {});
-                setState(() {});
+              if (doc.isEmpty || doc.length < 6) {
+                // Feedback visual si la cédula es muy corta
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      "Cédula inválida",
+                      style: GoogleFonts.poppins(),
+                    ),
+                  ),
+                );
+                return;
               }
+
+              await AuthService.addBeneficiary(name, doc);
+
+              if (!dialogContext.mounted) return;
+              Navigator.pop(dialogContext);
+
+              // Actualizamos la UI principal y el Modal padre
+              parentModalState(() {});
+              setState(() {});
             },
-            child: const Text("Guardar"),
+            child: Text(
+              "Guardar",
+              style: GoogleFonts.poppins(color: Colors.white),
+            ),
           ),
         ],
       ),
@@ -1744,90 +1834,55 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _assignDriverAndSimulateMovement() {
-    // 1. Validar que tengamos una posición actual antes de arrancar
-    if (_currentPosition == null) {
-      debugPrint("⚠️ No se puede simular conductor: _currentPosition es null");
-      return;
-    }
+    if (_routePoints.isEmpty) return;
 
-    // Simulamos que el conductor aparece cerca (0.005 grados de diferencia)
-    final startDriverPos = LatLng(
-      _currentPosition!.latitude - 0.005,
-      _currentPosition!.longitude - 0.005,
-    );
-
+    // 1. SETUP DE LA ANIMACIÓN
     setState(() {
-      _tripState = TripState.DRIVER_ON_WAY;
-      _driverPosition = startDriverPos;
+      // Saltamos directo a IN_TRIP para ver al carro recorrer la ruta azul
+      _tripState = TripState.IN_TRIP;
+      _driverPosition = _routePoints.first; // El carro empieza donde estás tú
+      _routeIndex = 0;
     });
 
-    // Cancelamos timer anterior si existía para evitar duplicados
     _simulationTimer?.cancel();
 
-    _simulationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      // GUARDIA 1: ¿El widget sigue vivo?
+    // 2. ANIMACIÓN FLUIDA (Cada 50ms avanza un punto en el mapa)
+    _simulationTimer = Timer.periodic(const Duration(milliseconds: 50), (
+      timer,
+    ) {
       if (!mounted) {
         timer.cancel();
         return;
       }
 
-      // GUARDIA 2: Captura segura (Snapshot) del estado actual
-      final currentUserPos = _currentPosition;
-      final currentDriverPos = _driverPosition;
-
-      // GUARDIA 3: Si alguno es nulo, detenemos la simulación inmediatamente
-      if (currentUserPos == null || currentDriverPos == null) {
-        debugPrint(
-          "Simulación detenida: Posición de usuario o conductor perdidas.",
-        );
+      // Si ya llegamos al final de la lista de puntos
+      if (_routeIndex >= _routePoints.length - 1) {
         timer.cancel();
+        // Aseguramos que llegue exacto al destino
+        setState(() => _driverPosition = _routePoints.last);
+
+        // Esperamos un momento y mostramos pago
+        Future.delayed(const Duration(seconds: 1), () {
+          if (mounted) _initiatePaymentFlow();
+        });
         return;
       }
 
-      // LÓGICA SEGURA: Usamos las variables locales 'currentUserPos' y 'currentDriverPos'
-      // que sabemos que NO son nulas aquí.
-
-      // Interpolación lineal (LERP) simple para mover al conductor 5% hacia el usuario
-      double newLat =
-          currentDriverPos.latitude +
-          (currentUserPos.latitude - currentDriverPos.latitude) * 0.05;
-
-      double newLng =
-          currentDriverPos.longitude +
-          (currentUserPos.longitude - currentDriverPos.longitude) * 0.05;
-
-      // Verificamos cercanía para "llegar"
-      // (Opcional: puedes usar una librería de distancia real aquí)
-      final distLat = (currentUserPos.latitude - newLat).abs();
-      final distLng = (currentUserPos.longitude - newLng).abs();
-
+      // Avanzamos al siguiente punto
+      _routeIndex++;
       setState(() {
-        _driverPosition = LatLng(newLat, newLng);
+        _driverPosition = _routePoints[_routeIndex];
       });
-
-      // Si está muy cerca, termina la simulación
-      if (distLat < 0.0001 && distLng < 0.0001) {
-        timer.cancel();
-        setState(() => _tripState = TripState.IN_TRIP);
-
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) {
-            _initiatePaymentFlow();
-          } // <--- ASÍ SE USA LA LÓGICA DE PAGO
-        });
-      }
     });
   }
 
   Future<void> _initiatePaymentFlow() async {
     setState(() {
-      _tripState = TripState
-          .PAYMENT; // Asegúrate de haber agregado PAYMENT al Enum TripState
+      _tripState = TripState.PAYMENT;
       _isLoadingPaymentMethods = true;
     });
 
     try {
-      // Aquí se usan las variables que te daban error de "unused"
       final methods = await PaymentService.getPaymentMethods(_currentUser);
       if (!mounted) return;
       setState(() {
@@ -1835,13 +1890,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _isLoadingPaymentMethods = false;
       });
     } catch (e) {
-      debugPrint("Error cargando pagos: $e");
       setState(() => _isLoadingPaymentMethods = false);
     }
   }
 
   void _finishTripAndSave() {
-    // 1. Guardar en el Historial
     if (_destinationName != null) {
       MenuService().addCompletedTrip(
         "Ubicación Actual",
@@ -1850,48 +1903,64 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       );
     }
 
-    // 2. Mostrar confirmación de PAGO Y VIAJE
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Column(
-          children: [
-            Icon(Icons.check_circle, color: Colors.green, size: 60),
-            SizedBox(height: 10),
-            Text(
-              "¡Pago Exitoso!",
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ), // Texto cambiado
-          ],
-        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text("Gracias por viajar con VAMOS."),
-            const SizedBox(height: 10),
+            const Icon(Icons.check_circle, color: Colors.green, size: 60),
+            const SizedBox(height: 20),
             Text(
-              "Total Pagado: \$ ${_formatCurrency(_tripPrice)}",
-              style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey[800]),
+              "¡Pago Exitoso!",
+              style: GoogleFonts.poppins(
+                fontWeight: FontWeight.bold,
+                fontSize: 20,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text("Gracias por viajar con VAMOS.", style: GoogleFonts.poppins()),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                "Total: \$ ${_formatCurrency(_tripPrice)}",
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
             ),
           ],
         ),
         actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.black,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryGreen,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
-            ),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _resetApp();
-            },
-            child: const Text(
-              "Finalizar",
-              style: TextStyle(color: Colors.white),
+              onPressed: () {
+                Navigator.pop(ctx);
+                _resetApp();
+              },
+              child: Text(
+                "Finalizar",
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
           ),
         ],
@@ -1943,28 +2012,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     ),
   );
 
+  // --- WIDGET BUSCADOR ESTILO INPUT ---
   Widget _buildSearchWidget() => GestureDetector(
     onTap: () async {
       final result = await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => SearchDestinationScreen(
-            currentPosition: _currentPosition, // <--- ESTO ES LA CLAVE
-          ),
+          builder: (_) =>
+              SearchDestinationScreen(currentPosition: _currentPosition),
         ),
       );
 
       if (result != null) {
-        // CASO A: El usuario eligió "Fijar en mapa"
         if (result['isMapPick'] == true) {
           setState(() {
-            _isPickingLocation = true; // Activamos el modo Picker
-            _mapCenterPicker =
-                _mapController.camera.center; // Iniciamos donde esté la cámara
+            _isPickingLocation = true;
+            _mapCenterPicker = _mapController.camera.center;
           });
-        }
-        // CASO B: Eligió una dirección de la lista
-        else {
+        } else {
           setState(() {
             _destinationName = result['name'];
             _destinationCoordinates = LatLng(result['lat'], result['lng']);
@@ -1974,23 +2039,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       }
     },
     child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(15),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 15),
-        ],
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
       ),
       child: Row(
         children: [
-          const Icon(Icons.circle, size: 12, color: AppColors.primaryGreen),
+          Icon(
+            Icons.circle,
+            size: 12,
+            color: _currentUser.isCorporateMode
+                ? Colors.blue[800]
+                : AppColors.primaryGreen,
+          ),
           const SizedBox(width: 15),
           Text(
             "¿A dónde vas?",
             style: GoogleFonts.poppins(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
+              fontSize: 14,
+              color: Colors.grey.shade600,
             ),
           ),
           const Spacer(),
@@ -2007,13 +2076,35 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         color: _currentUser.isCorporateMode
             ? Colors.blue[800]
             : AppColors.primaryGreen,
+        borderRadius: BorderRadius.circular(10),
       ),
-      const SizedBox(height: 20),
+      const SizedBox(height: 25),
       Text(
         "Buscando conductor...",
-        style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600),
+        style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold),
       ),
-      OutlinedButton(onPressed: _resetApp, child: const Text("Cancelar")),
+      const SizedBox(height: 5),
+      Text(
+        "Estamos conectando con los conductores cercanos",
+        style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey),
+      ),
+      const SizedBox(height: 25),
+      SizedBox(
+        width: double.infinity,
+        height: 50,
+        child: OutlinedButton(
+          onPressed: _resetApp,
+          style: OutlinedButton.styleFrom(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          child: Text(
+            "Cancelar Solicitud",
+            style: GoogleFonts.poppins(color: Colors.grey[700]),
+          ),
+        ),
+      ),
     ],
   );
 
@@ -2022,17 +2113,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     children: [
       Text(
         "Conductor en camino",
-        style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 18),
+        style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 20),
       ),
+      const SizedBox(height: 5),
       Text(
         "Llegada en $_driverEta",
-        style: GoogleFonts.poppins(color: Colors.grey, fontSize: 14),
+        style: GoogleFonts.poppins(
+          color: AppColors.primaryGreen,
+          fontWeight: FontWeight.bold,
+          fontSize: 14,
+        ),
       ),
-      const SizedBox(height: 10),
-      const Icon(Icons.local_taxi, size: 50),
+      const SizedBox(height: 20),
+      Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade50,
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(Icons.local_taxi, size: 40, color: Colors.black87),
+      ),
+      const SizedBox(height: 20),
       TextButton(
         onPressed: _resetApp,
-        child: const Text("Cancelar", style: TextStyle(color: Colors.red)),
+        child: Text(
+          "Cancelar Viaje",
+          style: GoogleFonts.poppins(color: Colors.red),
+        ),
       ),
     ],
   );
@@ -2045,20 +2152,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       );
 
   // ===============================================================
-  // 5. MODAL DE VINCULACIÓN CORPORATIVA (SELECCIÓN SIMPLE)
+  // 5. MODAL DE VINCULACIÓN CORPORATIVA
   // ===============================================================
 
   void _showCorporateLinkingModal() {
-    // Variable para guardar la empresa seleccionada del Dropdown
     Map<String, String>? selectedCompany;
-
-    // Variable para controlar si mostramos el estado de "Verificando..."
     bool isVerifying = false;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      isDismissible: !isVerifying, // No cerrar mientras verifica
+      isDismissible: !isVerifying,
       enableDrag: !isVerifying,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
@@ -2077,7 +2181,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // --- CABECERA ---
                   Row(
                     children: [
                       Container(
@@ -2089,10 +2192,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         child: Icon(Icons.domain, color: Colors.blue[900]),
                       ),
                       const SizedBox(width: 12),
-                      const Expanded(
+                      Expanded(
                         child: Text(
-                          "Activar Modo Corporativo",
-                          style: TextStyle(
+                          "Modo Corporativo",
+                          style: GoogleFonts.poppins(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
                           ),
@@ -2105,92 +2208,111 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                     ],
                   ),
-                  const Divider(),
-                  const SizedBox(height: 15),
+                  const SizedBox(height: 20),
 
-                  // --- CUERPO: CASO 1 (VERIFICANDO) ---
                   if (isVerifying) ...[
                     Center(
                       child: Column(
                         children: [
-                          const SizedBox(height: 20),
                           const CircularProgressIndicator(),
                           const SizedBox(height: 20),
                           Text(
-                            "Validando con la empresa...",
+                            "Validando...",
                             style: GoogleFonts.poppins(
                               fontWeight: FontWeight.bold,
-                              fontSize: 16,
                             ),
                           ),
                           const SizedBox(height: 10),
                           Text(
-                            "Consultando cédula ${_currentUser.documentNumber}\nen la base de datos de ${selectedCompany?['name']}...",
-                            textAlign: TextAlign.center,
+                            "Verificando con ${selectedCompany?['name']}",
                             style: GoogleFonts.poppins(color: Colors.grey),
                           ),
-                          const SizedBox(height: 30),
+                          const SizedBox(height: 20),
                         ],
                       ),
                     ),
-
-                    // --- CUERPO: CASO 2 (FORMULARIO) ---
                   ] else ...[
                     Text(
-                      "Selecciona la empresa a la que perteneces. Validaremos automáticamente si tu documento está autorizado.",
-                      style: GoogleFonts.poppins(
-                        color: Colors.grey[700],
-                        fontSize: 13,
-                      ),
+                      "Selecciona tu empresa para validar tu documento.",
+                      style: GoogleFonts.poppins(color: Colors.grey[600]),
                     ),
-                    const SizedBox(height: 25),
-
-                    // DROPDOWN CON FUTURE BUILDER
-                    const Text(
+                    const SizedBox(height: 20),
+                    Text(
                       "Empresa",
-                      style: TextStyle(fontWeight: FontWeight.bold),
+                      style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
                     FutureBuilder<List<Map<String, String>>>(
-                      future:
-                          AuthService.getAvailableCompanies(), // Método nuevo
+                      future: AuthService.getAvailableCompanies(),
                       builder: (context, snapshot) {
                         if (!snapshot.hasData) {
                           return Container(
-                            height: 55,
+                            height: 56,
                             decoration: BoxDecoration(
-                              color: Colors.grey[100],
+                              color: Colors.grey[50],
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: const Center(
-                              child: Text("Cargando empresas..."),
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
                             ),
                           );
                         }
 
+                        final List<Map<String, String>> companiesList =
+                            snapshot.data!;
+
                         return Container(
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey.shade400),
+                            color: Colors.grey.shade50,
+                            border: Border.all(color: Colors.grey.shade200),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: DropdownButtonHideUnderline(
-                            child: DropdownButton<Map<String, String>>(
+                            // CAMBIO 1: El tipo del Dropdown ahora es String (el NIT), no Map
+                            child: DropdownButton<String>(
                               isExpanded: true,
-                              hint: const Text("Toca para seleccionar..."),
-                              value: selectedCompany,
-                              items: snapshot.data!.map((company) {
-                                return DropdownMenuItem(
-                                  value: company,
+                              hint: Text(
+                                "Toca para seleccionar...",
+                                style: GoogleFonts.poppins(
+                                  color: Colors.grey[600],
+                                  fontSize: 14,
+                                ),
+                              ),
+                              // CAMBIO 2: El valor seleccionado es solo el NIT (String)
+                              // Si selectedCompany es nulo, el valor es nulo.
+                              value: selectedCompany?['nit'],
+
+                              // CAMBIO 3: Mapeamos los items usando el NIT como valor
+                              items: companiesList.map((company) {
+                                return DropdownMenuItem<String>(
+                                  value:
+                                      company['nit'], // El valor interno es el NIT
                                   child: Text(
                                     company['name']!,
                                     style: GoogleFonts.poppins(),
                                   ),
                                 );
                               }).toList(),
-                              onChanged: (val) {
+
+                              // CAMBIO 4: Al cambiar, buscamos el objeto completo usando el NIT
+                              onChanged: (String? newNit) {
+                                if (newNit == null) return;
+
+                                // Buscamos el mapa completo en la lista original
+                                final fullCompanyObject = companiesList
+                                    .firstWhere(
+                                      (element) => element['nit'] == newNit,
+                                    );
+
                                 setModalState(() {
-                                  selectedCompany = val;
+                                  selectedCompany = fullCompanyObject;
                                 });
                               },
                             ),
@@ -2199,49 +2321,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       },
                     ),
 
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 30),
 
-                    // BOTÓN DE ACCIÓN
                     SizedBox(
                       width: double.infinity,
+                      height: 56,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.blue[800],
-                          padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(15),
                           ),
-                          disabledBackgroundColor: Colors.grey[300],
+                          elevation: 4,
                         ),
                         onPressed: selectedCompany == null
                             ? null
                             : () async {
-                                // 1. CAMBIAR ESTADO A VERIFICANDO
                                 setModalState(() {
                                   isVerifying = true;
                                 });
 
-                                // 2. LLAMAR AL SERVICIO
                                 bool success =
                                     await AuthService.verifyAndLinkCompanyFromBackend(
                                       nit: selectedCompany!['nit']!,
                                       companyName: selectedCompany!['name']!,
                                     );
 
-                                // 3. MANEJAR RESPUESTA
                                 if (!context.mounted) return;
-
-                                // Cerramos el modal de formulario
                                 Navigator.pop(context);
 
                                 if (success) {
-                                  // ÉXITO
-                                  setState(() {
-                                    // Forzamos rebuild del Home para ver el cambio de color
-                                  });
+                                  setState(() {});
                                   _showSuccessDialog(selectedCompany!['name']!);
                                 } else {
-                                  // FALLO
                                   _showRejectionDialog(
                                     selectedCompany!['name']!,
                                   );
@@ -2257,7 +2369,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 10),
                   ],
                 ],
               ),
@@ -2268,13 +2380,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  // --- DIÁLOGO DE ÉXITO ---
   void _showSuccessDialog(String companyName) {
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -2291,16 +2402,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             Text(
               "Tu identidad ha sido verificada correctamente por $companyName.",
               textAlign: TextAlign.center,
+              style: GoogleFonts.poppins(),
             ),
           ],
         ),
         actions: [
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
             onPressed: () => Navigator.pop(ctx),
-            child: const Text(
-              "Ir a Modo Corporativo",
-              style: TextStyle(color: Colors.white),
+            child: Text(
+              "Continuar",
+              style: GoogleFonts.poppins(color: Colors.white),
             ),
           ),
         ],
@@ -2308,29 +2425,36 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  // --- DIÁLOGO DE RECHAZO ---
   void _showRejectionDialog(String companyName) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
             const Icon(Icons.error_outline, color: Colors.red),
             const SizedBox(width: 10),
-            const Text("Verificación Fallida"),
+            Expanded(
+              child: Text(
+                "Verificación Fallida",
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ),
           ],
         ),
         content: Text(
-          "No encontramos la cédula ${_currentUser.documentNumber} en la lista de empleados activos de $companyName.\n\nPor favor contacta a RRHH de tu empresa.",
+          "No encontramos la cédula ${_currentUser.documentNumber} activa en $companyName.",
           style: GoogleFonts.poppins(fontSize: 14),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text(
+            child: Text(
               "Intentar de nuevo",
-              style: TextStyle(color: Colors.red),
+              style: GoogleFonts.poppins(color: Colors.red),
             ),
           ),
         ],
@@ -2340,10 +2464,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _confirmMapSelection() async {
     if (_mapCenterPicker == null) return;
-
     setState(() => _isLoadingAddress = true);
 
-    // Llamamos al servicio para traducir coordenadas a texto
     String address = await _osmService.getAddressFromCoordinates(
       _mapCenterPicker!,
     );
@@ -2352,14 +2474,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     setState(() {
       _isLoadingAddress = false;
-      _isPickingLocation = false; // Salimos del modo picker
-
-      // Seteamos el destino
+      _isPickingLocation = false;
       _destinationName = address;
       _destinationCoordinates = _mapCenterPicker;
     });
 
-    // Calculamos la ruta inmediatamente
     _calculateRouteAndPrice(_destinationCoordinates!);
   }
 }

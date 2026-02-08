@@ -14,6 +14,7 @@ class WelcomeScreen extends StatefulWidget {
 }
 
 class _WelcomeScreenState extends State<WelcomeScreen> {
+  // Controla la visualización del Splash/Loading mientras verificamos credenciales
   bool _isLoading = true;
 
   @override
@@ -22,20 +23,25 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     _checkSession();
   }
 
-  // Intenta recuperar sesión guardada
+  /// LÓGICA DE NEGOCIO: Verificación de Sesión Persistente
+  ///
+  /// Antes de mostrar cualquier botón, consultamos al [AuthService] si existe
+  /// un token válido (Sanctum) o una sesión Mock guardada.
+  /// Esto evita que un usuario logueado tenga que volver a ingresar sus datos.
   Future<void> _checkSession() async {
-    // Esto llamará al método de AuthService.
-    // Como está en modo Mock devuelve false y muestra los botones.
-    // Cuando tengas backend, si devuelve true, salta al Home.
+    // 1. Llama al servicio (actualmente Mock, futuro API Laravel /user)
     final hasSession = await AuthService.tryAutoLogin();
 
     if (hasSession && mounted) {
+      // 2. Si hay sesión, limpiamos el historial de navegación y vamos al Mapa/Home.
+      // Esto es vital para evitar que el botón "Atrás" devuelva al usuario al Login.
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(builder: (context) => const HomeScreen()),
         (route) => false,
       );
     } else {
+      // 3. Si no hay sesión, dejamos de cargar y mostramos la UI de bienvenida.
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -48,7 +54,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
 
-    // Loading inicial
+    // ESTADO: CARGANDO
+    // Se muestra mientras validamos el token localmente o contra la API.
     if (_isLoading) {
       return const Scaffold(
         backgroundColor: AppColors.bgColor,
@@ -58,20 +65,12 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       );
     }
 
+    // ESTADO: SIN SESIÓN (Mostrar Opciones)
     return Scaffold(
       backgroundColor: AppColors.bgColor,
       body: Stack(
         children: [
-          // Decoración
-          Positioned(
-            top: -50,
-            right: -50,
-            child: CircleAvatar(
-              radius: 130,
-              backgroundColor: AppColors.primaryGreen.withValues(alpha: 0.08),
-            ),
-          ),
-
+          // --- CONTENIDO PRINCIPAL ---
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32.0),
@@ -79,13 +78,15 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                 children: [
                   const Spacer(flex: 2),
 
-                  // Logo
+                  // 1. BRANDING
+                  // El logo debe inspirar confianza (Transporte Legal)
                   Hero(
-                    tag: 'logo',
+                    tag: 'logo', // Animación suave al transicionar a Login
                     child: Image.asset(
                       'assets/images/logo.png',
                       width: size.width * 0.65,
                       fit: BoxFit.contain,
+                      // Fallback por si no has cargado el asset aún
                       errorBuilder: (context, error, stackTrace) => const Icon(
                         Icons.directions_bus,
                         size: 100,
@@ -96,8 +97,9 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
                   const SizedBox(height: 24),
 
+                  // 2. PROPUESTA DE VALOR
                   Text(
-                    "Bienvenido a VAMOS",
+                    "Bienvenido a Vamos App",
                     style: GoogleFonts.poppins(
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
@@ -106,7 +108,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    "Movilidad legal y segura bajo la modalidad de Transporte Especial.",
+                    "Viaja seguro, puntual y con el mejor servicio de movilidad del país.",
                     textAlign: TextAlign.center,
                     style: GoogleFonts.poppins(
                       fontSize: 14,
@@ -119,16 +121,19 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   const Spacer(flex: 3),
 
                   Text(
-                    "Selecciona tu perfil para continuar:",
+                    "SELECCIONA TU PERFIL",
                     style: GoogleFonts.poppins(
                       fontSize: 14,
-                      color: Colors.grey.shade500,
-                      fontWeight: FontWeight.w500,
+                      color: const Color.fromARGB(255, 141, 141, 141),
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 20),
 
-                  // BOTÓN 1: EMPRESA
+                  // --- BOTONES DE ACCIÓN (SEGMENTACIÓN DE USUARIO) ---
+
+                  // OPCIÓN A: FLUJO B2B (Empresas)
+                  // Este flujo lleva al registro de empresas donde se configura el "contract_id" de Moviltrack. Es para administradores de cuenta.
                   _buildRoleButton(
                     context,
                     label: "Registrar mi Empresa",
@@ -144,7 +149,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // BOTÓN 2: PASAJERO
+                  // OPCIÓN B: FLUJO USUARIO FINAL / EMPLEADO (Pasajeros)
+                  // Este flujo lleva al Login/Registro de personas naturales. Aquí es donde se pedirán los viajes y se generarán los FUEC.
                   _buildRoleButton(
                     context,
                     label: "Soy Pasajero",
@@ -168,6 +174,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     );
   }
 
+  /// Botón de Selección de Rol
+  /// Encapsula el diseño repetitivo de los botones grandes con icono y texto.
   Widget _buildRoleButton(
     BuildContext context, {
     required String label,
@@ -176,24 +184,29 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     required VoidCallback onPressed,
     required bool isPrimary,
   }) {
+    // Definimos los colores basados en si es primario o secundario
+    final bgColor = isPrimary ? AppColors.primaryGreen : Colors.white;
+    final fgColor = isPrimary ? Colors.white : AppColors.primaryGreen;
+    final borderColor = isPrimary ? Colors.transparent : AppColors.primaryGreen;
+
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton(
         onPressed: onPressed,
         style: ElevatedButton.styleFrom(
-          backgroundColor: isPrimary ? AppColors.primaryGreen : Colors.white,
-          foregroundColor: isPrimary ? Colors.white : AppColors.primaryGreen,
+          backgroundColor: bgColor,
+          foregroundColor: fgColor,
           padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
           elevation: isPrimary ? 3 : 0,
-          side: isPrimary
-              ? null
-              : const BorderSide(color: AppColors.primaryGreen, width: 1.5),
+          // Borde solo si no es primario
+          side: isPrimary ? null : BorderSide(color: borderColor, width: 1.5),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
         ),
         child: Row(
           children: [
+            // Icono con fondo translúcido
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
@@ -205,6 +218,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               child: Icon(icon, size: 24),
             ),
             const SizedBox(width: 16),
+
+            // Textos (Título y Subtítulo)
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -220,6 +235,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                     subLabel,
                     style: GoogleFonts.poppins(
                       fontSize: 11,
+                      // Ajuste de contraste para legibilidad
                       color: isPrimary
                           ? Colors.white.withValues(alpha: 0.9)
                           : Colors.grey.shade600,
@@ -228,6 +244,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                 ],
               ),
             ),
+
+            // Flecha indicadora
             Icon(
               Icons.arrow_forward_ios_rounded,
               size: 16,
