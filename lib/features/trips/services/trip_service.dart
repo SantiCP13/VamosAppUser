@@ -35,7 +35,7 @@ class TripService {
       'requested_by_user_id': currentUser.id,
 
       // FK: Empresa responsable (Tabla COMPANIES).
-      // Si es personal, va null. Si es corporativo, va el UUID (no el NIT).
+      // Si es personal, va null. Si es corporativo, va el UUID.
       'company_id': currentUser.isCorporateMode
           ? currentUser.companyUuid
           : null,

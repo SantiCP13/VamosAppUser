@@ -168,7 +168,7 @@ class User {
       'address': address,
       'company_name': empresa,
       'company_nit': nitEmpresa,
-      'company_id': companyUuid, // Incluir en persistencia local
+      'company_id': companyUuid,
       'role': role == UserRole.EMPLEADO ? 'EMPLEADO' : 'NATURAL',
       'status': verificationStatus.name,
       'app_mode': appMode == AppMode.CORPORATE ? 'CORPORATE' : 'PERSONAL',
