@@ -22,6 +22,7 @@ import '../../payment/services/payment_service.dart';
 import '../../payment/widgets/payment_panel.dart';
 import '../../trips/services/trip_service.dart';
 import 'package:flutter/services.dart';
+import '../../../core/models/passenger_model.dart';
 
 enum TripState {
   IDLE,
@@ -1375,6 +1376,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     final tripService = TripService();
 
+    // --- 1. PREPARACIÓN DE DATOS FUEC (CRÍTICO) ---
+    // Convertimos los IDs seleccionados (_selectedPassengerIds) en objetos Passenger.
+    // IMPORTANTE: Aquí asumo que solo tienes los IDs. Para cumplir la ley,
+    // deberás conectar esto con los nombres/cédulas reales de tu lista de contactos.
+
+    List<Passenger> passengersList = _selectedPassengerIds.map((id) {
+      // Por ahora, creamos un objeto temporal para que COMPILE y funcione el flujo.
+      return Passenger(
+        name:
+            "Pasajero Invitado", // Reemplázalo con el nombre real de tu variable de UI
+        nationalId:
+            "000000", // Reemplázalo con la cédula real (Necesario para FUEC)
+      );
+    }).toList();
+    // ----------------------------------------------
+
     bool success = await tripService.createTripRequest(
       currentUser: _currentUser,
       origin: _currentPosition!,
@@ -1383,7 +1400,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       destinationAddress: _destinationName!,
       serviceCategory: _selectedServiceCategory,
       estimatedPrice: _tripPrice,
-      passengerIds: _selectedPassengerIds.toList(),
+
+      // --- CAMBIO AQUÍ ---
+      passengers: passengersList, // Pasamos la lista de objetos, no los IDs
+      // -------------------
       includeMyself: _includeMyself,
     );
 

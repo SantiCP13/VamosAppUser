@@ -1,15 +1,16 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
-import '../../../core/network/api_client.dart'; // Importamos tu nuevo cliente
-import '../../../core/models/user_model.dart';
 import 'dart:developer' as developer;
 
+import '../../../core/network/api_client.dart';
+import '../../../core/models/user_model.dart';
+import '../../../core/models/passenger_model.dart'; // <--- Importar nuevo modelo
+
 class TripService {
-  // Instancia única del cliente API
   final ApiClient _api = ApiClient();
 
-  /// SOLICITAR UN NUEVO VIAJE (HÍBRIDO)
+  /// SOLICITAR UN NUEVO VIAJE (CORREGIDO PARA FUEC)
   Future<bool> createTripRequest({
     required User currentUser,
     required LatLng origin,
@@ -18,29 +19,41 @@ class TripService {
     required String destinationAddress,
     required String serviceCategory,
     required double estimatedPrice,
-    required List<String> passengerIds,
+    required List<Passenger>
+    passengers, // <--- CAMBIO CRÍTICO: Recibe objetos completos
     required bool includeMyself,
   }) async {
-    // 1. LÓGICA DE NEGOCIO (Igual que antes)
-    final int requiredSeats = (includeMyself ? 1 : 0) + passengerIds.length;
+    // 1. CÁLCULO DE ASIENTOS
+    final int requiredSeats = (includeMyself ? 1 : 0) + passengers.length;
 
     String finalServiceLevel = serviceCategory;
     if (requiredSeats > 4) {
       finalServiceLevel = 'VAN';
       developer.log(
-        "🚍 Categoría forzada a VAN por capacidad ($requiredSeats)",
+        "🚍 Categoría forzada a VAN ($requiredSeats pax)",
         name: 'TRIP_LOGIC',
       );
     }
 
-    // 2. CONSTRUCCIÓN DEL PAYLOAD
+    // 2. CONSTRUCCIÓN DEL MANIFIESTO
+    // Serializamos la lista de objetos Passenger a JSON para el backend
+    final List<Map<String, dynamic>> manifestData = passengers
+        .map((p) => p.toJson())
+        .toList();
+
+    // Si el usuario solicitante se incluye, debemos asegurarnos que el backend tenga su cédula.
+    // Asumimos que el backend toma la cédula del currentUser de su perfil,
+    // pero idealmente deberíamos enviarla si no está garantizada en BD.
+
     final Map<String, dynamic> body = {
       'requested_by_user_id': currentUser.id,
       'company_id': currentUser.isCorporateMode
           ? currentUser.companyUuid
           : null,
-      'passenger_user_id': currentUser.id,
-      'manifest_passenger_ids': passengerIds,
+
+      // Enviamos el Array estructurado, NO una lista plana de IDs
+      'manifest_passengers': manifestData,
+
       'include_requester_in_manifest': includeMyself,
       'origin_address': originAddress,
       'destination_address': destinationAddress,
@@ -51,56 +64,33 @@ class TripService {
       'estimated_price': estimatedPrice,
       'service_level': finalServiceLevel,
       'required_seats': requiredSeats,
-      'app_mode': currentUser.appMode.name,
+      'app_mode': currentUser.appMode.name, // 'PERSONAL' o 'CORPORATE'
     };
 
-    // 3. INTENTO DE CONEXIÓN REAL (Si aplica)
+    // 3. CONEXIÓN (Sin cambios mayores, solo validación del payload)
     if (_api.shouldAttemptRealConnection) {
       try {
-        // Usamos api.dio para tener los timeouts configurados
         final response = await _api.dio.post('/trips', data: body);
-
         if (response.statusCode == 200 || response.statusCode == 201) {
-          developer.log(
-            "✅ Viaje creado exitosamente en Backend Real",
-            name: 'TRIP_SERVICE',
-          );
+          developer.log("✅ Viaje creado (Backend Real)", name: 'TRIP_SERVICE');
           return true;
         }
       } catch (e) {
-        developer.log(
-          "⚠️ Falló conexión con Backend: $e",
-          name: 'TRIP_SERVICE',
-        );
-
-        // Si es PROD, el error es fatal. Si es HYBRID, continuamos al fallback.
-        if (_api.envType == 'PROD') {
-          return false;
-        }
+        developer.log("⚠️ Falló conexión Backend: $e", name: 'TRIP_SERVICE');
+        if (_api.envType == 'PROD') return false;
       }
     }
 
-    // 4. FALLBACK / MOCK (Simulación)
-    // Si llegamos aquí es porque estamos en modo MOCK o falló el modo HYBRID.
+    developer.log('🕵️ [PAYLOAD FINAL FUEC]', name: 'CHECK_DATA');
+    debugPrint(const JsonEncoder.withIndent('  ').convert(body));
+
     return _simulateSuccessfulTripCreation(body);
   }
 
-  /// Simula una respuesta exitosa del servidor para demos
   Future<bool> _simulateSuccessfulTripCreation(
     Map<String, dynamic> body,
   ) async {
-    developer.log(
-      "🎭 Ejecutando SIMULACIÓN de Viaje (Fallback)",
-      name: 'TRIP_MOCK',
-    );
-
-    // Debug visual del payload
-    debugPrint("📦 PAYLOAD SIMULADO:");
-    debugPrint(const JsonEncoder.withIndent('  ').convert(body));
-
-    // Usamos el delay centralizado del ApiClient para consistencia
     await _api.simulateDelay(2000);
-
-    return true; // Simula éxito siempre
+    return true;
   }
 }

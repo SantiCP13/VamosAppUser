@@ -1,5 +1,6 @@
 // lib/core/models/trip_model.dart
 import 'package:intl/intl.dart';
+import 'passenger_model.dart';
 
 /// MODELO DE VIAJE (TRIP)
 ///
@@ -65,6 +66,9 @@ class TripModel {
   /// Número consecutivo del contrato generado. Se muestra en el PDF.
   final String? contractNumber;
 
+  final List<Passenger>
+  passengers; // Lista de pasajeros adicionales (beneficiarios)
+
   TripModel({
     required this.id,
     required this.dateRaw,
@@ -82,6 +86,7 @@ class TripModel {
     this.externalFuecId,
     this.urlPdfFuec,
     this.contractNumber,
+    required this.passengers,
   });
 
   factory TripModel.fromJson(Map<String, dynamic> json) {
@@ -89,46 +94,42 @@ class TripModel {
     final driverData = json['driver'] is Map ? json['driver'] : {};
     final vehicleData = json['vehicle'] is Map ? json['vehicle'] : {};
 
+    // --- PARSEO DE LISTA DE PASAJEROS ---
+    var passengerList = <Passenger>[];
+    if (json['passengers'] != null) {
+      json['passengers'].forEach((v) {
+        passengerList.add(Passenger.fromJson(v));
+      });
+    }
+
     return TripModel(
       id: json['id']?.toString() ?? 'Unknown',
-
-      // Soporta diferentes formatos de fecha que pueda enviar Laravel
       dateRaw:
           json['created_at'] ??
           json['date'] ??
           DateTime.now().toIso8601String(),
-
       origin: json['origin_address'] ?? json['origin'] ?? 'Origen desconocido',
-
       destination:
           json['destination_address'] ??
           json['destination'] ??
           'Destino desconocido',
-
       price: double.tryParse(json['price'].toString()) ?? 0.0,
       status: json['status'] ?? 'SEARCHING',
 
-      // --- MAPEADO DE DATOS OPERATIVOS (JOINs) ---
-
-      // Se extraen del objeto anidado 'driver' si existe
       driverId: driverData['id']?.toString(),
       driverName: driverData['name'] ?? json['driver_name'],
       driverPhotoUrl: driverData['photo_url'] ?? json['driver_photo'],
 
-      // Se extraen del objeto anidado 'vehicle' si existe
       vehicleId: vehicleData['id']?.toString(),
-      vehiclePlate:
-          vehicleData['placa'] ?? json['vehicle_plate'], // 'plate' en DB
-      vehicleModel:
-          vehicleData['modelo'] ?? json['vehicle_model'], // 'model' en DB
+      vehiclePlate: vehicleData['placa'] ?? json['vehicle_plate'],
+      vehicleModel: vehicleData['modelo'] ?? json['vehicle_model'],
       vehicleColor: vehicleData['color'] ?? json['vehicle_color'],
 
-      // --- MAPEADO DE DATOS LEGALES (FUEC) ---
-
-      // Estos llegan nulos al principio y se llenan tras la respuesta de Moviltrack
       externalFuecId: int.tryParse(json['external_fuec_id'].toString()),
       urlPdfFuec: json['url_pdf_fuec'],
       contractNumber: json['contract_number_generated'],
+
+      passengers: passengerList, // <--- Asignación
     );
   }
 
@@ -151,6 +152,12 @@ class TripModel {
       }
       return dateRaw;
     }
+  }
+
+  String get passengerSummary {
+    if (passengers.isEmpty) return 'Sin pasajeros registrados';
+    if (passengers.length == 1) return passengers.first.name;
+    return '${passengers.first.name} +${passengers.length - 1}';
   }
 
   /// Formatea el precio a pesos colombianos

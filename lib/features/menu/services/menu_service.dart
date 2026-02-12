@@ -42,6 +42,7 @@ class MenuService {
       destination: destination,
       price: price,
       status: "COMPLETED",
+      passengers: [],
     );
 
     // Lo agregamos al inicio para que salga de primero
