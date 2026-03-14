@@ -10,7 +10,14 @@ import 'pending_approval_screen.dart';
 import 'welcome_screen.dart';
 
 class VerificationCheckScreen extends StatefulWidget {
-  const VerificationCheckScreen({super.key});
+  final bool? isCorporateRegistration; // 🔥 NUEVO
+  final String? companyName; // 🔥 NUEVO
+
+  const VerificationCheckScreen({
+    super.key,
+    this.isCorporateRegistration,
+    this.companyName,
+  });
 
   @override
   State<VerificationCheckScreen> createState() =>
@@ -173,9 +180,16 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
     }
 
     if (_status == UserVerificationStatus.CREATED) {
+      // 1. Usamos la variable que pasamos directamente desde el formulario
+      // 2. Si está vacía (ej. cerró y abrió la app), leemos la BD como respaldo
+      bool isCorporate =
+          widget.isCorporateRegistration ??
+          (_currentUser?.empresa != null && _currentUser!.empresa!.isNotEmpty);
+
       return PendingApprovalScreen(
-        isNatural: false,
-        empresaNombre: _currentUser?.empresa ?? "Tu Empresa",
+        isNatural: !isCorporate,
+        empresaNombre:
+            widget.companyName ?? _currentUser?.empresa ?? "tu empresa",
       );
     }
 

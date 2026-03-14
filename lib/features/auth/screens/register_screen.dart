@@ -121,39 +121,88 @@ class _RegisterScreenState extends State<RegisterScreen> {
       return;
     }
 
-    setState(() => _isLoading = true);
+    // 🔥 3. MOSTRAR PANTALLA DE CARGA (MODAL INAMOVIBLE)
+    showDialog(
+      context: context,
+      barrierDismissible:
+          false, // Evita que el usuario lo cierre tocando afuera
+      builder: (BuildContext c) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(color: AppColors.primaryGreen),
+                const SizedBox(height: 20),
+                Text(
+                  "Vinculando cuenta...",
+                  style: GoogleFonts.poppins(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  "Enviando solicitud corporativa.",
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
 
     try {
       final payload = {
-        'tipo_persona': 'CORPORATIVO',
         'email': _emailController.text.trim(),
         'password': _passwordController.text,
         'nombre': _nombreController.text.trim(),
         'documento': _docController.text.trim(),
         'telefono': _telefonoController.text.trim(),
         'direccion': _direccionController.text.trim(),
-        'nombre_empresa': _selectedCompanyName,
-        'nit_empresa': _selectedCompanyNit,
+        // ⚠️ ALERTA: Asegúrate de que tu CompanySelectorWidget devuelva el ID de base de datos en lugar del NIT.
+        // Laravel tiene la regla 'empresa' => 'exists:empresas,id'. Si le pasas un NIT de texto, dará error 422.
+        'empresa_id': _selectedCompanyNit,
       };
 
-      // 3. Llamada al Servicio
+      // Llamada al servicio
       bool success = await AuthService.registerCorporateUser(payload);
 
       if (!mounted) return;
 
+      // 🔥 CERRAMOS EL MODAL DE CARGA
+      Navigator.of(context).pop();
+
       if (success) {
-        Navigator.pushAndRemoveUntil(
+        Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const VerificationCheckScreen()),
-          (route) => false,
+          MaterialPageRoute(
+            builder: (_) => VerificationCheckScreen(
+              isCorporateRegistration:
+                  true, // 🔥 Le avisamos que es Corporativo
+              companyName:
+                  _selectedCompanyName, // 🔥 Le mandamos el nombre exacto de la empresa
+            ),
+          ),
         );
       } else {
         throw Exception("Error al procesar el registro.");
       }
     } catch (e) {
+      if (!mounted) return;
+      // SI HAY ERROR: Cerramos el modal de carga y mostramos el error rojo
+      Navigator.of(context).pop();
       _showSnack(e.toString().replaceAll("Exception: ", ""), isError: true);
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
     }
   }
 

@@ -4,7 +4,8 @@ import '../../services/auth_service.dart';
 import '../../../../core/theme/app_colors.dart';
 
 class CompanySelectorWidget extends StatefulWidget {
-  final Function(String name, String nit) onCompanySelected;
+  // 🔥 AHORA DEVUELVE EL ID EN LUGAR DEL NIT
+  final Function(String name, String idEmpresa) onCompanySelected;
 
   const CompanySelectorWidget({super.key, required this.onCompanySelected});
 
@@ -15,7 +16,7 @@ class CompanySelectorWidget extends StatefulWidget {
 class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
   List<Map<String, String>> _companies = [];
   bool _isLoading = true;
-  String? _selectedNit;
+  String? _selectedId; // 🔥 Cambiado para almacenar el ID
 
   @override
   void initState() {
@@ -35,17 +36,15 @@ class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        // Opcional: Manejar error visualmente
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // ESTADO DE CARGA: Simulamos un input desactivado para mantener el diseño estable
     if (_isLoading) {
       return Container(
-        height: 60, // Altura estándar del input
+        height: 60,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
           color: Colors.grey.shade50,
@@ -72,18 +71,34 @@ class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
       );
     }
 
+    if (_companies.isEmpty) {
+      return Container(
+        height: 60,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.red.shade200),
+        ),
+        alignment: Alignment.centerLeft,
+        child: Text(
+          "No hay empresas disponibles.",
+          style: GoogleFonts.poppins(color: Colors.red.shade400),
+        ),
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         DropdownButtonFormField<String>(
-          isExpanded: true, // Importante para evitar overflow en nombres largos
+          isExpanded: true,
           decoration: InputDecoration(
             labelText: "Seleccionar Empresa",
             labelStyle: GoogleFonts.poppins(
               fontSize: 14,
               color: Colors.grey.shade600,
             ),
-            // Mismo icono y color que los otros inputs
             prefixIcon: const Icon(
               Icons.business_center_outlined,
               size: 20,
@@ -91,7 +106,6 @@ class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
             ),
             filled: true,
             fillColor: Colors.grey.shade50,
-            // Bordes unificados con el resto de la app
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
               borderSide: BorderSide.none,
@@ -116,7 +130,7 @@ class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
             Icons.keyboard_arrow_down_rounded,
             color: Colors.grey.shade600,
           ),
-          value: _selectedNit,
+          initialValue: _selectedId,
           hint: Text(
             "Toca para ver la lista",
             style: GoogleFonts.poppins(
@@ -126,7 +140,7 @@ class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
           ),
           items: _companies.map((company) {
             return DropdownMenuItem<String>(
-              value: company['nit'],
+              value: company['id'], // 🔥 AHORA EL VALUE ES EL ID
               child: Text(
                 company['name'] ?? "Sin Nombre",
                 overflow: TextOverflow.ellipsis,
@@ -135,25 +149,25 @@ class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
               ),
             );
           }).toList(),
-          onChanged: (String? newNit) {
+          onChanged: (String? newId) {
             setState(() {
-              _selectedNit = newNit;
+              _selectedId = newId;
             });
 
-            if (newNit != null) {
+            if (newId != null) {
               final selectedCompany = _companies.firstWhere(
-                (c) => c['nit'] == newNit,
+                (c) => c['id'] == newId,
               );
+              // 🔥 Enviamos el nombre y el ID al RegisterScreen
               widget.onCompanySelected(
                 selectedCompany['name']!,
-                selectedCompany['nit']!,
+                selectedCompany['id']!,
               );
             }
           },
         ),
 
-        // Mensaje de validación visual
-        if (_selectedNit != null)
+        if (_selectedId != null)
           Padding(
             padding: const EdgeInsets.only(top: 8.0, left: 12),
             child: Row(

@@ -22,7 +22,7 @@ class ApiClient {
   ApiClient._internal() {
     _dio = Dio(
       BaseOptions(
-        baseUrl: dotenv.env['API_URL'] ?? 'http://10.0.2.2:8000/api',
+        baseUrl: dotenv.env['API_URL'] ?? 'http://192.168.10.3:8000/api',
         // Tiempos de espera ajustados para redes móviles (3G/4G en Colombia)
         connectTimeout: const Duration(seconds: 10),
         receiveTimeout: const Duration(seconds: 15),

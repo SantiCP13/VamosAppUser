@@ -1,11 +1,11 @@
 // lib/features/auth/services/auth_service.dart
 
 import 'dart:async';
-// ignore: unused_import
-import 'dart:convert'; // DESCOMENTAR AL TENER BACKEND REAL
-// import 'package:http/http.dart' as http; // DESCOMENTAR AL TENER BACKEND REAL
+import 'dart:io'; // 🔥 ESTA ES LA LÍNEA MÁGICA QUE FALTA
+import '../../../core/network/api_client.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../../core/models/user_model.dart';
+import 'package:dio/dio.dart';
 
 /// ESTADOS DE RESPUESTA DE AUTENTICACIÓN
 
@@ -169,38 +169,59 @@ class AuthService {
   ];
 
   // ===========================================================================
-  // 2. LOGIN (POST /login)
+  // 2. LOGIN REAL (POST /login)
   // ===========================================================================
-
   static Future<Map<String, dynamic>> login(
     String email,
     String password,
   ) async {
     try {
-      // Simula delay de red
-      await Future.delayed(const Duration(seconds: 1));
+      // 1. Llamamos a nuestro mensajero
+      final apiClient = ApiClient();
 
-      // Busca en la "BD" local
-      final userMap = _dbUsuarios.firstWhere(
-        (u) => u['email'] == email && u['password'] == password,
-        orElse: () => {},
+      // 2. Tocamos la puerta de tu PC (Laravel) y le pasamos el correo y clave
+      final response = await apiClient.dio.post(
+        '/login',
+        data: {'email': email, 'password': password},
       );
 
-      if (userMap.isEmpty) {
-        return {'status': AuthResponseStatus.notFound};
+      // 3. Si tu Laravel nos responde "success: true" (¡Pase usted!)
+      if (response.data['success'] == true) {
+        // Sacamos los datos que nos mandó Laravel de su "cajita" llamada data
+        final userData = response.data['data']['user'];
+        final token = response.data['data']['token'];
+
+        // Guardamos el usuario y su llave de seguridad en el celular
+        _currentUser = User.fromMap(userData);
+        await _storage.write(key: 'auth_token', value: token);
+
+        return {'status': AuthResponseStatus.active, 'user': _currentUser};
       }
 
-      // Crea el objeto User desde el mapa
-      final tempUser = User.fromMap(userMap);
-      _currentUser = tempUser;
+      return {'status': AuthResponseStatus.error};
+    } on DioException catch (e) {
+      // 1. Atrapamos errores de Validación (422)
+      if (e.response?.statusCode == 422) {
+        final errors = e.response?.data['errors'] as Map<String, dynamic>;
+        String errorMessage = '';
+        errors.forEach((key, value) {
+          errorMessage += "${value[0]}\n";
+        });
+        throw Exception(errorMessage.trim());
+      }
 
-      // Guarda el token (Simulación de Laravel Sanctum)
-      await _storage.write(key: 'auth_token', value: 'mock_token_123');
+      // 🔥 2. ATRAPAMOS ERRORES FATALES (500) PARA VER EL FALLO SQL DE LARAVEL
+      if (e.response?.statusCode == 500) {
+        final data = e.response?.data;
+        if (data != null && data['message'] != null) {
+          // Esto nos mostrará el "Error al registrar usuario: SQLSTATE[...]"
+          throw Exception("Backend 500:\n${data['message']}");
+        }
+      }
 
-      // Devuelve estado normalizado
-      return _mapStatus(tempUser.verificationStatus);
+      throw Exception("Error de servidor: ${e.response?.statusCode}");
     } catch (e) {
-      return {'status': AuthResponseStatus.networkError};
+      throw Exception("Error inesperado: $e");
     }
   }
 
@@ -230,92 +251,185 @@ class AuthService {
   // 4. REGISTRO (POST /register)
   // ===========================================================================
 
-  // Registro de EMPLEADO (Requiere validación de NIT Empresa)
+  // Registro REAL de EMPLEADO CORPORATIVO
   static Future<bool> registerCorporateUser(Map<String, dynamic> datos) async {
     try {
-      await Future.delayed(const Duration(seconds: 2));
-      final String newId = DateTime.now().millisecondsSinceEpoch.toString();
+      final apiClient = ApiClient();
 
-      final newUserMap = {
-        'id': newId,
-        'id_pasajero': null,
-        'id_responsable': 'resp_$newId', // Manager ID
-        'email': datos['email'],
-        'password': datos['password'],
+      // Usamos FormData por consistencia con la arquitectura del proyecto
+      FormData formData = FormData.fromMap({
         'nombre': datos['nombre'],
-        'documento': datos['documento'], // Vital FUEC
         'telefono': datos['telefono'],
-        'direccion': datos['direccion'] ?? 'Dirección Pendiente',
-        'empresa': datos['nombre_empresa'],
-        'nit_empresa': datos['nit_empresa'], // Vinculación
-        'role': 'EMPLEADO',
-        'status': 'CREATED',
-        'app_mode': 'CORPORATE',
-        'beneficiaries': [],
-      };
-
-      _dbUsuarios.add(newUserMap);
-      _currentUser = User.fromMap(newUserMap);
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  // Registro de USUARIO NATURAL
-  static Future<bool> registerNaturalUser(Map<String, dynamic> datos) async {
-    try {
-      await Future.delayed(const Duration(seconds: 2));
-      final String newId = DateTime.now().millisecondsSinceEpoch.toString();
-
-      final newUserMap = {
-        'id': newId,
-        'id_pasajero': newId,
-        'id_responsable': newId, // Él mismo es su responsable
-        'email': datos['email'],
-        'password': datos['password'],
-        'nombre': datos['nombre'],
         'documento': datos['documento'],
-        'telefono': datos['telefono'],
-        'direccion': datos['direccion'] ?? 'Dirección Pendiente',
-        'empresa': null,
-        'nit_empresa': null,
-        'role': 'NATURAL',
-        'status': 'UNDER_REVIEW', // Pasa a revisión básica
-        'app_mode': 'PERSONAL',
-        'beneficiaries': [],
-      };
+        'email': datos['email'],
+        'password': datos['password'],
+        'password_confirmation':
+            datos['password'], // Laravel exige confirmación
+        'direccion': datos['direccion'],
+        'empresa':
+            datos['empresa_id'], // 🔥 IMPORTANTE: Laravel exige el ID, no el NIT
+        'role': 2, // 2 = Role::CLIENTE (Responsable/Empleado) en Laravel
+      });
 
-      _dbUsuarios.add(newUserMap);
-      _currentUser = User.fromMap(newUserMap);
-      return true;
-    } catch (e) {
+      final response = await apiClient.dio.post(
+        '/register',
+        data: formData,
+        options: Options(
+          sendTimeout: const Duration(seconds: 60),
+          receiveTimeout: const Duration(seconds: 60),
+        ),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        // Asignamos el usuario a la memoria para que no nos patee al Login
+        if (response.data != null && response.data['data'] != null) {
+          final userData = response.data['data']['user'];
+          _currentUser = User.fromMap(userData);
+        }
+
+        // NO guardamos el token localmente (nace inactivo)
+        return true;
+      }
       return false;
+    } on DioException catch (e) {
+      // 🔥 ATRAPAMOS LOS ERRORES DE LARAVEL (422)
+      if (e.response?.statusCode == 422) {
+        final errors = e.response?.data['errors'] as Map<String, dynamic>;
+        String errorMessage = '';
+
+        errors.forEach((key, value) {
+          errorMessage += "${value[0]}\n";
+        });
+
+        throw Exception(errorMessage.trim());
+      }
+      throw Exception("Error de conexión con el servidor.");
+    } catch (e) {
+      throw Exception("Error inesperado: $e");
     }
   }
 
-  // Búsqueda de Empresas para vinculación (Autocompletado por NIT)
-  static Future<List<Map<String, String>>> searchCompanies(String query) async {
-    await Future.delayed(const Duration(milliseconds: 300));
+  // Registro REAL de USUARIO NATURAL
+  static Future<bool> registerNaturalUser({
+    required Map<String, dynamic> datos,
+    required File? cedulaPdf,
+    required File? selfieImage,
+  }) async {
+    try {
+      final apiClient = ApiClient();
 
-    if (query.isEmpty) {
-      return _mockCompaniesDB
-          .map(
-            (c) => {'nit': c['nit'].toString(), 'name': c['name'].toString()},
-          )
-          .toList();
+      // Cuando enviamos ARCHIVOS, ya no enviamos un Map normal,
+      // enviamos un "FormData" (como en Postman).
+      FormData formData = FormData.fromMap({
+        'nombre': datos['nombre'],
+        'telefono': datos['telefono'],
+        'documento': datos['documento'],
+        'email': datos['email'],
+        'password': datos['password'],
+        'password_confirmation': datos['password'],
+        'direccion': datos['direccion'],
+        'role': 2,
+        // Aquí adjuntaremos los archivos más adelante
+      });
+
+      // 🔥 ADJUNTAMOS EL PDF SI EXISTE
+      if (cedulaPdf != null) {
+        formData.files.add(
+          MapEntry(
+            'cedula_pdf', // Mismo nombre que busca Laravel
+            await MultipartFile.fromFile(
+              cedulaPdf.path,
+              filename: 'cedula.pdf',
+            ),
+          ),
+        );
+      }
+
+      // 🔥 ADJUNTAMOS LA SELFIE SI EXISTE
+      if (selfieImage != null) {
+        formData.files.add(
+          MapEntry(
+            'selfie', // Mismo nombre que busca Laravel
+            await MultipartFile.fromFile(
+              selfieImage.path,
+              filename: 'selfie.jpg',
+            ),
+          ),
+        );
+      }
+
+      final response = await apiClient.dio.post(
+        '/register',
+        data: formData,
+        options: Options(
+          sendTimeout: const Duration(
+            seconds: 60,
+          ), // Tiempo máximo para enviar (subir)
+          receiveTimeout: const Duration(
+            seconds: 60,
+          ), // Tiempo máximo para recibir respuesta
+        ),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        // 🔥 SOLUCIÓN: Asignamos el usuario a la memoria temporal de la app
+        // para que VerificationCheckScreen no nos devuelva al Login.
+        if (response.data != null && response.data['data'] != null) {
+          final userData = response.data['data']['user'];
+          _currentUser = User.fromMap(userData);
+        }
+
+        // ¡OJO! NO guardamos el token en _storage.write('auth_token', token)
+        // Así respetamos tu regla de que no persista si el usuario cierra la app.
+
+        return true;
+      }
+      return false;
+    } on DioException catch (e) {
+      // 🔥 AQUÍ ATRAPAMOS LOS ERRORES DE LARAVEL (422)
+      if (e.response?.statusCode == 422) {
+        final errors = e.response?.data['errors'] as Map<String, dynamic>;
+        String errorMessage = '';
+
+        // Extraemos todos los errores (ej: "El correo ya existe", "Mínimo 8 caracteres")
+        errors.forEach((key, value) {
+          errorMessage += "${value[0]}\n";
+        });
+
+        // Lanzamos el error para que la pantalla lo muestre en el SnackBar
+        throw Exception(errorMessage.trim());
+      }
+      throw Exception("Error de conexión con el servidor.");
+    } catch (e) {
+      throw Exception("Error inesperado: $e");
     }
+  }
 
-    final q = query.toLowerCase();
+  // Búsqueda de Empresas para vinculación
+  static Future<List<Map<String, String>>> searchCompanies(String query) async {
+    try {
+      final apiClient = ApiClient();
+      final response = await apiClient.dio.get('/empresas');
 
-    return _mockCompaniesDB
-        .where(
-          (c) =>
-              c['name'].toString().toLowerCase().contains(q) ||
-              c['nit'].toString().contains(q),
-        )
-        .map((c) => {'nit': c['nit'].toString(), 'name': c['name'].toString()})
-        .toList();
+      if (response.statusCode == 200 && response.data['success'] == true) {
+        final List<dynamic> data = response.data['data'];
+
+        // Mapeamos forzando a String para evitar errores de tipo en Flutter
+        return data
+            .map(
+              (e) => {
+                'id': e['id'].toString(),
+                'name': e['name'].toString(),
+                'nit': e['nit'].toString(),
+              },
+            )
+            .toList();
+      }
+      return [];
+    } catch (e) {
+      // Si falla, devolvemos una lista vacía para no romper la UI
+      return [];
+    }
   }
 
   // Solicitud de Alta de Empresa (Si no existe en la BD)
@@ -517,25 +631,6 @@ class AuthService {
       return false;
     } catch (e) {
       return false;
-    }
-  }
-
-  // Helper para convertir el Enum de modelo a Estado de respuesta simple
-  static Map<String, dynamic> _mapStatus(UserVerificationStatus status) {
-    switch (status) {
-      case UserVerificationStatus.VERIFIED:
-        return {'status': AuthResponseStatus.active, 'user': _currentUser};
-      case UserVerificationStatus.PENDING:
-        return {'status': AuthResponseStatus.incomplete};
-      case UserVerificationStatus.CREATED:
-        return {'status': AuthResponseStatus.pending};
-      case UserVerificationStatus.UNDER_REVIEW:
-      case UserVerificationStatus.DOCS_UPLOADED:
-        return {'status': AuthResponseStatus.underReview};
-      case UserVerificationStatus.REJECTED:
-        return {'status': AuthResponseStatus.rejected};
-      case UserVerificationStatus.REVOKED:
-        return {'status': AuthResponseStatus.revoked};
     }
   }
 }

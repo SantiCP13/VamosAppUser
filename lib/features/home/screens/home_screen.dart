@@ -1217,7 +1217,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             Icon(Icons.straighten, size: 14, color: Colors.grey),
             const SizedBox(width: 4),
             Text(
-              "$_tripDistance",
+              _tripDistance,
               style: GoogleFonts.poppins(color: Colors.grey, fontSize: 13),
             ),
           ],

@@ -3,6 +3,9 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
 import 'verification_check_screen.dart';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 
 class RegisterNaturalScreen extends StatefulWidget {
   final String? emailPreIngresado;
@@ -24,9 +27,13 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
   final _telefonoController = TextEditingController();
   final _direccionController = TextEditingController();
 
-  // Estados de Validación Visual
+  // 🔥 1. Variables para saber si ya se completó el paso (Las que daban error)
   bool _cedulaUploaded = false;
   bool _biometricVerified = false;
+
+  // 🔥 2. Variables para guardar los archivos reales
+  File? _cedulaPdf;
+  File? _selfieImage;
 
   @override
   void initState() {
@@ -119,17 +126,56 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
       return;
     }
 
-    // 2. Validaciones de Biometría
-    if (!_cedulaUploaded) {
-      _showSnack("Debes tomar la foto de tu cédula.", isError: true);
+    // 2. Validaciones de Biometría y Archivos
+    if (_cedulaPdf == null) {
+      _showSnack("Debes adjuntar el PDF de tu cédula.", isError: true);
       return;
     }
-    if (!_biometricVerified) {
-      _showSnack("Debes completar la verificación facial.", isError: true);
+    if (_selfieImage == null) {
+      _showSnack("Debes tomar la foto de verificación facial.", isError: true);
       return;
     }
 
-    setState(() => _isLoading = true);
+    // 🔥 3. MOSTRAR PANTALLA DE CARGA (MODAL)
+    showDialog(
+      context: context,
+      barrierDismissible:
+          false, // Evita que el usuario lo cierre tocando afuera
+      builder: (BuildContext c) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(color: AppColors.primaryGreen),
+                const SizedBox(height: 20),
+                Text(
+                  "Subiendo documentos...",
+                  style: GoogleFonts.poppins(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  "Esto puede tardar hasta un minuto dependiendo de tu conexión. Por favor, no cierres la app.",
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
 
     try {
       final payload = {
@@ -142,50 +188,70 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
         'direccion': _direccionController.text.trim(),
       };
 
-      // Llamada al servicio
-      bool success = await AuthService.registerNaturalUser(payload);
+      // Llamada al servicio (Puede tardar hasta 60s)
+      bool success = await AuthService.registerNaturalUser(
+        datos: payload,
+        cedulaPdf: _cedulaPdf,
+        selfieImage: _selfieImage,
+      );
 
       if (!mounted) return;
 
+      // 🔥 CERRAMOS EL MODAL DE CARGA
+      Navigator.of(context).pop();
+
       if (success) {
-        Navigator.pushAndRemoveUntil(
+        Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const VerificationCheckScreen()),
-          (route) => false,
+          MaterialPageRoute(
+            builder: (_) => const VerificationCheckScreen(
+              isCorporateRegistration: false, // 🔥 Le avisamos que es Natural
+            ),
+          ),
         );
       } else {
         throw Exception("No se pudo completar el registro.");
       }
     } catch (e) {
+      if (!mounted) return;
+      // SI HAY ERROR: Cerramos el modal de carga y mostramos el error rojo
+      Navigator.of(context).pop();
       _showSnack(e.toString().replaceAll("Exception: ", ""), isError: true);
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  Future<void> _simulateCamera(bool isBiometric) async {
-    // Simula carga de cámara
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (c) => const Center(
-        child: CircularProgressIndicator(color: AppColors.primaryGreen),
-      ),
+  // 📸 FUNCIÓN PARA TOMAR SELFIE
+  Future<void> _takeSelfie() async {
+    final ImagePicker picker = ImagePicker();
+    final XFile? image = await picker.pickImage(
+      source: ImageSource.camera,
+      preferredCameraDevice: CameraDevice.front, // Cámara frontal
+      imageQuality: 70, // Comprimir un poco
     );
 
-    await Future.delayed(const Duration(seconds: 2));
-    if (!mounted) return;
-    Navigator.pop(context); // Cierra loader
-
-    setState(() {
-      if (isBiometric) {
+    if (image != null) {
+      setState(() {
+        _selfieImage = File(image.path);
         _biometricVerified = true;
-      } else {
-        _cedulaUploaded = true;
-      }
-    });
+      });
+      _showSnack("Selfie capturada correctamente");
+    }
+  }
 
-    _showSnack(isBiometric ? "Biometría completada" : "Cédula guardada");
+  // 📄 FUNCIÓN PARA SELECCIONAR PDF
+  Future<void> _pickPDF() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf'], // Solo permite PDFs
+    );
+
+    if (result != null) {
+      setState(() {
+        _cedulaPdf = File(result.files.single.path!);
+        _cedulaUploaded = true;
+      });
+      _showSnack("PDF adjuntado: ${result.files.single.name}");
+    }
   }
 
   @override
@@ -333,22 +399,26 @@ class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
 
               // Tarjeta 1: Cédula
               _buildVerificationCard(
-                title: "Foto de Cédula",
-                subtitle: "Toma una foto clara de tu documento",
-                icon: Icons.credit_card,
+                title: "Documento de Cédula (PDF)", // Cambiamos el texto
+                subtitle: _cedulaPdf != null
+                    ? "Archivo seleccionado"
+                    : "Sube tu cédula en formato PDF",
+                icon: Icons.picture_as_pdf,
                 isDone: _cedulaUploaded,
-                onTap: () => _simulateCamera(false),
+                onTap: _pickPDF, // Llama al selector de PDF
               ),
 
               const SizedBox(height: 12),
 
-              // Tarjeta 2: Biometría
+              // Tarjeta 2: Biometría (Selfie)
               _buildVerificationCard(
                 title: "Verificación Facial",
-                subtitle: "Selfie para validar que eres tú",
+                subtitle: _selfieImage != null
+                    ? "Selfie capturada"
+                    : "Selfie para validar que eres tú",
                 icon: Icons.face,
                 isDone: _biometricVerified,
-                onTap: () => _simulateCamera(true),
+                onTap: _takeSelfie, // Llama a la cámara real
               ),
 
               const SizedBox(height: 40),
