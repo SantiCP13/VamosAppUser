@@ -85,7 +85,7 @@ class User {
   /// FK: ID de la empresa en BD.
   /// Vital para buscar el 'moviltrack_contract_id' cuando appMode = CORPORATE.
   final String? companyUuid;
-
+  final bool active;
   // Datos visuales de la empresa (Join simple)
   String empresa;
   String nitEmpresa;
@@ -123,6 +123,7 @@ class User {
     this.appMode =
         AppMode.CORPORATE, // Por defecto intenta ser corporativo si es empleado
     this.token,
+    this.active = true,
   });
 
   // Helpers de lógica de negocio
@@ -143,7 +144,7 @@ class User {
       phone: map['phone'] ?? map['telefono'] ?? '',
       documentNumber: map['document_number'] ?? map['documento'] ?? '',
       address: map['address'] ?? map['direccion'] ?? '',
-
+      active: map['active'] == true || map['active'] == 1,
       // --- MAPEADO DE EMPRESA ---
 
       // El backend debe hacer JOIN con COMPANIES para llenar esto

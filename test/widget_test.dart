@@ -9,11 +9,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:vamos_user/main.dart';
+import 'package:vamos_user/features/auth/screens/welcome_screen.dart';
 
 void main() {
   testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const VamosApp());
+    // En la línea 16 de widget_test.dart:
+    await tester.pumpWidget(const VamosApp(initialScreen: WelcomeScreen()));
 
     // Verify that our counter starts at 0.
     expect(find.text('0'), findsOneWidget);

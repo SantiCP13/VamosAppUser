@@ -24,7 +24,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   bool _isLoading = false;
   bool _obscurePass = true;
   int _currentStep = 0; // 0: Email, 1: OTP, 2: New Password
-
+  int _cooldownSeconds = 0;
   @override
   void initState() {
     super.initState();
@@ -41,6 +41,16 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     _confirmPassController.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+
+  void _startCooldown() {
+    setState(() => _cooldownSeconds = 60);
+    Future.doWhile(() async {
+      await Future.delayed(const Duration(seconds: 1));
+      if (!mounted) return false;
+      setState(() => _cooldownSeconds--);
+      return _cooldownSeconds > 0;
+    });
   }
 
   void _showSnack(String msg, {bool isError = false}) {
@@ -69,67 +79,77 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   // --- LOGICA DE PASOS (INTACTA) ---
 
+  // --- REEMPLAZA ESTAS 3 FUNCIONES ---
+
   Future<void> _sendCode() async {
     final email = _emailController.text.trim();
     if (email.isEmpty || !email.contains('@')) {
       _showSnack("Ingresa un correo válido", isError: true);
       return;
     }
-
     setState(() => _isLoading = true);
-    final success = await AuthService.sendPasswordRecoveryEmail(email);
-    setState(() => _isLoading = false);
-
-    if (success) {
-      _showSnack("Código enviado.");
-      _nextPage();
-    } else {
-      _showSnack("El correo no está registrado.", isError: true);
+    try {
+      // Cambio de nombre: sendPasswordResetCode
+      await AuthService.sendPasswordResetCode(email);
+      setState(() => _isLoading = false);
+      _showSnack("Código enviado a $email");
+      _startCooldown();
+      if (_currentStep == 0) _nextPage();
+    } catch (e) {
+      setState(() => _isLoading = false);
+      _showSnack(e.toString().replaceFirst('Exception: ', ''), isError: true);
     }
   }
 
   Future<void> _verifyCode() async {
     final code = _otpController.text.trim();
     if (code.length < 4) {
-      _showSnack("Código inválido", isError: true);
+      _showSnack("Código incompleto", isError: true);
       return;
     }
-
     setState(() => _isLoading = true);
-    final email = _emailController.text.trim();
-    final success = await AuthService.verifyRecoveryToken(email, code);
-    setState(() => _isLoading = false);
-
-    if (success) {
+    try {
+      // Cambio de nombre: verifyPasswordResetCode
+      await AuthService.verifyPasswordResetCode(
+        _emailController.text.trim(),
+        code,
+      );
+      setState(() => _isLoading = false);
       _nextPage();
-    } else {
-      _showSnack("Código incorrecto.", isError: true);
+    } catch (e) {
+      setState(() => _isLoading = false);
+      _showSnack(e.toString().replaceFirst('Exception: ', ''), isError: true);
     }
   }
 
   Future<void> _changePassword() async {
     final p1 = _passController.text;
     final p2 = _confirmPassController.text;
-
-    if (p1.isEmpty || p1.length < 3) {
-      _showSnack("La contraseña es muy corta", isError: true);
+    if (p1.length < 6) {
+      _showSnack(
+        "La contraseña debe tener al menos 6 caracteres",
+        isError: true,
+      );
       return;
     }
     if (p1 != p2) {
       _showSnack("Las contraseñas no coinciden", isError: true);
       return;
     }
-
     setState(() => _isLoading = true);
-    final email = _emailController.text.trim();
-    final success = await AuthService.changePassword(email, p1);
-    setState(() => _isLoading = false);
-
-    if (success) {
+    try {
+      // Cambio de nombre: resetPassword
+      await AuthService.resetPassword(
+        _emailController.text.trim(),
+        _otpController.text.trim(),
+        p1,
+      );
+      setState(() => _isLoading = false);
       _showSnack("¡Contraseña actualizada! Inicia sesión.");
       if (mounted) Navigator.pop(context);
-    } else {
-      _showSnack("Error al actualizar.", isError: true);
+    } catch (e) {
+      setState(() => _isLoading = false);
+      _showSnack(e.toString().replaceFirst('Exception: ', ''), isError: true);
     }
   }
 
@@ -327,16 +347,24 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           const SizedBox(height: 20),
 
           Center(
-            child: TextButton(
-              onPressed: () => _showSnack("Código reenviado (Simulado)"),
-              child: Text(
-                "¿No recibiste el código?",
-                style: GoogleFonts.poppins(
-                  color: AppColors.primaryGreen,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
+            child: _cooldownSeconds > 0
+                ? Text(
+                    "Reenviar código en $_cooldownSeconds segundos",
+                    style: GoogleFonts.poppins(
+                      color: Colors.grey,
+                      fontSize: 13,
+                    ),
+                  )
+                : TextButton(
+                    onPressed: _sendCode,
+                    child: Text(
+                      "¿No recibiste el código? Reenviar",
+                      style: GoogleFonts.poppins(
+                        color: AppColors.primaryGreen,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
           ),
 
           const SizedBox(height: 30),

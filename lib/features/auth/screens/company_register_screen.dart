@@ -90,7 +90,6 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
 
     try {
       final Map<String, dynamic> requestPayload = {
-        'tipo_solicitud': 'AFILIACION_EMPRESA',
         'empresa': {
           'razon_social': _razonSocialController.text.trim(),
           'nit': _nitController.text.trim(),
@@ -101,11 +100,10 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
         },
         'contacto_administrativo': {
           'nombre': _nombreContactoController.text.trim(),
-          'telefono_personal': _telefonoContactoController.text.trim(),
+          'cedula': _telefonoContactoController.text
+              .trim(), // 🔥 CAMBIADO: Antes decía 'telefono_personal'
           'email_personal': _emailContactoController.text.trim(),
         },
-        'estado': 'PENDIENTE_REVISION_HUMANA',
-        'fecha_solicitud': DateTime.now().toIso8601String(),
       };
 
       bool success = await AuthService.requestCompanyAffiliation(
@@ -352,8 +350,8 @@ class _CompanyRegisterScreenState extends State<CompanyRegisterScreen> {
               const SizedBox(height: 16),
               _buildTextField(
                 _telefonoContactoController,
-                "Celular Contacto",
-                Icons.smartphone,
+                "Cedula",
+                Icons.badge_outlined,
                 type: TextInputType.phone,
               ),
               const SizedBox(height: 16),

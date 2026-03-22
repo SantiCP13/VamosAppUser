@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/models/user_model.dart';
-import '../../auth/services/auth_service.dart';
+import '../services/auth_service.dart'; // Único import de servicio necesario
 import '../../home/screens/home_screen.dart';
 import 'login_screen.dart';
 import 'pending_approval_screen.dart';
@@ -184,7 +184,7 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
       // 2. Si está vacía (ej. cerró y abrió la app), leemos la BD como respaldo
       bool isCorporate =
           widget.isCorporateRegistration ??
-          (_currentUser?.empresa != null && _currentUser!.empresa!.isNotEmpty);
+          (_currentUser?.empresa != null && _currentUser!.empresa.isNotEmpty);
 
       return PendingApprovalScreen(
         isNatural: !isCorporate,

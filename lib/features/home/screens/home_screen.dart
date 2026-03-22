@@ -76,6 +76,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   double _tripPrice = 0;
   String _tripDistance = "";
   String _tripDuration = "";
+  Timer? _checkStatusTimer;
 
   // --- CONDUCTOR Y SIMULACIÓN ---
   LatLng? _driverPosition;
@@ -95,11 +96,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+
+    // Validación de seguridad de último nivel
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (AuthService.currentUser == null) {
+        Navigator.pushReplacementNamed(context, '/');
+        return;
+      }
+      _checkStatusTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+        _verifyUserStatus();
+      });
+      // Si el usuario está PENDING o UNDER_REVIEW, podrías redirigir aquí también
+      if (AuthService.currentUser!.verificationStatus ==
+          UserVerificationStatus.PENDING) {
+        // Navigator.pushReplacementNamed(context, '/verification_check');
+      }
+    });
+
     _determinePosition();
   }
 
   @override
   void dispose() {
+    _checkStatusTimer?.cancel();
     _simulationTimer?.cancel();
     super.dispose();
   }
@@ -116,6 +135,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // ===============================================================
   // 1. GEOLOCALIZACIÓN Y VALIDACIÓN
   // ===============================================================
+  Future<void> _verifyUserStatus() async {
+    try {
+      // Solo con llamar a esto, si el usuario es inactivo,
+      // el ApiClient lo detectará y lo sacará automáticamente.
+      await AuthService.checkAuthStatus();
+    } catch (e) {
+      debugPrint("Error: $e");
+    }
+  }
 
   Future<void> _determinePosition() async {
     bool serviceEnabled;
@@ -524,6 +552,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    if (AuthService.currentUser == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final bool isCorporate = _currentUser.isCorporateMode;
     // Color principal dinámico según el modo
