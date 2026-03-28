@@ -5,7 +5,7 @@ import 'package:latlong2/latlong.dart';
 
 // Asegúrate de que la ruta de importación sea la correcta en tu proyecto
 import '../../../core/theme/app_colors.dart';
-import '../services/osm_service.dart';
+import '../services/search_service.dart';
 
 class SearchDestinationScreen extends StatefulWidget {
   final LatLng? currentPosition;
@@ -19,7 +19,7 @@ class SearchDestinationScreen extends StatefulWidget {
 class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
   // CONTROLADORES
   final TextEditingController _searchController = TextEditingController();
-  final OsmService _osmService = OsmService();
+  final SearchService _searchService = SearchService();
 
   // ESTADOS
   List<Map<String, dynamic>> _searchResults = [];
@@ -73,10 +73,7 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
       setState(() => _isLoading = true);
 
       try {
-        final results = await _osmService.searchPlaces(
-          query,
-          userLocation: widget.currentPosition,
-        );
+        final results = await _searchService.searchPlaces(query);
 
         if (!mounted) return;
         setState(() {

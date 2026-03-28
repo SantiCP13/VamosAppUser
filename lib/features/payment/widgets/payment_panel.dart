@@ -25,7 +25,6 @@ class _PaymentPanelState extends State<PaymentPanel> {
   @override
   void initState() {
     super.initState();
-
     if (widget.methods.isNotEmpty) {
       _selectedMethodId = widget.methods.first.id;
     }
@@ -33,16 +32,14 @@ class _PaymentPanelState extends State<PaymentPanel> {
 
   Future<void> _handlePayment() async {
     if (_selectedMethodId == null) return;
-
     setState(() => _isProcessing = true);
 
-    bool success = await PaymentService.processPayment(
+    bool success = await PaymentService().processPayment(
       methodId: _selectedMethodId!,
       amount: widget.amount,
     );
 
     if (!mounted) return;
-
     setState(() => _isProcessing = false);
 
     if (success) {
@@ -64,8 +61,6 @@ class _PaymentPanelState extends State<PaymentPanel> {
       children: [
         Center(child: Container(width: 40, height: 4, color: Colors.grey[300])),
         const SizedBox(height: 20),
-
-        // TÍTULO Y MONTO
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -89,16 +84,13 @@ class _PaymentPanelState extends State<PaymentPanel> {
         const SizedBox(height: 10),
         const Divider(),
         const SizedBox(height: 10),
-
         Text(
           "Método de Pago",
           style: GoogleFonts.poppins(color: Colors.grey, fontSize: 12),
         ),
         const SizedBox(height: 10),
-
-        // LISTA DE MÉTODOS
         SizedBox(
-          height: 160,
+          height: 180, // Aumentamos un poco para los subtítulos
           child: ListView.separated(
             itemCount: widget.methods.length,
             separatorBuilder: (context, index) => const SizedBox(height: 8),
@@ -114,14 +106,16 @@ class _PaymentPanelState extends State<PaymentPanel> {
                   borderRadius: BorderRadius.circular(12),
                   color: isSelected ? Colors.grey.shade50 : Colors.white,
                 ),
-                // SOLUCIÓN: Usamos la forma estándar y silenciamos la advertencia
                 child: RadioListTile<String>(
                   value: method.id,
                   // ignore: deprecated_member_use
-                  groupValue: _selectedMethodId,
+                  groupValue:
+                      _selectedMethodId, // El linter puede marcarlo, pero es funcional.
                   activeColor: Colors.black,
                   // ignore: deprecated_member_use
-                  onChanged: (val) => setState(() => _selectedMethodId = val),
+                  onChanged: (String? val) {
+                    if (val != null) setState(() => _selectedMethodId = val);
+                  },
                   title: Text(
                     method.name,
                     style: GoogleFonts.poppins(
@@ -129,12 +123,7 @@ class _PaymentPanelState extends State<PaymentPanel> {
                       fontSize: 14,
                     ),
                   ),
-                  subtitle: method.type == PaymentMethodType.card
-                      ? Text(
-                          "**** ${method.last4}",
-                          style: const TextStyle(fontSize: 12),
-                        )
-                      : null,
+                  subtitle: _buildSubtitle(method),
                   secondary: Icon(
                     _getIconForMethod(method.type),
                     color: Colors.black54,
@@ -144,10 +133,7 @@ class _PaymentPanelState extends State<PaymentPanel> {
             },
           ),
         ),
-
         const SizedBox(height: 20),
-
-        // BOTÓN DE PAGO
         SizedBox(
           width: double.infinity,
           child: ElevatedButton(
@@ -182,6 +168,34 @@ class _PaymentPanelState extends State<PaymentPanel> {
     );
   }
 
+  // MÉTODOS DE APOYO (Dentro de la clase, fuera del build)
+
+  Widget? _buildSubtitle(PaymentMethod method) {
+    switch (method.type) {
+      case PaymentMethodType.card:
+        return Text(
+          "**** ${method.last4}",
+          style: const TextStyle(fontSize: 12),
+        );
+      case PaymentMethodType.pse:
+        return const Text(
+          "Transferencia Bancaria",
+          style: TextStyle(fontSize: 12),
+        );
+      case PaymentMethodType.corporateVoucher:
+        return const Text(
+          "Cargo a cuenta corporativa",
+          style: TextStyle(fontSize: 12),
+        );
+      case PaymentMethodType.cash:
+        return const Text(
+          "Pago al finalizar viaje",
+          style: TextStyle(fontSize: 12),
+        );
+    }
+    // No hace falta default aquí porque el switch es exhaustivo
+  }
+
   IconData _getIconForMethod(PaymentMethodType type) {
     switch (type) {
       case PaymentMethodType.cash:
@@ -190,6 +204,8 @@ class _PaymentPanelState extends State<PaymentPanel> {
         return Icons.credit_card;
       case PaymentMethodType.corporateVoucher:
         return Icons.business_center;
+      case PaymentMethodType.pse:
+        return Icons.account_balance;
     }
   }
 }

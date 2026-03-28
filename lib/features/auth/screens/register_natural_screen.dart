@@ -16,6 +16,7 @@ class RegisterNaturalScreen extends StatefulWidget {
 }
 
 class _RegisterNaturalScreenState extends State<RegisterNaturalScreen> {
+  // ignore: prefer_final_fields
   bool _isLoading = false;
   bool _obscurePass = true;
 

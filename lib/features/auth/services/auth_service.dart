@@ -1,11 +1,10 @@
-// lib/features/auth/services/auth_service.dart
-
 import 'dart:async';
 import 'dart:io';
 import '../../../core/network/api_client.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../../core/models/user_model.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 enum AuthResponseStatus {
   active,
@@ -21,6 +20,8 @@ enum AuthResponseStatus {
 }
 
 class AuthService {
+  static final ApiClient _api = ApiClient();
+
   static const _storage = FlutterSecureStorage();
   static User? _currentUser;
   static User? get currentUser => _currentUser;
@@ -112,8 +113,7 @@ class AuthService {
           'telefono': payload['empresa']['telefono_corporativo'],
           'correo': payload['empresa']['email_corporativo'],
           'nombre_contacto': payload['contacto_administrativo']['nombre'],
-          'cedula_contacto':
-              payload['contacto_administrativo']['cedula'], // 🔥 Verifica que aquí diga 'cedula'
+          'cedula_contacto': payload['contacto_administrativo']['cedula'],
         },
       );
       return response.data['success'] == true;
@@ -184,14 +184,43 @@ class AuthService {
   // 3. MÉTODOS DE PERFIL Y BENEFICIARIOS
   // ===========================================================================
 
-  static bool toggleAppMode(bool isTargetCorporate) {
-    if (_currentUser == null) {
+  static Future<bool> toggleAppMode(bool isTargetCorporate) async {
+    if (_currentUser == null) return false;
+
+    // 1. Verificación local rápida
+    if (isTargetCorporate && !_currentUser!.canUseCorporateMode) {
       return false;
     }
-    _currentUser!.appMode = isTargetCorporate
-        ? AppMode.CORPORATE
-        : AppMode.PERSONAL;
-    return true;
+
+    try {
+      // 2. Avisar al Backend
+      final String perfilParaBackend = isTargetCorporate
+          ? 'CORPORATIVO'
+          : 'NATURAL';
+
+      final response = await ApiClient().dio.post(
+        '/user/cambiar-perfil',
+        data: {'perfil': perfilParaBackend},
+      );
+
+      if (response.data['success'] == true) {
+        // 3. Actualizar el modelo local si el servidor confirmó
+        _currentUser!.appMode = isTargetCorporate
+            ? AppMode.CORPORATE
+            : AppMode.PERSONAL;
+
+        // Guardar preferencia localmente
+        await _storage.write(
+          key: 'preferred_mode',
+          value: _currentUser!.appMode.name,
+        );
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint("Error al cambiar de modo: $e");
+      return false;
+    }
   }
 
   static Future<bool> activateNaturalProfile() async {
@@ -210,25 +239,65 @@ class AuthService {
   }
 
   static Future<bool> addBeneficiary(String name, String docId) async {
-    if (_currentUser == null) {
+    if (_currentUser == null) return false;
+
+    try {
+      // LLAMADA REAL AL BACKEND
+      final response = await ApiClient().dio.post(
+        '/beneficiarios',
+        data: {
+          'nombre_completo': name,
+          'numero_documento': docId,
+          'tipo_documento': 'CC',
+        },
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        // Si el servidor confirma el guardado, lo agregamos a la lista local
+        // Usamos los datos que nos devuelve el servidor (incluyendo el ID real)
+        final newBen = Beneficiary.fromJson(response.data['data']);
+
+        _currentUser!.beneficiaries.add(newBen);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint("Error al guardar beneficiario en BD: $e");
       return false;
     }
-    final newBen = Beneficiary(
-      id: DateTime.now().toString(),
-      name: name,
-      documentNumber: docId,
-    );
-    _currentUser!.beneficiaries.add(newBen);
-    return true;
   }
 
   static Future<bool> updateUserProfile({
-    String? name,
-    String? phone,
-    String? email,
-    String? photoUrl,
+    required String name,
+    required String phone,
+    required String email,
+    File? imageFile, // Cambiamos String? photoUrl por File? imageFile
   }) async {
-    return true;
+    try {
+      // Para enviar archivos, usamos FormData
+      FormData formData = FormData.fromMap({
+        'name': name,
+        'phone': phone,
+        'email': email,
+        if (imageFile != null)
+          'photo': await MultipartFile.fromFile(
+            imageFile.path,
+            filename: 'profile_picture.jpg',
+          ),
+      });
+
+      final response = await _api.dio.post('/me/update', data: formData);
+
+      if (response.data['status'] == 'success' ||
+          response.data['success'] == true) {
+        _currentUser = User.fromJson(response.data['user']);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint("Error en AuthService: $e");
+      return false;
+    }
   }
 
   static Future<String?> uploadProfileImage(String path) async {
@@ -265,7 +334,22 @@ class AuthService {
     required String nit,
     required String companyName,
   }) async {
-    return true;
+    try {
+      final response = await ApiClient().dio.post(
+        '/empresas/vincular-usuario',
+        data: {'nit': nit, 'documento': _currentUser?.documentNumber},
+      );
+
+      if (response.data['success'] == true) {
+        // IMPORTANTE: Actualizamos el usuario local con la nueva info
+        // Suponiendo que el backend devuelve el objeto user actualizado
+        _currentUser = User.fromMap(response.data['data']['user']);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
   }
 
   // ===========================================================================

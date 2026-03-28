@@ -150,23 +150,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _saveChanges() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // Ocultar teclado
     FocusScope.of(context).unfocus();
-
     setState(() => _isLoading = true);
 
-    String? newPhotoUrl;
-    // 1. Subir imagen si existe
-    if (_imageFile != null) {
-      newPhotoUrl = await AuthService.uploadProfileImage(_imageFile!.path);
-    }
+    // REGLA DE ORO: Ya no llamamos a uploadProfileImage por separado.
+    // Enviamos el archivo físico directamente al método de actualización.
 
-    // 2. Enviar datos al servicio (Backend Laravel)
     final success = await AuthService.updateUserProfile(
       name: _nameController.text.trim(),
       phone: _phoneController.text.trim(),
       email: _emailController.text.trim(),
-      photoUrl: newPhotoUrl,
+      imageFile: _imageFile, // <--- CAMBIO AQUÍ: Usamos el nombre 'imageFile'
     );
 
     setState(() => _isLoading = false);
@@ -178,12 +172,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
           backgroundColor: AppColors.primaryGreen,
         ),
       );
-      // Bloquear todo de nuevo
       setState(() {
         _isNameEditable = false;
         _isPhoneEditable = false;
         _isEmailEditable = false;
-        _imageFile = null;
+        _imageFile = null; // Limpiamos el archivo temporal
       });
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

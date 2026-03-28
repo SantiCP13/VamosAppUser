@@ -1,80 +1,159 @@
-import 'dart:async';
-import '../../../core/models/user_model.dart'; // Asegura importar tu User Model
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
+import '../../../core/network/api_client.dart';
+import '../../../core/models/user_model.dart';
 
-// CORRECCIÓN: Dart moderno usa lowerCamelCase para los valores del Enum
-enum PaymentMethodType { cash, card, corporateVoucher }
+enum PaymentMethodType { cash, card, corporateVoucher, pse }
 
 class PaymentMethod {
   final String id;
   final String name;
-  final String last4; // Solo para tarjetas
+  final String last4;
+  final String brand;
   final PaymentMethodType type;
-  final String? iconAsset; // Opcional si usas imágenes
-  final bool isDefault;
+  bool isDefault;
 
   PaymentMethod({
     required this.id,
     required this.name,
     this.last4 = "",
+    this.brand = "",
     required this.type,
     this.isDefault = false,
-    this.iconAsset,
   });
+
+  factory PaymentMethod.fromApi(Map<String, dynamic> map) {
+    return PaymentMethod(
+      id: map['id'].toString(),
+      name: map['tipo'] == 'TARJETA'
+          ? "${map['franquicia']} **** ${map['ultimos_cuatro']}"
+          : "Efectivo",
+      last4: map['ultimos_cuatro'] ?? "",
+      brand: map['franquicia'] ?? "",
+      type: map['tipo'] == 'TARJETA'
+          ? PaymentMethodType.card
+          : PaymentMethodType.cash,
+      isDefault: map['es_principal'] == 1 || map['es_principal'] == true,
+    );
+  }
 }
 
 class PaymentService {
-  // Simula API: Obtener métodos de pago según el modo del usuario
-  static Future<List<PaymentMethod>> getPaymentMethods(User user) async {
-    await Future.delayed(const Duration(milliseconds: 800)); // Latencia de red
+  static final PaymentService _instance = PaymentService._internal();
+  factory PaymentService() => _instance;
+  PaymentService._internal();
 
+  final Dio _dio = ApiClient().dio;
+
+  final String _wompiUrl = "https://sandbox.wompi.co/v1/tokens/cards";
+  final String _wompiPublicKey = "pub_test_XXXXXXXXX";
+
+  /// Obtiene todos los métodos habilitados
+  /// Obtiene todos los métodos habilitados filtrando estrictamente
+  Future<List<PaymentMethod>> getPaymentMethods(User user) async {
+    List<PaymentMethod> methods = [];
+
+    // 1. Efectivo: Siempre disponible
+    methods.add(
+      PaymentMethod(
+        id: "cash",
+        name: "Efectivo",
+        type: PaymentMethodType.cash,
+        isDefault: !user.isCorporateMode, // Default solo en modo verde
+      ),
+    );
+
+    // 2. Pago por Empresa: SOLO si el usuario es EMPLEADO Y está en MODO CORPORATIVO (Azul)
+    // isCorporateMode ya verifica internamente: (appMode == CORPORATE && canUseCorporateMode)
     if (user.isCorporateMode) {
-      // MODO CORPORATIVO: Solo Vales Digitales
-      return [
+      methods.add(
         PaymentMethod(
-          id: "voucher_corp_01",
-          name: "Vale Corporativo - ${user.empresa}",
-          // CORRECCIÓN: Actualizado a corporateVoucher
+          id: "corp",
+          name: "Pago por Empresa (${user.empresa})",
           type: PaymentMethodType.corporateVoucher,
-          isDefault: true,
+          isDefault: true, // Siempre es el default si entramos en modo azul
         ),
-      ];
-    } else {
-      // MODO PERSONAL: Efectivo y Tarjetas Simuladas
-      return [
-        PaymentMethod(
-          id: "cash",
-          name: "Efectivo",
-          // CORRECCIÓN: Actualizado a cash
-          type: PaymentMethodType.cash,
-          isDefault: true,
-        ),
-        PaymentMethod(
-          id: "card_visa_1234",
-          name: "Visa Débito",
-          last4: "4242",
-          // CORRECCIÓN: Actualizado a card
-          type: PaymentMethodType.card,
-        ),
-        PaymentMethod(
-          id: "card_master_9876",
-          name: "Mastercard Gold",
-          last4: "8899",
-          // CORRECCIÓN: Actualizado a card
-          type: PaymentMethodType.card,
-        ),
-      ];
+      );
+    }
+
+    try {
+      // 3. Tarjetas: Siempre disponibles para ambos perfiles
+      final response = await _dio.get('/pagos/metodos');
+      if (response.data['status'] == 'success') {
+        final List data = response.data['data'];
+        methods.addAll(data.map((m) => PaymentMethod.fromApi(m)));
+      }
+    } catch (e) {
+      debugPrint("Error cargando tarjetas: $e");
+    }
+
+    return methods;
+  }
+
+  /// Obtener lista de bancos PSE (Corregido)
+  Future<List<dynamic>> getPseBanks() async {
+    try {
+      final res = await Dio().get(
+        "https://sandbox.wompi.co/v1/financial_institutions",
+        options: Options(headers: {"Authorization": "Bearer $_wompiPublicKey"}),
+      );
+      return res.data['data'];
+    } catch (e) {
+      debugPrint("Error PSE: $e");
+      return [];
     }
   }
 
-  // Simula API: Procesar el cobro
-  static Future<bool> processPayment({
+  Future<bool> addCardWithWompi({
+    required String cardNumber,
+    required String cvc,
+    required String expMonth,
+    required String expYear,
+    required String cardHolder,
+  }) async {
+    try {
+      final wompiResponse = await Dio().post(
+        _wompiUrl, // <--- AQUÍ SE USA LA VARIABLE
+        options: Options(headers: {"Authorization": "Bearer $_wompiPublicKey"}),
+        data: {
+          "number": cardNumber.replaceAll(' ', ''),
+          "cvc": cvc,
+          "exp_month": expMonth,
+          "exp_year": expYear,
+          "card_holder": cardHolder,
+        },
+      );
+
+      if (wompiResponse.statusCode == 201) {
+        final data = wompiResponse.data['data'];
+        final apiResponse = await _dio.post(
+          '/pagos/metodos',
+          data: {
+            "tipo": "TARJETA",
+            "wompi_token": data['id'],
+            "franquicia": data['brand'],
+            "ultimos_cuatro": data['last_four'],
+          },
+        );
+        return apiResponse.statusCode == 201;
+      }
+      return false;
+    } catch (e) {
+      debugPrint("Error en Wompi: $e");
+      return false;
+    }
+  }
+
+  Future<bool> processPayment({
     required String methodId,
     required double amount,
   }) async {
-    // Simular tiempo de procesamiento bancario
-    await Future.delayed(const Duration(seconds: 2));
-
-    // Aquí podrías poner lógica de fallo aleatorio para probar errores
-    return true;
+    try {
+      // Lógica de cobro vinculada a ViajeController
+      await Future.delayed(const Duration(seconds: 1));
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 }

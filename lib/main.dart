@@ -5,11 +5,12 @@ import 'features/auth/services/auth_service.dart';
 import 'features/auth/screens/welcome_screen.dart';
 import 'features/home/screens/home_screen.dart';
 import 'core/navigation/navigation_service.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: ".env");
-
+  await initializeDateFormatting('es_ES', null);
   // Ejecutamos la validación de sesión antes de que el usuario vea nada
   bool isAuthenticated = await AuthService.checkAuthStatus();
 

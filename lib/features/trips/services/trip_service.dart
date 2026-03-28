@@ -1,16 +1,11 @@
-import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
-import 'dart:developer' as developer;
-
 import '../../../core/network/api_client.dart';
 import '../../../core/models/user_model.dart';
-import '../../../core/models/passenger_model.dart'; // <--- Importar nuevo modelo
+import '../../../core/models/passenger_model.dart';
 
 class TripService {
   final ApiClient _api = ApiClient();
 
-  /// SOLICITAR UN NUEVO VIAJE (CORREGIDO PARA FUEC)
   Future<bool> createTripRequest({
     required User currentUser,
     required LatLng origin,
@@ -19,78 +14,60 @@ class TripService {
     required String destinationAddress,
     required String serviceCategory,
     required double estimatedPrice,
-    required List<Passenger>
-    passengers, // <--- CAMBIO CRÍTICO: Recibe objetos completos
+    required List<Passenger> passengers,
     required bool includeMyself,
+    DateTime? scheduledAt,
   }) async {
-    // 1. CÁLCULO DE ASIENTOS
-    final int requiredSeats = (includeMyself ? 1 : 0) + passengers.length;
+    final List<Map<String, dynamic>> pasajerosData = [];
 
-    String finalServiceLevel = serviceCategory;
-    if (requiredSeats > 4) {
-      finalServiceLevel = 'VAN';
-      developer.log(
-        "🚍 Categoría forzada a VAN ($requiredSeats pax)",
-        name: 'TRIP_LOGIC',
-      );
+    // Agregamos al usuario logueado
+    if (includeMyself) {
+      pasajerosData.add({
+        'nombre_completo': currentUser.name,
+        'numero_documento': currentUser.documentNumber.isEmpty
+            ? "0"
+            : currentUser.documentNumber,
+        'tipo_documento': 'CC',
+      });
     }
 
-    // 2. CONSTRUCCIÓN DEL MANIFIESTO
-    // Serializamos la lista de objetos Passenger a JSON para el backend
-    final List<Map<String, dynamic>> manifestData = passengers
-        .map((p) => p.toJson())
-        .toList();
-
-    // Si el usuario solicitante se incluye, debemos asegurarnos que el backend tenga su cédula.
-    // Asumimos que el backend toma la cédula del currentUser de su perfil,
-    // pero idealmente deberíamos enviarla si no está garantizada en BD.
+    // Agregamos acompañantes
+    for (var p in passengers) {
+      pasajerosData.add({
+        'nombre_completo': p.name,
+        'numero_documento': p.nationalId,
+        'tipo_documento': 'CC',
+      });
+    }
 
     final Map<String, dynamic> body = {
-      'requested_by_user_id': currentUser.id,
-      'company_id': currentUser.isCorporateMode
-          ? currentUser.companyUuid
-          : null,
-
-      // Enviamos el Array estructurado, NO una lista plana de IDs
-      'manifest_passengers': manifestData,
-
-      'include_requester_in_manifest': includeMyself,
-      'origin_address': originAddress,
-      'destination_address': destinationAddress,
-      'origin_lat': origin.latitude,
-      'origin_lng': origin.longitude,
-      'dest_lat': destination.latitude,
-      'dest_lng': destination.longitude,
-      'estimated_price': estimatedPrice,
-      'service_level': finalServiceLevel,
-      'required_seats': requiredSeats,
-      'app_mode': currentUser.appMode.name, // 'PERSONAL' o 'CORPORATE'
+      // Si está en modo corporativo, enviamos el ID de su empresa (convertido a int)
+      // Si es natural, enviamos el contrato global '1'.
+      'id_contrato': currentUser.isCorporateMode
+          ? (int.tryParse(currentUser.companyUuid ?? '1') ?? 1)
+          : 1,
+      'origen': originAddress,
+      'destino': destinationAddress,
+      'lat_origen': origin.latitude,
+      'lng_origen': origin.longitude,
+      'lat_destino': destination.latitude,
+      'lng_destino': destination.longitude,
+      'tipo_viaje': serviceCategory.toLowerCase(),
+      'precio_estimado': estimatedPrice,
+      'programado_para': scheduledAt?.toIso8601String(),
+      'desglose_precio': {
+        'total': estimatedPrice,
+        'detalles': 'Cotización desde App',
+      },
+      'pasajeros': pasajerosData,
     };
 
-    // 3. CONEXIÓN (Sin cambios mayores, solo validación del payload)
-    if (_api.shouldAttemptRealConnection) {
-      try {
-        final response = await _api.dio.post('/trips', data: body);
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          developer.log("✅ Viaje creado (Backend Real)", name: 'TRIP_SERVICE');
-          return true;
-        }
-      } catch (e) {
-        developer.log("⚠️ Falló conexión Backend: $e", name: 'TRIP_SERVICE');
-        if (_api.envType == 'PROD') return false;
-      }
+    try {
+      // Usamos POST a la ruta correcta
+      final response = await _api.dio.post('/viajes/solicitar', data: body);
+      return response.statusCode == 200 || response.statusCode == 201;
+    } catch (e) {
+      return false;
     }
-
-    developer.log('🕵️ [PAYLOAD FINAL FUEC]', name: 'CHECK_DATA');
-    debugPrint(const JsonEncoder.withIndent('  ').convert(body));
-
-    return _simulateSuccessfulTripCreation(body);
-  }
-
-  Future<bool> _simulateSuccessfulTripCreation(
-    Map<String, dynamic> body,
-  ) async {
-    await _api.simulateDelay(2000);
-    return true;
   }
 }

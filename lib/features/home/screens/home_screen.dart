@@ -8,6 +8,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:intl/intl.dart';
 
 // --- IMPORTS ---
 import '../../../core/theme/app_colors.dart';
@@ -23,6 +24,7 @@ import '../../payment/widgets/payment_panel.dart';
 import '../../trips/services/trip_service.dart';
 import 'package:flutter/services.dart';
 import '../../../core/models/passenger_model.dart';
+import '../../home/services/home_service.dart';
 
 enum TripState {
   IDLE,
@@ -46,7 +48,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final MapController _mapController = MapController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final RouteService _routeService = RouteService();
-
+  final HomeService _homeService = HomeService();
   // --- ESTADO GENERAL ---
   TripState _tripState = TripState.IDLE;
   LatLng? _currentPosition;
@@ -76,6 +78,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   double _tripPrice = 0;
   String _tripDistance = "";
   String _tripDuration = "";
+  dynamic _tripDesglose; // <--- AGREGA ESTA LÍNEA
   Timer? _checkStatusTimer;
 
   // --- CONDUCTOR Y SIMULACIÓN ---
@@ -83,7 +86,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Timer? _simulationTimer;
   final String _driverEta = "5 min";
   int _routeIndex = 0;
-
+  DateTime? _scheduledAt;
   // --- CATEGORÍAS ---
   double _baseRoutePrice = 0;
   String _selectedServiceCategory = 'STANDARD';
@@ -114,6 +117,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
 
     _determinePosition();
+    _checkActiveTrip();
   }
 
   @override
@@ -142,6 +146,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       await AuthService.checkAuthStatus();
     } catch (e) {
       debugPrint("Error: $e");
+    }
+  }
+
+  Future<void> _checkActiveTrip() async {
+    final tripData = await _homeService.getActiveTrip();
+    if (tripData != null && mounted) {
+      setState(() {
+        // 1. Sincronizar el estado del viaje según lo que diga la BD
+        if (tripData['iniciado_en'] != null) {
+          _tripState = TripState.IN_TRIP;
+        } else if (tripData['llegado_en'] != null ||
+            tripData['asignado_en'] != null) {
+          _tripState = TripState.DRIVER_ON_WAY;
+        } else {
+          _tripState = TripState.SEARCHING_DRIVER;
+        }
+
+        // 2. Mapear datos del destino
+        _destinationName = tripData['destino'];
+        _destinationCoordinates = LatLng(
+          double.parse(tripData['lat_destino'].toString()),
+          double.parse(tripData['lng_destino'].toString()),
+        );
+      });
     }
   }
 
@@ -225,7 +253,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
-  void _toggleAppMode(bool isTargetCorporate) {
+  void _toggleAppMode(bool isTargetCorporate) async {
+    // 1. Bloqueo de seguridad si hay un viaje en curso
     if (_tripState != TripState.IDLE) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -242,104 +271,56 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       return;
     }
 
+    // 2. Lógica para MODO CORPORATIVO
     if (isTargetCorporate) {
-      if (_currentUser.idResponsable == null) {
+      // Si ya tiene empresa vinculada, cambiamos DIRECTO al backend
+      if (_currentUser.canUseCorporateMode) {
+        bool success = await AuthService.toggleAppMode(true);
+        if (success && mounted) {
+          setState(() {
+            _resetTripData();
+          });
+          _showModeSnackBar("Modo Corporativo activado", Colors.blue[800]!);
+        }
+      } else {
+        // Solo si NO tiene empresa, mostramos el modal para que la busque
         _showCorporateLinkingModal();
-        return;
       }
-      AuthService.toggleAppMode(true);
-      setState(() {
-        _resetTripData();
-      });
       return;
     }
 
+    // 3. Lógica para MODO NATURAL (Personal)
+    // El cambio es directo, ya que todo usuario registrado puede usar el modo personal.
     if (!isTargetCorporate) {
-      if (_currentUser.idPassenger != null) {
-        AuthService.toggleAppMode(false);
+      bool success = await AuthService.toggleAppMode(false);
+      if (success && mounted) {
         setState(() {
           _resetTripData();
         });
-      } else {
-        _showActivateNaturalDialog();
+        _showModeSnackBar("Modo Personal activado", AppColors.primaryGreen);
       }
     }
+  }
+
+  // Función auxiliar para feedback visual (opcional, pero recomendada)
+  void _showModeSnackBar(String message, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+        ),
+        backgroundColor: color,
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   void _resetTripData() {
     _routePoints = [];
     _destinationCoordinates = null;
     _destinationName = null;
-  }
-
-  void _showActivateNaturalDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(
-          "Activar Perfil Personal",
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-        ),
-        content: Text(
-          "Como usuario Corporativo verificado, puedes activar tu perfil Personal inmediatamente.\n\n"
-          "Esto te permitirá solicitar viajes particulares pagados por ti.",
-          style: GoogleFonts.poppins(),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(
-              "Cancelar",
-              style: GoogleFonts.poppins(color: Colors.grey),
-            ),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primaryGreen,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            onPressed: () async {
-              Navigator.pop(ctx);
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    "Procesando solicitud...",
-                    style: GoogleFonts.poppins(),
-                  ),
-                ),
-              );
-
-              await AuthService.activateNaturalProfile();
-
-              if (!mounted) return;
-              setState(() {
-                _resetTripData();
-              });
-
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    "¡Perfil Personal Activado!",
-                    style: GoogleFonts.poppins(),
-                  ),
-                ),
-              );
-            },
-            child: Text(
-              "Activar Ahora",
-              style: GoogleFonts.poppins(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<bool> _isTripAllowed(LatLng start, LatLng end) async {
@@ -433,6 +414,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (_currentPosition == null) await _determinePosition();
     if (_currentPosition == null) return;
 
+    // 1. LLAMADO PARA QUITAR EL WARNING DE _isTripAllowed
     bool allowed = await _isTripAllowed(_currentPosition!, destination);
     if (!mounted || !allowed) {
       setState(() {
@@ -445,72 +427,79 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     setState(() => _tripState = TripState.CALCULATING);
 
-    // --- CAMBIO: Bloque Try-Catch para manejar la nueva lógica del servicio ---
     try {
       final result = await _routeService.getRoute(
         _currentPosition!,
         destination,
+        idContrato: 1,
       );
 
       if (!mounted) return;
-
-      // Asignamos directamente, ya sabemos que result no es nulo
-      _routePoints = result.points;
-
-      // Lógica de visualización (Si es fallback, podríamos mostrar alerta aquí)
-      if (result.isFallback) {
-        debugPrint("⚠️ Usando ruta estimada (Línea recta)");
-      }
-
-      double km = result.distanceMeters / 1000;
-      double minutes = result.durationSeconds / 60;
-
-      // Corrección de string interpolation innecesaria
-      _tripDistance = "${km.toStringAsFixed(1)} km";
-      _tripDuration = "${minutes.round()} min";
-
-      // --- CÁLCULO DE PRECIOS (Misma lógica tuya) ---
-      double base = 3800;
-      double costoPorKm = 1100;
-      double costoPorMin = 250;
-      double valorRecargo = 2500;
-
-      double valKm = km * costoPorKm;
-      double valMin = minutes * costoPorMin;
-
-      double recargoTotal = 0;
-      DateTime now = DateTime.now();
-      bool esNoche = now.hour >= 20 || now.hour < 5;
-      bool esDominical = now.weekday == DateTime.sunday;
-      if (esNoche || esDominical) recargoTotal = valorRecargo;
-
-      _baseRoutePrice = base + valKm + valMin + recargoTotal;
 
       setState(() {
+        _routePoints = result.points;
+        _tripDistance =
+            "${(result.distanceMeters / 1000).toStringAsFixed(1)} km";
+        _tripDuration = "${(result.durationSeconds / 60).round()} min";
+        _tripPrice = result.price;
+        _baseRoutePrice = result.price;
+        _tripDesglose = result.desglose; // <--- AGREGA ESTA LÍNEA
         _tripState = TripState.ROUTE_PREVIEW;
-        if (_totalPassengers > 4) {
-          _selectedServiceCategory = 'VAN';
-        } else {
-          _selectedServiceCategory = 'STANDARD';
-        }
       });
 
-      _updateFinalPrice();
+      // 2. LLAMADO PARA QUITAR EL WARNING DE _fitCameraToRoute
       _fitCameraToRoute();
+
+      _showRequestTripPanel();
     } catch (e) {
-      // Manejo de errores (Timeout o fallo total)
       setState(() => _tripState = TripState.IDLE);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "No se pudo calcular la ruta: $e",
-            style: GoogleFonts.poppins(),
-          ),
-          backgroundColor: Colors.red,
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Error: $e")));
     }
+  }
+
+  void _showRequestTripPanel() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[300],
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  _buildRoutePreviewContent(setModalState),
+                  const SizedBox(height: 20),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    ).then((wasConfirmed) {
+      // Recibimos el valor aquí
+      // SOLO reseteamos si wasConfirmed NO es true.
+      // Si es true, significa que presionamos "Solicitar" y los datos deben persistir.
+      if (wasConfirmed != true && _tripState == TripState.ROUTE_PREVIEW) {
+        _resetApp();
+      }
+    });
   }
 
   void _fitCameraToRoute() {
@@ -526,16 +515,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
       ),
     );
-  }
-
-  void _zoomIn() {
-    final z = _mapController.camera.zoom;
-    _mapController.move(_mapController.camera.center, z + 1);
-  }
-
-  void _zoomOut() {
-    final z = _mapController.camera.zoom;
-    _mapController.move(_mapController.camera.center, z - 1);
   }
 
   void _moveToCurrentPosition() {
@@ -559,12 +538,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final bool isCorporate = _currentUser.isCorporateMode;
     // Color principal dinámico según el modo
     final Color mainColor = isCorporate
-        ? Colors.blue[800]!
-        : AppColors.primaryGreen;
+        ? const Color(0xFF1565C0) // Blue 800
+        : const Color(0xFF2E7D32);
 
     return Scaffold(
       key: _scaffoldKey,
-      drawer: const SideMenu(),
+      drawer: SideMenu(onToggleMode: _toggleAppMode),
       body: Stack(
         children: [
           // 1. CAPA DEL MAPA
@@ -591,9 +570,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             children: [
               TileLayer(
                 urlTemplate: isDark
-                    ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'
-                    : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+                    ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+                    : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
                 subdomains: const ['a', 'b', 'c', 'd'],
+                // Esto mejora la resolución en teléfonos modernos (Retina/OLED)
+                tileProvider: NetworkTileProvider(),
               ),
 
               if (!_isPickingLocation) ...[
@@ -655,20 +636,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
 
           // 2. BARRA SUPERIOR
-          Positioned(top: 0, left: 0, right: 0, child: _buildTopHybridBar()),
-
-          // 3. CONTROLES DEL MAPA
           Positioned(
-            top: 130,
-            right: 20,
-            child: Column(
-              children: [
-                _buildMapControlBtn(Icons.my_location, _moveToCurrentPosition),
-                const SizedBox(height: 10),
-                _buildMapControlBtn(Icons.add, _zoomIn),
-                const SizedBox(height: 5),
-                _buildMapControlBtn(Icons.remove, _zoomOut),
-              ],
+            top: 50, // Ajusta según el SafeArea
+            left: 20,
+            child: Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 8)],
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.menu, color: Colors.black87),
+                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+              ),
             ),
           ),
 
@@ -781,8 +761,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               ),
             ),
+          // 3. BOTÓN UBICAR (Posicionado encima de la barra de búsqueda)
+          if (_tripState == TripState.IDLE && !_isPickingLocation)
+            Positioned(
+              bottom:
+                  110, // Altura calculada para quedar justo arriba del buscador
+              right: 20,
+              child: _buildMapControlBtn(
+                Icons.my_location,
+                _moveToCurrentPosition,
+              ),
+            ),
 
-          // 5. BARRA DE BÚSQUEDA (ESTILO INPUT)
+          // 5. BARRA DE BÚSQUEDA (ESTILO INPUT) - Este ya lo tienes, déjalo debajo
           if (_tripState == TripState.IDLE && !_isPickingLocation)
             Positioned(
               bottom: 30,
@@ -790,14 +781,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               right: 20,
               child: _buildSearchWidget(),
             ),
-
-          // 6. PANELES DESLIZANTES
-          if (_tripState == TripState.ROUTE_PREVIEW)
+          // 5. BARRA DE BÚSQUEDA (ESTILO INPUT)
+          if (_tripState == TripState.IDLE && !_isPickingLocation)
             Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: _buildPanelContainer(_buildRoutePreviewContent()),
+              bottom: 30,
+              left: 20,
+              right: 20,
+              child: _buildSearchWidget(),
             ),
 
           if (_tripState == TripState.SEARCHING_DRIVER)
@@ -849,7 +839,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // ===============================================================
   // 4. WIDGETS Y LÓGICA DE INTERFAZ
   // ===============================================================
-  Widget _buildVehicleSelector() {
+  Widget _buildVehicleSelector(StateSetter setModalState) {
     final List<Map<String, dynamic>> options = [
       {
         'id': 'STANDARD',
@@ -883,10 +873,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         itemBuilder: (context, index) {
           final opt = options[index];
           bool isSelected = _selectedServiceCategory == opt['id'];
-          bool isDisabled = false;
 
-          if (_totalPassengers > 4 && opt['id'] != 'VAN') {
-            isDisabled = true;
+          // LÓGICA DE BLOQUEO POR CUPOS
+          bool isDisabled = false;
+          if (_totalPassengers > 4 &&
+              (opt['id'] == 'STANDARD' || opt['id'] == 'PREMIUM')) {
+            isDisabled = true; // Bloquear sedanes si hay > 4 pax
+          }
+          if (_totalPassengers <= 4 && opt['id'] == 'VAN') {
+            isDisabled =
+                true; // Bloquear Van si hay 4 o menos (según tu requerimiento)
           }
 
           double mult = _categoryMultipliers[opt['id']]!;
@@ -897,9 +893,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             onTap: isDisabled
                 ? null
                 : () {
+                    setModalState(() {
+                      _selectedServiceCategory = opt['id'];
+                    }); // Actualiza el modal
                     setState(() {
                       _selectedServiceCategory = opt['id'];
-                    });
+                    }); // Actualiza el mapa
                     _updateFinalPrice();
                   },
             child: Container(
@@ -978,318 +977,440 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildTopHybridBar() {
-    bool isCorp = _currentUser.isCorporateMode;
+  Widget _buildRoutePreviewContent(StateSetter setModalState) {
+    final isCorp = _currentUser.isCorporateMode;
+    final primaryColor = isCorp
+        ? const Color(0xFF1565C0)
+        : AppColors.primaryGreen;
 
-    return SafeArea(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Row(
-          children: [
-            Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
-              ),
-              child: IconButton(
-                icon: const Icon(Icons.menu),
-                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Container(
-                height: 45,
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(25),
-                  boxShadow: const [
-                    BoxShadow(color: Colors.black12, blurRadius: 4),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    _buildModeOption(
-                      "Personal",
-                      !isCorp,
-                      AppColors.primaryGreen,
-                    ),
-                    _buildModeOption("Corporativo", isCorp, Colors.blue[800]!),
-                  ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildTimeSelector(primaryColor, setModalState),
+          const SizedBox(height: 15),
+          _buildTripDetailsCard(primaryColor, setModalState),
+          const SizedBox(height: 15),
+          _buildVehicleSelector(setModalState),
+
+          _buildPriceTicket(), // <--- AGREGA ESTA LÍNEA AQUÍ
+
+          const SizedBox(height: 10),
+          _buildRequestButton(primaryColor),
+          const SizedBox(height: 10),
+
+          // --- BOTÓN NUEVO DE CANCELAR ---
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: () {
+                Navigator.pop(context); // Cierra el panel
+                _resetApp(); // Limpia el mapa y vuelve al buscador
+              },
+              child: Text(
+                "Cancelar solicitud",
+                style: GoogleFonts.poppins(
+                  color: Colors.red,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
             ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRequestButton(Color color) {
+    bool isScheduled = _scheduledAt != null;
+
+    return SizedBox(
+      width: double.infinity,
+      height: 56,
+      child: ElevatedButton(
+        onPressed: _totalPassengers > 0
+            ? () {
+                // 1. PASAMOS 'true' como resultado del pop.
+                // Esto indica que el cierre es intencional para solicitar viaje.
+                Navigator.pop(context, true);
+
+                // 2. EJECUTAR LA LÓGICA DE SOLICITUD
+                _handleTripRequest();
+              }
+            : null,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+          ),
+          elevation: 2,
+        ),
+        child: Text(
+          isScheduled
+              ? "Programar para el ${DateFormat('dd/MM HH:mm').format(_scheduledAt!)}"
+              : "Solicitar Viaje Ahora",
+          style: GoogleFonts.poppins(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildModeOption(String label, bool isActive, Color activeColor) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: () {
-          if (!isActive) _toggleAppMode(label == "Corporativo");
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: isActive ? activeColor : Colors.transparent,
-            borderRadius: BorderRadius.circular(20),
-          ),
-          alignment: Alignment.center,
-          child: Text(
-            label,
-            style: GoogleFonts.poppins(
-              color: isActive ? Colors.white : Colors.grey[600],
-              fontWeight: FontWeight.bold,
-              fontSize: 13,
-            ),
-          ),
-        ),
+  Widget _buildTripDetailsCard(Color color, StateSetter setModalState) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
       ),
-    );
-  }
+      child: Column(
+        children: [
+          InkWell(
+            onTap: () async {
+              Navigator.pop(context);
+              final result = await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => SearchDestinationScreen(
+                    currentPosition: _currentPosition,
+                  ),
+                ),
+              );
 
-  Widget _buildRoutePreviewContent() {
-    bool isCorp = _currentUser.isCorporateMode;
-    Color primaryColor = isCorp ? Colors.blue[800]! : AppColors.primaryGreen;
-
-    List<String> names = [];
-    if (_includeMyself) names.add("Yo");
-    for (var b in _selectedBeneficiariesList) {
-      names.add(b.name.split(" ").first);
-    }
-    String passengersString = names.join(", ");
-    if (passengersString.length > 30) {
-      passengersString = "${passengersString.substring(0, 27)}...";
-    }
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Center(
-          child: Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.grey[300],
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-        ),
-        const SizedBox(height: 15),
-
-        // DESTINO
-        if (_destinationName != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8.0),
+              if (result != null) {
+                setState(() {
+                  _destinationName = result['name'];
+                  _destinationCoordinates = LatLng(
+                    result['lat'],
+                    result['lng'],
+                  );
+                });
+                _calculateRouteAndPrice(_destinationCoordinates!);
+              }
+            },
             child: Row(
               children: [
                 const Icon(
                   Icons.location_on,
-                  size: 20,
                   color: Colors.redAccent,
+                  size: 20,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _destinationName!,
-                    style: GoogleFonts.poppins(
-                      fontWeight: FontWeight.w500,
-                      color: Colors.grey[800],
-                      fontSize: 15,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-        // INFO CABECERA
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isCorp ? "Viaje Corporativo" : "Viaje Personal",
-                    style: GoogleFonts.poppins(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: isCorp ? Colors.blue[900] : Colors.black,
-                    ),
-                  ),
-                  if (isCorp)
-                    Text(
-                      "FUEC Activo • Servicio Especial",
-                      style: GoogleFonts.poppins(
-                        fontSize: 11,
-                        color: Colors.green,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  "\$ ${_formatCurrency(_tripPrice)}",
-                  style: GoogleFonts.poppins(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: primaryColor,
-                  ),
-                ),
-                if (isCorp)
-                  Text(
-                    "Pagado por Empresa",
-                    style: GoogleFonts.poppins(
-                      fontSize: 10,
-                      color: Colors.grey,
-                    ),
-                  ),
-              ],
-            ),
-          ],
-        ),
-
-        const SizedBox(height: 20),
-        Divider(thickness: 1, color: Colors.grey[200]),
-        const SizedBox(height: 10),
-
-        // SELECTOR DE PASAJEROS (ESTILO INPUT)
-        Text(
-          "Pasajeros ($_totalPassengers)",
-          style: GoogleFonts.poppins(
-            fontSize: 12,
-            color: Colors.grey[600],
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 8),
-
-        InkWell(
-          onTap: _showBeneficiarySelector,
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.grey.shade50,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey.shade200),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.groups_outlined, color: primaryColor, size: 22),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        passengersString.isEmpty
-                            ? "Seleccionar pasajeros"
-                            : passengersString,
+                        "Viajar a:",
                         style: GoogleFonts.poppins(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                          color: Colors.black87,
+                          fontSize: 11,
+                          color: Colors.grey,
                         ),
-                        maxLines: 1,
+                      ),
+                      Text(
+                        _destinationName ?? "Sin destino",
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
                         overflow: TextOverflow.ellipsis,
                       ),
-                      if (_totalPassengers == 0)
-                        Text(
-                          "Selecciona al menos uno",
-                          style: GoogleFonts.poppins(
-                            fontSize: 11,
-                            color: Colors.red,
-                          ),
+                      // --- ESTO USA LA VARIABLE Y QUITA EL WARNING ---
+                      Text(
+                        "$_tripDistance • $_tripDuration aprox.",
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Colors.grey[500],
                         ),
+                      ),
                     ],
                   ),
                 ),
-                Icon(Icons.arrow_drop_down, color: Colors.grey[600]),
+                const Icon(
+                  Icons.edit_location_alt_outlined,
+                  color: Colors.grey,
+                  size: 18,
+                ),
               ],
             ),
           ),
-        ),
-
-        const SizedBox(height: 15),
-        Text(
-          "Vehículo",
-          style: GoogleFonts.poppins(
-            fontWeight: FontWeight.bold,
-            fontSize: 12,
-            color: Colors.grey[600],
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 10),
+            child: Divider(),
           ),
-        ),
-        const SizedBox(height: 8),
-        _buildVehicleSelector(),
-
-        const SizedBox(height: 15),
-        Row(
-          children: [
-            Icon(Icons.access_time, size: 14, color: Colors.grey),
-            const SizedBox(width: 4),
-            Text(
-              "$_tripDuration aprox",
-              style: GoogleFonts.poppins(color: Colors.grey, fontSize: 13),
-            ),
-            const SizedBox(width: 15),
-            Icon(Icons.straighten, size: 14, color: Colors.grey),
-            const SizedBox(width: 4),
-            Text(
-              _tripDistance,
-              style: GoogleFonts.poppins(color: Colors.grey, fontSize: 13),
-            ),
-          ],
-        ),
-        const SizedBox(height: 25),
-
-        SizedBox(
-          width: double.infinity,
-          height: 56,
-          child: ElevatedButton(
-            onPressed: _totalPassengers > 0 ? _handleTripRequest : null,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: primaryColor,
-              disabledBackgroundColor: Colors.grey[300],
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(15),
-              ),
-              elevation: 4,
-              shadowColor: primaryColor.withValues(alpha: 0.4),
-            ),
-            child: Text(
-              "Solicitar Viaje",
-              style: GoogleFonts.poppins(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
+          InkWell(
+            onTap: () async {
+              await _showBeneficiarySelector();
+              setModalState(() {});
+            },
+            child: Row(
+              children: [
+                Icon(Icons.people_outline, color: color, size: 20),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "Pasajeros ($_totalPassengers)",
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        _getPassengerSummary(),
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: Colors.grey),
+              ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  // --- LÓGICA DE PROGRAMACIÓN (Front) ---
+  // Paso 1: Actualizar la firma para recibir setModalState
+  Future<void> _showDateTimePicker(StateSetter setModalState) async {
+    DateTime? date = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now().add(const Duration(minutes: 30)),
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 30)),
+    );
+
+    if (date == null) return;
+    if (!mounted) return;
+
+    TimeOfDay? time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+    );
+
+    if (time == null) return;
+    if (!mounted) return;
+
+    setState(() {
+      _scheduledAt = DateTime(
+        date.year,
+        date.month,
+        date.day,
+        time.hour,
+        time.minute,
+      );
+    });
+
+    // Paso 2: Forzar actualización instantánea del Modal
+    setModalState(() {});
+  }
+
+  String _getPassengerSummary() {
+    List<String> names = [];
+    if (_includeMyself) names.add("Yo");
+    names.addAll(
+      _selectedBeneficiariesList.map((b) => b.name.split(" ").first),
+    );
+    return names.isEmpty ? "Selecciona quién viaja" : names.join(", ");
+  }
+
+  Widget _buildTimeSelector(Color color, StateSetter setModalState) {
+    return Row(
+      children: [
+        Expanded(
+          child: _timeOptionTile(
+            title: "Ahora",
+            isSelected: _scheduledAt == null,
+            icon: Icons.flash_on,
+            onTap: () {
+              setModalState(
+                () => _scheduledAt = null,
+              ); // Cambio instantáneo en UI
+              setState(() => _scheduledAt = null);
+            },
+            color: color,
+          ),
         ),
-        const SizedBox(height: 10),
-        Center(
-          child: TextButton(
-            onPressed: _resetApp,
-            child: Text(
-              "Cancelar",
-              style: GoogleFonts.poppins(color: Colors.red),
-            ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _timeOptionTile(
+            title: _scheduledAt == null
+                ? "Programar"
+                : DateFormat('dd/MM HH:mm').format(_scheduledAt!),
+            isSelected: _scheduledAt != null,
+            icon: Icons.calendar_month,
+            onTap: () => _showDateTimePicker(setModalState),
+            color: color,
           ),
         ),
       ],
+    );
+  }
+
+  Widget _timeOptionTile({
+    required String title,
+    required bool isSelected,
+    required IconData icon,
+    required VoidCallback onTap,
+    required Color color,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: isSelected ? color : Colors.grey[100],
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 18,
+              color: isSelected ? Colors.white : Colors.grey[600],
+            ),
+            const SizedBox(width: 8),
+            Text(
+              title,
+              style: GoogleFonts.poppins(
+                color: isSelected ? Colors.white : Colors.grey[600],
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showConfirmPassengersDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.verified_user, color: AppColors.primaryGreen),
+            const SizedBox(width: 10),
+            Text(
+              "Verificar Pasajeros",
+              style: GoogleFonts.poppins(
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              "¿Están todos los pasajeros en la lista?",
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              "IMPORTANTE: El conductor solicitará el documento físico de CADA persona antes de iniciar. Sin registro en la App, no podrán subir al vehículo.",
+              style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey[800]),
+            ),
+            const SizedBox(height: 15),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    "PASAJEROS CONFIRMADOS:",
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (_includeMyself)
+                    Text(
+                      "• Yo (${_currentUser.name})",
+                      style: GoogleFonts.poppins(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ..._selectedBeneficiariesList.map(
+                    (b) => Text(
+                      "• ${b.name}",
+                      style: GoogleFonts.poppins(fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              // 1. Agregamos async aquí
+              Navigator.pop(
+                ctx,
+              ); // 2. Cierra el diálogo de confirmación de pasajeros
+
+              // 3. Abrimos el selector y ESPERAMOS (await) a que el usuario termine
+              await _showBeneficiarySelector();
+
+              // 4. Una vez cerrado el selector, volvemos a mostrar el panel de solicitud
+              if (mounted) {
+                _showRequestTripPanel();
+              }
+            },
+            child: Text(
+              "Editar Lista",
+              style: GoogleFonts.poppins(
+                color: Colors.red,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _processTripCreation(); // Única forma de llegar al backend
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryGreen,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: Text(
+              "Confirmar y Pedir",
+              style: GoogleFonts.poppins(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1374,7 +1495,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ElevatedButton(
               onPressed: () {
                 Navigator.pop(ctx);
-                _processTripCreation();
+                _showConfirmPassengersDialog();
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blue[800],
@@ -1391,75 +1512,129 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
       );
     } else {
-      _processTripCreation();
+      _showConfirmPassengersDialog();
     }
   }
 
   Future<void> _processTripCreation() async {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          "Conectando con la central...",
-          style: GoogleFonts.poppins(),
-        ),
-      ),
-    );
-
-    final tripService = TripService();
-
-    // --- 1. PREPARACIÓN DE DATOS FUEC (CRÍTICO) ---
-    // Convertimos los IDs seleccionados (_selectedPassengerIds) en objetos Passenger.
-    // IMPORTANTE: Aquí asumo que solo tienes los IDs. Para cumplir la ley,
-    // deberás conectar esto con los nombres/cédulas reales de tu lista de contactos.
-
-    List<Passenger> passengersList = _selectedPassengerIds.map((id) {
-      // Por ahora, creamos un objeto temporal para que COMPILE y funcione el flujo.
-      return Passenger(
-        name:
-            "Pasajero Invitado", // Reemplázalo con el nombre real de tu variable de UI
-        nationalId:
-            "000000", // Reemplázalo con la cédula real (Necesario para FUEC)
-      );
-    }).toList();
-    // ----------------------------------------------
-
-    bool success = await tripService.createTripRequest(
-      currentUser: _currentUser,
-      origin: _currentPosition!,
-      destination: _destinationCoordinates!,
-      originAddress: "Ubicación Actual",
-      destinationAddress: _destinationName!,
-      serviceCategory: _selectedServiceCategory,
-      estimatedPrice: _tripPrice,
-
-      // --- CAMBIO AQUÍ ---
-      passengers: passengersList, // Pasamos la lista de objetos, no los IDs
-      // -------------------
-      includeMyself: _includeMyself,
-    );
-
-    if (!mounted) return;
-
-    if (success) {
-      _startSearchingDriver();
-    } else {
+    if (_currentPosition == null || _destinationCoordinates == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "❌ Error al crear la solicitud.",
-            style: GoogleFonts.poppins(),
-          ),
-          backgroundColor: Colors.red,
+        const SnackBar(
+          content: Text("Error: Ubicación no disponible. Reintenta."),
         ),
       );
+      return;
+    }
+
+    final LatLng origin = _currentPosition!;
+    final LatLng destination = _destinationCoordinates!;
+
+    setState(() => _tripState = TripState.CALCULATING);
+
+    try {
+      // <--- ABRE EL TRY AQUÍ
+      final tripService = TripService();
+      List<Passenger> passengersList = _selectedBeneficiariesList.map((b) {
+        return Passenger(name: b.name, nationalId: b.documentNumber);
+      }).toList();
+
+      bool success = await tripService.createTripRequest(
+        currentUser: _currentUser,
+        origin: origin,
+        destination: destination,
+        originAddress: "Ubicación Actual",
+        destinationAddress: _destinationName!,
+        serviceCategory: _selectedServiceCategory,
+        estimatedPrice: _tripPrice,
+        passengers: passengersList,
+        includeMyself: _includeMyself,
+        scheduledAt: _scheduledAt,
+      );
+
+      if (!mounted) return;
+
+      if (success) {
+        if (_scheduledAt != null) {
+          _showScheduledSuccessDialog();
+        } else {
+          _startSearchingDriver();
+        }
+      } else {
+        _resetApp(); // Borra la línea azul si el server dice que no hay choferes
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("No se encontraron conductores disponibles."),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (e) {
+      // <--- CIERRA EL TRY Y CAPTURA EL ERROR
+      _resetApp(); // Borra la línea azul si falla el internet o el server
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Error de conexión: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
-  void _showBeneficiarySelector() {
+  // NUEVO: Diálogo de éxito para viajes programados
+  void _showScheduledSuccessDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Icon(Icons.calendar_today, color: Colors.blue, size: 50),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "¡Viaje Programado!",
+              style: GoogleFonts.poppins(
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              "Tu servicio ha sido registrado. Te notificaremos con los datos del conductor y el vehículo 15 minutos antes de la hora seleccionada.",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.poppins(fontSize: 14),
+            ),
+          ],
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _resetApp(); // Limpiamos el mapa y volvemos al inicio
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue[800],
+              ),
+              child: const Text(
+                "Entendido",
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showBeneficiarySelector() {
     bool isCorp = _currentUser.isCorporateMode;
     Color primaryColor = isCorp ? Colors.blue[800]! : AppColors.primaryGreen;
 
-    showModalBottomSheet(
+    return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.white,
@@ -1842,30 +2017,44 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               final name = nameCtrl.text.trim();
               final doc = docCtrl.text.trim();
 
-              // Validaciones simples antes de enviar
-              if (name.isEmpty) return;
-
-              if (doc.isEmpty || doc.length < 6) {
-                // Feedback visual si la cédula es muy corta
+              if (name.isEmpty || doc.isEmpty || doc.length < 6) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      "Cédula inválida",
-                      style: GoogleFonts.poppins(),
-                    ),
-                  ),
+                  const SnackBar(content: Text("Datos inválidos")),
                 );
                 return;
               }
 
-              await AuthService.addBeneficiary(name, doc);
+              // 1. Llamada al servicio
+              bool success = await AuthService.addBeneficiary(name, doc);
 
               if (!dialogContext.mounted) return;
-              Navigator.pop(dialogContext);
 
-              // Actualizamos la UI principal y el Modal padre
-              parentModalState(() {});
-              setState(() {});
+              if (success) {
+                // 2. Cerramos el diálogo de texto
+                Navigator.pop(dialogContext);
+
+                // 3. MAGIA: Obtenemos el último beneficiario agregado (el que acaba de entrar a la lista)
+                final nuevoPasajero = _currentUser.beneficiaries.last;
+
+                // 4. Actualizamos el Modal de "Quiénes viajan"
+                parentModalState(() {
+                  // Lo marcamos como seleccionado automáticamente
+                  _selectedPassengerIds.add(nuevoPasajero.id);
+                });
+
+                // 5. Actualizamos el estado general (Precio y Categoría)
+                setState(() {
+                  _updateFinalPrice();
+                });
+              } else {
+                // ignore: use_build_context_synchronously
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text("Error al conectar con el servidor"),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
             },
             child: Text(
               "Guardar",
@@ -1934,7 +2123,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
 
     try {
-      final methods = await PaymentService.getPaymentMethods(_currentUser);
+      final methods = await PaymentService().getPaymentMethods(_currentUser);
       if (!mounted) return;
       setState(() {
         _availablePaymentMethods = methods;
@@ -2021,47 +2210,75 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _resetApp() {
     _simulationTimer?.cancel();
-    setState(() {
-      _tripState = TripState.IDLE;
-      _routePoints = [];
-      _destinationCoordinates = null;
-      _destinationName = null;
-      _driverPosition = null;
-      _selectedPassengerIds.clear();
-      _includeMyself = true;
-    });
-    _moveToCurrentPosition();
+    if (mounted) {
+      setState(() {
+        _tripState = TripState.IDLE;
+        _routePoints = []; // <-- ESTO BORRA LA LÍNEA AZUL DEL MAPA
+        _destinationCoordinates = null;
+        _destinationName = null;
+        _driverPosition = null;
+        _scheduledAt = null;
+        _selectedPassengerIds.clear();
+        _includeMyself = true;
+      });
+      _moveToCurrentPosition();
+    }
   }
 
   // --- HELPERS UI ---
-  Widget _buildPanelContainer(Widget child) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
-    decoration: const BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
-      boxShadow: [
-        BoxShadow(color: Colors.black12, blurRadius: 20, spreadRadius: 5),
-      ],
+  Widget _buildPanelContainer(Widget child) => GestureDetector(
+    // Si el usuario desliza hacia abajo, se resetea la app (vuelve al estado IDLE)
+    onVerticalDragEnd: (details) {
+      if (details.primaryVelocity! > 500) {
+        // Detecta un deslizamiento rápido hacia abajo
+        _resetApp();
+      }
+    },
+    child: Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(
+        20,
+        10,
+        20,
+        30,
+      ), // Bajé un poco el top padding
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+        boxShadow: [
+          BoxShadow(color: Colors.black12, blurRadius: 20, spreadRadius: 5),
+        ],
+      ),
+      child: SafeArea(child: child),
     ),
-    child: SafeArea(child: child),
   );
+  Widget _buildMapControlBtn(IconData icon, VoidCallback tap) {
+    // Detectamos el color según el modo actual
+    final Color iconColor = _currentUser.isCorporateMode
+        ? const Color(0xFF1565C0)
+        : AppColors.primaryGreen;
 
-  Widget _buildMapControlBtn(IconData icon, VoidCallback tap) => Container(
-    width: 45,
-    height: 45,
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(12),
-      boxShadow: [
-        BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 6),
-      ],
-    ),
-    child: IconButton(
-      icon: Icon(icon, color: Colors.black87),
-      onPressed: tap,
-    ),
-  );
+    return Container(
+      width: 50, // Lo hacemos un poco más grande para que sea fácil de tocar
+      height: 50,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: IconButton(
+        // Cambiamos black87 por iconColor para que combine con el switch
+        icon: Icon(icon, color: iconColor, size: 26),
+        onPressed: tap,
+      ),
+    );
+  }
 
   // --- WIDGET BUSCADOR ESTILO INPUT ---
   Widget _buildSearchWidget() => GestureDetector(
@@ -2201,7 +2418,70 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
         (Match m) => '${m[1]}.',
       );
+  Widget _buildPriceTicket() {
+    if (_tripDesglose == null) return const SizedBox.shrink();
 
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        children: [
+          _priceRow("Tarifa Base", _tripDesglose['base'] ?? 0),
+          // --- AQUÍ SE QUITARON LAS LLAVES ---
+          _priceRow(
+            "Recorrido ($_tripDistance)",
+            (_tripDesglose['distancia'] ?? 0) + (_tripDesglose['tiempo'] ?? 0),
+          ),
+          if ((_tripDesglose['peajes'] ?? 0) > 0)
+            _priceRow("Peajes detectados", _tripDesglose['peajes']),
+          const Divider(),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                "Total estimado",
+                style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                "\$ ${_formatCurrency(_tripPrice)}",
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  color: _currentUser.isCorporateMode
+                      ? Colors.blue[800]
+                      : AppColors.primaryGreen,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _priceRow(String label, dynamic value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600]),
+          ),
+          Text(
+            "\$ ${_formatCurrency(double.parse(value.toString()))}",
+            style: GoogleFonts.poppins(fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
   // ===============================================================
   // 5. MODAL DE VINCULACIÓN CORPORATIVA
   // ===============================================================

@@ -177,7 +177,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                         onPressed: _launchWhatsApp,
                         icon: const Icon(
                           Icons.chat_bubble_outline, // O Icons.forum
-                          color: const Color.fromARGB(255, 2, 185, 33),
+                          color: Color.fromARGB(255, 2, 185, 33),
                           size: 24,
                         ),
                         label: Text(

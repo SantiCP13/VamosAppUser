@@ -1,77 +1,30 @@
-// lib/core/models/trip_model.dart
 import 'package:intl/intl.dart';
 import 'passenger_model.dart';
 
-/// MODELO DE VIAJE (TRIP)
-///
-/// Representa la entidad central 'TRIPS' del Diagrama ER.
-/// Conecta Usuario con Conductor y la Legalidad (Moviltrack).
-///
-/// RESPONSABILIDADES:
-/// 1. Gestionar el estado del viaje (SEARCHING -> ACCEPTED -> IN_PROGRESS).
-/// 2. Almacenar la información del Conductor y Vehículo asignado (Relaciones FK).
-/// 3. PORTAR EL FUEC: Guarda la URL del PDF y el ID de Moviltrack necesarios para
-///    que el conductor cumpla la normativa de transporte especial.
 class TripModel {
-  // --- DATOS BÁSICOS DE LA SOLICITUD---
-
-  /// PK: UUID único del viaje.
   final String id;
-
-  /// Mapea a 'created_at'. Fecha de solicitud.
   final String dateRaw;
-
-  /// Mapea a 'origin_address'. Dirección de recogida.
+  final DateTime? scheduledAt; // Fecha programada
   final String origin;
-
-  /// Mapea a 'destination_address'. Dirección de destino.
   final String destination;
-
-  /// Mapea a 'price'. Costo calculado (inicialmente estimado).
   final double price;
-
-  /// Mapea a 'status'. Controla el flujo de la UI:
-  /// - SEARCHING: Buscando conductor (User ve radar).
-  /// - ACCEPTED: Conductor asignado (User ve info del conductor).
-  /// - IN_PROGRESS: Viaje en curso.
-  /// - COMPLETED/CANCELLED: Historial.
   final String status;
 
-  // --- DATOS DEL CONDUCTOR Y VEHÍCULO---
+  // Datos del Conductor y Vehículo
+  final String? driverId;
+  final String? driverName;
+  final String? driverPhotoUrl;
+  final String? vehicleId;
+  final String? vehiclePlate;
+  final String? vehicleModel;
+  final String? vehicleColor;
 
-  // Estos datos se llenan cuando el estado pasa a 'ACCEPTED'.
-  // El backend hace JOIN con las tablas DRIVERS y VEHICLES.
-
-  final String? driverId; // FK Drivers
-  final String? driverName; // Para mostrar en UI sin hacer otra petición
-  final String?
-  driverPhotoUrl; // Foto del conductor para la tarjeta de asignación
-  final String? vehicleId; // FK Vehicles
-  final String? vehiclePlate; // Placa Blanca - Vital para identificar el carro
-  final String? vehicleModel; // Modelo del vehículo para mostrar en UI
-  final String? vehicleColor; // Color del vehículo para mostrar en UI
-
-  // --- DATOS LEGALES / FUEC (INTEGRACIÓN MOVILTRACK) ---
-
-  // Campos "Espejo" del Diagrama ER
-
-  /// ID interno de Moviltrack, sirve para auditoría o para cancelar el FUEC externamente si el viaje se cancela.
-  final int? externalFuecId;
-
-  /// Link al PDF generado por la API de Moviltrack.
-  /// Si este campo es NULL, el viaje es ILEGAL.
-  /// La App del Conductor usa esto para el botón "Ver FUEC".
-  final String? urlPdfFuec;
-
-  /// Número consecutivo del contrato generado. Se muestra en el PDF.
-  final String? contractNumber;
-
-  final List<Passenger>
-  passengers; // Lista de pasajeros adicionales (beneficiarios)
+  final List<Passenger> passengers;
 
   TripModel({
     required this.id,
     required this.dateRaw,
+    this.scheduledAt,
     required this.origin,
     required this.destination,
     required this.price,
@@ -83,106 +36,104 @@ class TripModel {
     this.vehiclePlate,
     this.vehicleModel,
     this.vehicleColor,
-    this.externalFuecId,
-    this.urlPdfFuec,
-    this.contractNumber,
     required this.passengers,
   });
 
   factory TripModel.fromJson(Map<String, dynamic> json) {
-    // Validación defensiva: Si el backend envía el objeto completo o null
-    final driverData = json['driver'] is Map ? json['driver'] : {};
-    final vehicleData = json['vehicle'] is Map ? json['vehicle'] : {};
+    final rawDriver = json['conductor'] ?? json['driver'];
+    final driverData = rawDriver is Map ? rawDriver : {};
+    final rawVehicle = json['vehiculo'] ?? json['vehicle'];
+    final vehicleData = rawVehicle is Map ? rawVehicle : {};
 
-    // --- PARSEO DE LISTA DE PASAJEROS ---
     var passengerList = <Passenger>[];
-    if (json['passengers'] != null) {
-      json['passengers'].forEach((v) {
-        passengerList.add(Passenger.fromJson(v));
-      });
+    if (json['pasajeros'] != null) {
+      json['pasajeros'].forEach(
+        (v) => passengerList.add(Passenger.fromJson(v)),
+      );
     }
 
     return TripModel(
-      id: json['id']?.toString() ?? 'Unknown',
+      id: json['id']?.toString() ?? 'ID_DESCONOCIDO',
       dateRaw:
+          json['solicitado_en'] ??
           json['created_at'] ??
-          json['date'] ??
           DateTime.now().toIso8601String(),
-      origin: json['origin_address'] ?? json['origin'] ?? 'Origen desconocido',
-      destination:
-          json['destination_address'] ??
-          json['destination'] ??
-          'Destino desconocido',
-      price: double.tryParse(json['price'].toString()) ?? 0.0,
-      status: json['status'] ?? 'SEARCHING',
-
+      scheduledAt: json['programado_para'] != null
+          ? DateTime.parse(json['programado_para'])
+          : null,
+      origin: json['origen'] ?? 'Origen desconocido',
+      destination: json['destino'] ?? 'Destino desconocido',
+      price: double.tryParse((json['precio_estimado'] ?? 0).toString()) ?? 0.0,
+      status:
+          json['status'] ??
+          (json['finalizado_en'] != null
+              ? 'COMPLETED'
+              : (json['cancelado_en'] != null ? 'CANCELLED' : 'PENDING')),
       driverId: driverData['id']?.toString(),
-      driverName: driverData['name'] ?? json['driver_name'],
-      driverPhotoUrl: driverData['photo_url'] ?? json['driver_photo'],
-
+      driverName: driverData['name'] ?? driverData['nombre'] ?? 'Sin nombre',
+      driverPhotoUrl: driverData['foto_perfil'] ?? driverData['photo_url'],
       vehicleId: vehicleData['id']?.toString(),
-      vehiclePlate: vehicleData['placa'] ?? json['vehicle_plate'],
-      vehicleModel: vehicleData['modelo'] ?? json['vehicle_model'],
-      vehicleColor: vehicleData['color'] ?? json['vehicle_color'],
-
-      externalFuecId: int.tryParse(json['external_fuec_id'].toString()),
-      urlPdfFuec: json['url_pdf_fuec'],
-      contractNumber: json['contract_number_generated'],
-
-      passengers: passengerList, // <--- Asignación
+      vehiclePlate: vehicleData['placa'] ?? vehicleData['plate'],
+      vehicleModel: vehicleData['modelo'] ?? vehicleData['model'],
+      vehicleColor: vehicleData['color'],
+      passengers: passengerList,
     );
   }
 
-  // --- LOGICA DE VISUALIZACIÓN ---
+  // --- LÓGICA DE VISUALIZACIÓN ---
 
-  /// Formatea la fecha a un formato amigable para el usuario.
   String get formattedDate {
     try {
-      final date = DateTime.parse(dateRaw);
+      // Si scheduledAt no es nulo, usamos ese, si no, parseamos dateRaw
+      final DateTime date = scheduledAt ?? DateTime.parse(dateRaw);
+
+      // Usamos DateFormat para quitar los ceros de más (.00000Z)
+      // El formato 'dd MMM, hh:mm a' dejará algo como: 26 MAR, 01:10 PM
       final formatter = DateFormat('dd MMM, hh:mm a', 'es_ES');
-      String formatted = formatter.format(date);
-      return formatted.replaceFirstMapped(
-        RegExp(r'\b[a-z]'),
-        (match) => match.group(0)!.toUpperCase(),
-      );
+      return formatter.format(date).toUpperCase();
     } catch (e) {
-      final date = DateTime.tryParse(dateRaw);
-      if (date != null) {
-        return "${date.day}/${date.month}/${date.year}";
-      }
+      // Si falla el parseo, al menos cortamos la cadena para no ver los ceros
+      if (dateRaw.length > 16) return dateRaw.substring(0, 16);
       return dateRaw;
     }
   }
 
-  String get passengerSummary {
-    if (passengers.isEmpty) return 'Sin pasajeros registrados';
-    if (passengers.length == 1) return passengers.first.name;
-    return '${passengers.first.name} +${passengers.length - 1}';
-  }
-
-  /// Formatea el precio a pesos colombianos
   String get formattedPrice {
     final currency = NumberFormat("#,##0", "es_CO");
     return "\$ ${currency.format(price)}";
   }
 
-  // Helpers booleanos para limpiar la lógica en las Vistas (Widgets)
   bool get isCompleted => status == 'COMPLETED' || status == 'Completado';
   bool get isCancelled => status == 'CANCELLED' || status == 'Cancelado';
-  bool get isInProgress => status == 'IN_PROGRESS' || status == 'En Curso';
+  bool get isUpcoming =>
+      scheduledAt != null &&
+      scheduledAt!.isAfter(DateTime.now()) &&
+      !isCancelled &&
+      !isCompleted;
+  bool get hasDriverAssigned =>
+      driverName != null && driverName != 'Sin nombre';
 
-  /// Indica si el viaje ya tiene recursos asignados (No sigue buscando)
-  bool get hasDriverAssigned => driverName != null && vehiclePlate != null;
+  // Lógica de las 24 horas para habilitar el botón de cancelar
+  bool get canCancelProgrammed {
+    if (scheduledAt == null)
+      // ignore: curly_braces_in_flow_control_structures
+      return true; // Viaje inmediato: siempre puede intentar cancelar
+    if (!hasDriverAssigned)
+      // ignore: curly_braces_in_flow_control_structures
+      return true; // Si no hay chofer asignado, puede cancelar siempre
 
-  /// Valida si existe el PDF del FUEC para habilitar el botón de descarga/visualización
-  bool get hasLegalDocument => urlPdfFuec != null && urlPdfFuec!.isNotEmpty;
+    // Si hay chofer, solo puede cancelar si faltan más de 24 horas
+    final diferencia = scheduledAt!.difference(DateTime.now());
+    return diferencia.inHours >= 24;
+  }
 
-  /// Texto amigable para el usuario según el estado técnico
+  // QUITAMOS EL @override QUE DABA ERROR
   String get statusLabel {
     if (isCompleted) return 'Completado';
     if (isCancelled) return 'Cancelado';
-    if (isInProgress) return 'En Viaje';
-    if (hasDriverAssigned) return 'Conductor en camino';
-    return 'Buscando...';
+    if (isUpcoming) {
+      return hasDriverAssigned ? 'Chofer Asignado' : 'Programado';
+    }
+    return 'En curso';
   }
 }

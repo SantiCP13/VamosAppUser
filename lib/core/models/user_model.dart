@@ -103,6 +103,7 @@ class User {
 
   // Autenticación (No se guarda en BD, solo en sesión local)
   String? token;
+  final bool canUseCorporate;
 
   User({
     required this.id,
@@ -124,56 +125,69 @@ class User {
         AppMode.CORPORATE, // Por defecto intenta ser corporativo si es empleado
     this.token,
     this.active = true,
+    this.canUseCorporate = false,
   });
 
   // Helpers de lógica de negocio
-  bool get isCorporateMode => appMode == AppMode.CORPORATE;
-  bool get isEmployee => role == UserRole.EMPLEADO || idResponsable != null;
+  // 1. Capacidad real de ser corporativo (Tiene empresa vinculada)
+  bool get canUseCorporateMode =>
+      companyUuid != null && companyUuid != 'null' && companyUuid!.isNotEmpty;
+
+  // 2. ¿Es empleado? (Mantenemos por compatibilidad, pero usamos el de arriba para UI)
+  bool get isEmployee => role == UserRole.EMPLEADO && canUseCorporateMode;
+
+  // 3. El modo actual (Switching)
+  bool get isCorporateMode =>
+      appMode == AppMode.CORPORATE && canUseCorporateMode;
 
   factory User.fromMap(Map<String, dynamic> map) {
+    // Navegación profunda según REGLA DE ORO
+    final responsable = map['responsable'];
+    final empresaData = responsable != null ? responsable['empresa'] : null;
+    String? rawStatus = map['status']?.toString();
+    bool isActive = map['active'] == 1 || map['active'] == true;
+
+    if (isActive &&
+        (rawStatus == null || rawStatus == 'CREATED' || rawStatus == '')) {
+      rawStatus = 'VERIFIED';
+    }
+
     return User(
       id: map['id']?.toString() ?? '',
-
-      // Mapeo flexible para ids que vienen del backend
-      idPassenger: map['passenger_id']?.toString() ?? map['id_pasajero'],
-      idResponsable: map['manager_id']?.toString() ?? map['id_responsable'],
-
+      idPassenger: map['id_pasajero']?.toString(),
+      idResponsable: responsable != null ? responsable['id'].toString() : null,
       email: map['email'] ?? '',
       name: map['name'] ?? map['nombre'] ?? '',
-      photoUrl: map['photo_url'],
-      phone: map['phone'] ?? map['telefono'] ?? '',
-      documentNumber: map['document_number'] ?? map['documento'] ?? '',
-      address: map['address'] ?? map['direccion'] ?? '',
-      active: map['active'] == true || map['active'] == 1,
-      // --- MAPEADO DE EMPRESA ---
+      phone: map['telefono'] ?? map['phone'] ?? '',
+      documentNumber: map['numero_documento'] ?? map['documento'] ?? '',
+      address: map['direccion'] ?? map['address'] ?? '',
+      active: isActive,
 
-      // El backend debe hacer JOIN con COMPANIES para llenar esto
-      empresa: map['company_name'] ?? map['empresa'] ?? '',
-      nitEmpresa: map['company_nit'] ?? map['nit_empresa'] ?? '',
-      companyUuid: map['company_id'], // FK Critical
+      // MAPEADO PROFUNDO SOLICITADO
+      empresa: empresaData != null ? empresaData['razon_social'] ?? '' : '',
+      nitEmpresa: empresaData != null ? empresaData['nit'] ?? '' : '',
+      canUseCorporate: map['can_use_corporate'] ?? (empresaData != null),
+      companyUuid: empresaData != null ? empresaData['id'].toString() : null,
 
-      role: (map['role'] == 'EMPLEADO' || map['role_id'] == 2)
-          ? UserRole.EMPLEADO
-          : UserRole.NATURAL,
+      role: (map['id_role'] == 2) ? UserRole.EMPLEADO : UserRole.NATURAL,
+      photoUrl: map['foto_perfil'],
+      // Corregimos el error del linter usando la función aquí:
+      verificationStatus: _parseStatus(rawStatus),
 
-      verificationStatus: _parseStatus(map['status']),
-
-      // Determina el modo inicial basado en la preferencia guardada o el rol
-      appMode: (map['app_mode'] == 'PERSONAL')
+      appMode: (map['app_mode'] == 'PERSONAL' || map['app_mode'] == 'NATURAL')
           ? AppMode.PERSONAL
           : AppMode.CORPORATE,
 
-      // Carga de beneficiarios (Tabla BENEFICIARIES)
       beneficiaries:
-          (map['beneficiaries'] as List<dynamic>?)
+          (map['beneficiaries'] as List?)
               ?.map((e) => Beneficiary.fromJson(Map<String, dynamic>.from(e)))
               .toList() ??
           [],
-
-      token: map['access_token'], // JWT de Laravel Sanctum
+      token: map['access_token'],
     );
   }
 
+  factory User.fromJson(Map<String, dynamic> json) => User.fromMap(json);
   static UserVerificationStatus _parseStatus(String? status) {
     if (status == null) return UserVerificationStatus.CREATED;
     switch (status.toUpperCase()) {

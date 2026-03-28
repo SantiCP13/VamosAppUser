@@ -1,7 +1,10 @@
 import 'dart:async';
 import '../../../core/models/trip_model.dart';
+import '../../../core/network/api_client.dart';
+import 'package:flutter/foundation.dart';
 
 class MenuService {
+  final ApiClient _api = ApiClient();
   // --- MEMORIA TEMPORAL (Solo guarda los viajes hechos en esta sesión) ---
   static final List<TripModel> _localTrips = [];
 
@@ -24,13 +27,49 @@ class MenuService {
   // ===========================================================================
   // 2. HISTORIAL DE VIAJES (Solo Reales)
   // ===========================================================================
+  // 2. HISTORIAL DE VIAJES
   Future<List<TripModel>> getTripHistory() async {
-    // Simula una pequeña carga de red
-    await Future.delayed(const Duration(milliseconds: 500));
+    try {
+      // 1. Hacemos la petición
+      final response = await _api.dio.get('/viajes/historial');
 
-    // Retorna una copia de la lista local.
-    // Si no has hecho viajes, devolverá una lista vacía [].
-    return [..._localTrips];
+      // 2. DEBUG: Copia lo que salga aquí en la consola para estar seguros
+      debugPrint("BODY COMPLETO: ${response.data}");
+
+      if (response.data['status'] == 'success') {
+        // 3. LA CLAVE: Acceder a data['data']
+        // El primer ['data'] es tu respuesta del controlador.
+        // El segundo ['data'] es el array de items del paginador de Laravel.
+        final List rawList = response.data['data']['data'];
+
+        return rawList.map((item) => TripModel.fromJson(item)).toList();
+      }
+      return [];
+    } catch (e) {
+      debugPrint("Error en Service: $e");
+      return [];
+    }
+  }
+
+  Future<bool> cancelTrip(String tripId) async {
+    try {
+      // Llama a la ruta de Laravel que ya configuramos
+      final response = await _api.dio.post('/viajes/$tripId/cancelar');
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // 3. BILLETERA
+  Future<Map<String, dynamic>> getWalletBalance() async {
+    try {
+      // CORRECCIÓN: Usar .dio y luego .data
+      final response = await _api.dio.get('/billetera/historial');
+      return {"balance": response.data['saldo_actual'] ?? 0, "currency": "COP"};
+    } catch (e) {
+      return {"balance": 0, "currency": "COP"};
+    }
   }
 
   // --- MÉTODO: GUARDAR VIAJE REAL ---
@@ -47,17 +86,5 @@ class MenuService {
 
     // Lo agregamos al inicio para que salga de primero
     _localTrips.insert(0, newTrip);
-  }
-
-  // ===========================================================================
-  // 3. BILLETERA
-  // ===========================================================================
-  Future<Map<String, dynamic>> getWalletBalance() async {
-    await Future.delayed(const Duration(milliseconds: 800));
-    return {
-      "balance": "\$120.500",
-      "currency": "COP",
-      "cards": ["**** 4242", "**** 1234"],
-    };
   }
 }

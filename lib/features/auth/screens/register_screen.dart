@@ -14,6 +14,7 @@ class RegisterScreen extends StatefulWidget {
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
+  // ignore: prefer_final_fields
   bool _isLoading = false;
   bool _obscurePass = true; // Agregado para consistencia con otras pantallas
 
