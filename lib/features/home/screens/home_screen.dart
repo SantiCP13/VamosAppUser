@@ -25,6 +25,7 @@ import '../../trips/services/trip_service.dart';
 import 'package:flutter/services.dart';
 import '../../../core/models/passenger_model.dart';
 import '../../home/services/home_service.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 enum TripState {
   IDLE,
@@ -98,8 +99,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     'VAN': 1.8,
   };
   Map<String, dynamic> _categoryPricesFromServer = {};
-  final String myMapboxToken =
-      "pk.eyJ1IjoidmFtb3NhcHBjb2wiLCJhIjoiY21uZGxldzJtMWc3MzJwcHI5YzNmdmQ4ZCJ9.QsTim64a5eVStoAKYk3kcg";
+  final String myMapboxToken = dotenv.env['MAPBOX_TOKEN'] ?? '';
   @override
   void initState() {
     super.initState();
