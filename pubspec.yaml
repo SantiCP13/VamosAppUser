@@ -46,6 +46,7 @@ dependencies:
   dio: ^5.4.0            # Cliente HTTP potente (reemplaza a http)
   flutter_dotenv: ^5.1.0 # Para leer archivo .env
   file_picker: ^10.3.10
+  uuid: ^4.5.3
   # pusher_channels_flutter: ^2.2.0  # (Descomentar cuando instales sockets)
   
 dev_dependencies:

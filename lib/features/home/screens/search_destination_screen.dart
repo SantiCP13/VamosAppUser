@@ -2,10 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:latlong2/latlong.dart';
-
-// Asegúrate de que la ruta de importación sea la correcta en tu proyecto
 import '../../../core/theme/app_colors.dart';
-import '../services/search_service.dart';
+import '../services/mapbox_search_service.dart';
 
 class SearchDestinationScreen extends StatefulWidget {
   final LatLng? currentPosition;
@@ -17,36 +15,37 @@ class SearchDestinationScreen extends StatefulWidget {
 }
 
 class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
-  // CONTROLADORES
   final TextEditingController _searchController = TextEditingController();
-  final SearchService _searchService = SearchService();
+  final MapboxSearchService _mapboxSearch = MapboxSearchService();
 
-  // ESTADOS
   List<Map<String, dynamic>> _searchResults = [];
   bool _isLoading = false;
   Timer? _debounce;
 
-  // Mocks para pruebas rápidas
+  // --- ESTO ES LO QUE FALTABA (Mocks) ---
   final List<Map<String, dynamic>> _mockPlaces = [
     {
       "name": "Parque Principal Cajicá",
       "address": "Cra. 6, Cajicá",
-      "lat": 4.9183,
-      "lng": -74.0258,
+      "mapbox_id": "mock_1",
     },
     {
       "name": "Fontanar Centro Comercial",
       "address": "Km 2.5 Vía Cajicá",
-      "lat": 4.8870,
-      "lng": -74.0330,
+      "mapbox_id": "mock_2",
     },
     {
       "name": "Aeropuerto El Dorado",
       "address": "Bogotá",
-      "lat": 4.7011,
-      "lng": -74.1469,
+      "mapbox_id": "mock_3",
     },
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _mapboxSearch.startNewSession();
+  }
 
   @override
   void dispose() {
@@ -55,39 +54,7 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
     super.dispose();
   }
 
-  // Lógica de búsqueda con Debounce (sin cambios funcionales)
-  void _onSearchChanged(String query) {
-    if (_debounce?.isActive ?? false) _debounce!.cancel();
-
-    _debounce = Timer(const Duration(milliseconds: 500), () async {
-      if (query.isEmpty) {
-        if (mounted) {
-          setState(() {
-            _searchResults = [];
-            _isLoading = false;
-          });
-        }
-        return;
-      }
-
-      setState(() => _isLoading = true);
-
-      try {
-        final results = await _searchService.searchPlaces(query);
-
-        if (!mounted) return;
-        setState(() {
-          _searchResults = results;
-          _isLoading = false;
-        });
-      } catch (e) {
-        if (!mounted) return;
-        setState(() => _isLoading = false);
-      }
-    });
-  }
-
-  // --- HELPER PARA ESTILOS DE INPUT (COPIADO Y ADAPTADO DEL LOGIN) ---
+  // --- ESTO ES LO QUE FALTABA (Estilo del Input) ---
   InputDecoration _getInputStyle({
     required String label,
     required IconData icon,
@@ -121,6 +88,69 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
     );
   }
 
+  // lib/features/home/screens/search_destination_screen.dart
+
+  void _onSearchChanged(String query) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+
+    _debounce = Timer(const Duration(milliseconds: 500), () async {
+      if (query.isEmpty) {
+        setState(() {
+          _searchResults = [];
+          _isLoading = false;
+        });
+        return;
+      }
+
+      setState(() => _isLoading = true);
+
+      try {
+        // Usamos widget.currentPosition que viene de la pantalla anterior
+        final results = await _mapboxSearch.searchPlaces(
+          query,
+          proximity: widget.currentPosition,
+        );
+
+        if (!mounted) return;
+        setState(() {
+          _searchResults = results;
+          _isLoading = false; // Detenemos el círculo de carga
+        });
+      } catch (e) {
+        debugPrint("Error en pantalla de búsqueda: $e");
+        if (mounted) setState(() => _isLoading = false);
+      }
+    });
+  }
+
+  Future<void> _handleResultTap(Map<String, dynamic> place) async {
+    // Si es un mock (ejemplo), lo manejamos manual para pruebas
+    if (place['mapbox_id'].toString().startsWith('mock_')) {
+      // Coordenadas fijas para los ejemplos si no quieres llamar a la API
+      Navigator.pop(context, {
+        "name": place['name'],
+        "lat": 4.9183,
+        "lng": -74.0258,
+      });
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      final coords = await _mapboxSearch.getCoords(place['mapbox_id']);
+      if (coords != null && mounted) {
+        Navigator.pop(context, {
+          "name": place['name'],
+          "address": place['address'],
+          "lat": coords['lat'],
+          "lng": coords['lng'],
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool isSearching = _searchController.text.isNotEmpty;
@@ -133,17 +163,11 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        // Usamos BackButton negro estándar como en el Login
-        leading: BackButton(
-          color: Colors.black,
-          onPressed: () => Navigator.pop(context),
-        ),
+        leading: const BackButton(color: Colors.black),
       ),
       body: SafeArea(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // --- CABECERA (ESTILO LOGIN) ---
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24.0),
               child: Column(
@@ -154,47 +178,19 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
                     style: GoogleFonts.poppins(
                       fontSize: 28,
                       fontWeight: FontWeight.bold,
-                      color: AppColors.bgColor,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    "Busca una dirección o selecciona en el mapa",
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      color: Colors.grey[600],
                     ),
                   ),
                   const SizedBox(height: 30),
-
-                  // --- INPUT DE BÚSQUEDA (ESTILIZADO) ---
                   TextField(
                     controller: _searchController,
-                    autofocus: true,
                     onChanged: _onSearchChanged,
-                    style: GoogleFonts.poppins(color: Colors.black),
                     decoration: _getInputStyle(
                       label: "Dirección de destino",
                       icon: Icons.search,
                       suffixIcon: _isLoading
-                          ? Padding(
-                              padding: const EdgeInsets.all(12.0),
-                              child: const SizedBox(
-                                width: 10,
-                                height: 10,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: AppColors.primaryGreen,
-                                ),
-                              ),
-                            )
-                          : isSearching
-                          ? IconButton(
-                              icon: const Icon(Icons.close, color: Colors.grey),
-                              onPressed: () {
-                                _searchController.clear();
-                                _onSearchChanged('');
-                              },
+                          ? const Padding(
+                              padding: EdgeInsets.all(12),
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : null,
                     ),
@@ -202,134 +198,53 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
                 ],
               ),
             ),
-
             const SizedBox(height: 20),
-
-            // --- OPCIÓN FIJAR EN MAPA ---
-            Material(
-              color: Colors.white,
-              child: InkWell(
-                onTap: () => Navigator.pop(context, {'isMapPick': true}),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24.0,
-                    vertical: 16.0,
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: AppColors.primaryGreen.withValues(alpha: 0.1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.location_on,
-                          color: AppColors.primaryGreen,
-                          size: 24,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            "Fijar ubicación en el mapa",
-                            style: GoogleFonts.poppins(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 16,
-                            ),
-                          ),
-                          Text(
-                            "Selecciona manualmente",
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: Colors.grey[600],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const Spacer(),
-                      Icon(
-                        Icons.arrow_forward_ios,
-                        size: 16,
-                        color: Colors.grey.shade400,
-                      ),
-                    ],
-                  ),
-                ),
+            ListTile(
+              leading: const Icon(
+                Icons.location_on,
+                color: AppColors.primaryGreen,
               ),
+              title: const Text("Fijar en el mapa"),
+              onTap: () => Navigator.pop(context, {'isMapPick': true}),
             ),
-
-            const Divider(height: 1, thickness: 1),
-
-            // --- LISTA DE RESULTADOS ---
+            const Divider(),
             Expanded(
-              child: listToShow.isEmpty && isSearching && !_isLoading
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.search_off,
-                            size: 48,
-                            color: Colors.grey.shade300,
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            "No encontramos esa dirección.",
-                            style: GoogleFonts.poppins(color: Colors.grey),
-                          ),
-                        ],
-                      ),
-                    )
-                  : ListView.separated(
-                      padding: const EdgeInsets.only(top: 10),
-                      itemCount: listToShow.length,
-                      separatorBuilder: (ctx, i) => Divider(
-                        height: 1,
-                        indent: 70,
-                        color: Colors.grey.shade100,
-                      ),
-                      itemBuilder: (ctx, index) {
-                        final place = listToShow[index];
-                        return ListTile(
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 24.0,
-                            vertical: 4.0,
-                          ),
-                          leading: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade100,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              Icons.location_on_outlined,
-                              color: Colors.grey.shade600,
-                              size: 20,
-                            ),
-                          ),
-                          title: Text(
-                            place['name'],
-                            style: GoogleFonts.poppins(
-                              fontWeight: FontWeight.w500,
-                              fontSize: 14,
-                            ),
-                          ),
-                          subtitle: Text(
-                            place['address'] ?? "",
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: Colors.grey[500],
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          onTap: () => Navigator.pop(context, place),
-                        );
-                      },
+              child: ListView.separated(
+                itemCount: listToShow.length,
+                separatorBuilder: (context, i) => const Divider(),
+                itemBuilder: (ctx, index) {
+                  final place = listToShow[index];
+                  return ListTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 24.0,
+                      vertical: 4.0,
                     ),
+                    leading: const Icon(
+                      Icons.location_on_outlined,
+                      color: Colors.grey,
+                    ),
+                    // NOMBRE DEL LUGAR (Ej: Cajicá)
+                    title: Text(
+                      place['name'] ?? "Cargando...",
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 14,
+                      ),
+                    ),
+                    // DIRECCIÓN (Ej: Cundinamarca, Colombia)
+                    subtitle: Text(
+                      place['address'] ?? "",
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: Colors.grey[500],
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    onTap: () => _handleResultTap(place),
+                  );
+                },
+              ),
             ),
           ],
         ),

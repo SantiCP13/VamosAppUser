@@ -76,8 +76,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // --- TARIFA Y TIEMPOS ---
   double _tripPrice = 0;
-  String _tripDistance = "";
-  String _tripDuration = "";
+  // ignore: prefer_final_fields
+  String _tripDistance = "0 km";
+  // ignore: prefer_final_fields
+  String _tripDuration = "0 min";
   dynamic _tripDesglose; // <--- AGREGA ESTA LÍNEA
   Timer? _checkStatusTimer;
 
@@ -85,7 +87,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   LatLng? _driverPosition;
   Timer? _simulationTimer;
   final String _driverEta = "5 min";
-  int _routeIndex = 0;
+
   DateTime? _scheduledAt;
   // --- CATEGORÍAS ---
   double _baseRoutePrice = 0;
@@ -95,7 +97,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     'PREMIUM': 1.35,
     'VAN': 1.8,
   };
-
+  Map<String, dynamic> _categoryPricesFromServer = {};
+  final String myMapboxToken =
+      "pk.eyJ1IjoidmFtb3NhcHBjb2wiLCJhIjoiY21uZGxldzJtMWc3MzJwcHI5YzNmdmQ4ZCJ9.QsTim64a5eVStoAKYk3kcg";
   @override
   void initState() {
     super.initState();
@@ -397,6 +401,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  String _getDbCategory(String uiCategory) {
+    switch (uiCategory) {
+      case 'STANDARD':
+        return 'CITY CAR';
+      case 'PREMIUM':
+        return 'SUV';
+      case 'VAN':
+        return 'VAN';
+      default:
+        return 'CITY CAR';
+    }
+  }
   // ===============================================================
   // 2. LÓGICA DE RUTAS
   // ===============================================================
@@ -431,19 +447,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final result = await _routeService.getRoute(
         _currentPosition!,
         destination,
-        idContrato: 1,
+        idContrato: _currentUser.isCorporateMode ? 1 : null,
+        // ESTA LÍNEA YA NO DEBERÍA TENER ERROR ROJO:
+        tipoVehiculo: _getDbCategory(_selectedServiceCategory),
       );
-
-      if (!mounted) return;
 
       setState(() {
         _routePoints = result.points;
+        _tripPrice = result.price;
+        _categoryPricesFromServer = result.preciosCategorias ?? {};
+        _tripDesglose = result.desglose;
+
+        // 🔥 IMPORTANTE: Si la categoría es STANDARD, guardamos esto como base global
+        // para que el selector pueda estimar el precio de SUV y VAN correctamente.
+        if (_selectedServiceCategory == 'STANDARD') {
+          _baseRoutePrice = result.price;
+        } else {
+          // Si eligió SUV, calculamos hacia atrás cuál sería el precio base
+          double mult = _categoryMultipliers[_selectedServiceCategory] ?? 1.0;
+          _baseRoutePrice = result.price / mult;
+        }
+
         _tripDistance =
             "${(result.distanceMeters / 1000).toStringAsFixed(1)} km";
         _tripDuration = "${(result.durationSeconds / 60).round()} min";
-        _tripPrice = result.price;
-        _baseRoutePrice = result.price;
-        _tripDesglose = result.desglose; // <--- AGREGA ESTA LÍNEA
         _tripState = TripState.ROUTE_PREVIEW;
       });
 
@@ -452,10 +479,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
       _showRequestTripPanel();
     } catch (e) {
+      debugPrint("Error en el proceso de ruta: $e");
+
+      // 🔥 LA SOLUCIÓN AL CUADRO ROJO:
+      if (!mounted) return;
+
       setState(() => _tripState = TripState.IDLE);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text("Error: $e")));
+      ).showSnackBar(SnackBar(content: Text("Error al calcular ruta: $e")));
     }
   }
 
@@ -569,11 +601,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
             children: [
               TileLayer(
+                // AQUÍ USAMOS isDark PARA CAMBIAR EL ESTILO AUTOMÁTICAMENTE
                 urlTemplate: isDark
-                    ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-                    : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-                subdomains: const ['a', 'b', 'c', 'd'],
-                // Esto mejora la resolución en teléfonos modernos (Retina/OLED)
+                    ? 'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=$myMapboxToken' // Estilo Oscuro
+                    : 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}?access_token=$myMapboxToken', // Estilo Claro
+                additionalOptions: {'accessToken': myMapboxToken},
                 tileProvider: NetworkTileProvider(),
               ),
 
@@ -874,32 +906,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           final opt = options[index];
           bool isSelected = _selectedServiceCategory == opt['id'];
 
+          // 1. TRADUCIR CATEGORÍA (Ej: STANDARD -> CITY CAR)
+          String dbKey = _getDbCategory(opt['id']); // <--- CAMBIO
+
+          // 2. OBTENER PRECIO REAL DEL SERVIDOR
+          double displayPrice = (_categoryPricesFromServer[dbKey] ?? 0)
+              .toDouble(); // <--- CAMBIO
+
+          // 3. SI EL SERVIDOR AÚN NO RESPONDE, USAR EL MULTIPLICADOR COMO RESPALDO
+          if (displayPrice <= 0) {
+            double mult = _categoryMultipliers[opt['id']]!;
+            displayPrice = ((_baseRoutePrice * mult) / 100).ceil() * 100;
+          }
+
           // LÓGICA DE BLOQUEO POR CUPOS
           bool isDisabled = false;
           if (_totalPassengers > 4 &&
               (opt['id'] == 'STANDARD' || opt['id'] == 'PREMIUM')) {
-            isDisabled = true; // Bloquear sedanes si hay > 4 pax
+            isDisabled = true;
           }
           if (_totalPassengers <= 4 && opt['id'] == 'VAN') {
-            isDisabled =
-                true; // Bloquear Van si hay 4 o menos (según tu requerimiento)
+            isDisabled = true;
           }
 
-          double mult = _categoryMultipliers[opt['id']]!;
-          double priceEst = ((_baseRoutePrice * mult) / 100).ceil() * 100;
-
-          // ESTILO CARD SELECCIONABLE
           return GestureDetector(
             onTap: isDisabled
                 ? null
-                : () {
-                    setModalState(() {
-                      _selectedServiceCategory = opt['id'];
-                    }); // Actualiza el modal
+                : () async {
                     setState(() {
                       _selectedServiceCategory = opt['id'];
-                    }); // Actualiza el mapa
-                    _updateFinalPrice();
+                      _tripState = TripState.CALCULATING;
+                    });
+                    Navigator.pop(context);
+                    await _calculateRouteAndPrice(_destinationCoordinates!);
                   },
             child: Container(
               width: 110,
@@ -913,14 +952,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   color: isSelected ? activeColor : Colors.grey.shade200,
                   width: isSelected ? 1.5 : 1,
                 ),
-                boxShadow: [
-                  if (!isDisabled)
-                    BoxShadow(
-                      color: Colors.grey.withValues(alpha: 0.05),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                ],
               ),
               child: Opacity(
                 opacity: isDisabled ? 0.5 : 1.0,
@@ -938,11 +969,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       style: GoogleFonts.poppins(
                         fontWeight: FontWeight.bold,
                         fontSize: 12,
-                        color: Colors.black87,
                       ),
                     ),
+                    // USAMOS displayPrice EN LUGAR DE priceEst
                     Text(
-                      "\$ ${_formatCurrency(priceEst)}",
+                      "\$ ${_formatCurrency(displayPrice)}", // <--- CAMBIO
                       style: GoogleFonts.poppins(
                         fontSize: 11,
                         color: Colors.grey[700],
@@ -1077,7 +1108,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 context,
                 MaterialPageRoute(
                   builder: (_) => SearchDestinationScreen(
-                    currentPosition: _currentPosition,
+                    currentPosition:
+                        _currentPosition, // <--- REVISA QUE ESTO TENGA DATOS
                   ),
                 ),
               );
@@ -1549,6 +1581,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         passengers: passengersList,
         includeMyself: _includeMyself,
         scheduledAt: _scheduledAt,
+        desglose: _tripDesglose,
       );
 
       if (!mounted) return;
@@ -2067,71 +2100,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _startSearchingDriver() {
-    setState(() => _tripState = TripState.SEARCHING_DRIVER);
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) _assignDriverAndSimulateMovement();
-    });
-  }
-
-  void _assignDriverAndSimulateMovement() {
-    if (_routePoints.isEmpty) return;
-
-    // 1. SETUP DE LA ANIMACIÓN
+    // Solo cambiamos el estado.
+    // QUITAMOS el timer y QUITAMOS la llamada a _assignDriverAndSimulateMovement
     setState(() {
-      // Saltamos directo a IN_TRIP para ver al carro recorrer la ruta azul
-      _tripState = TripState.IN_TRIP;
-      _driverPosition = _routePoints.first; // El carro empieza donde estás tú
-      _routeIndex = 0;
+      _tripState = TripState.SEARCHING_DRIVER;
     });
 
-    _simulationTimer?.cancel();
+    debugPrint("⏳ Esperando a que un conductor acepte el viaje real...");
 
-    // 2. ANIMACIÓN FLUIDA (Cada 50ms avanza un punto en el mapa)
-    _simulationTimer = Timer.periodic(const Duration(milliseconds: 50), (
-      timer,
-    ) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-
-      // Si ya llegamos al final de la lista de puntos
-      if (_routeIndex >= _routePoints.length - 1) {
-        timer.cancel();
-        // Aseguramos que llegue exacto al destino
-        setState(() => _driverPosition = _routePoints.last);
-
-        // Esperamos un momento y mostramos pago
-        Future.delayed(const Duration(seconds: 1), () {
-          if (mounted) _initiatePaymentFlow();
-        });
-        return;
-      }
-
-      // Avanzamos al siguiente punto
-      _routeIndex++;
-      setState(() {
-        _driverPosition = _routePoints[_routeIndex];
-      });
-    });
-  }
-
-  Future<void> _initiatePaymentFlow() async {
-    setState(() {
-      _tripState = TripState.PAYMENT;
-      _isLoadingPaymentMethods = true;
-    });
-
-    try {
-      final methods = await PaymentService().getPaymentMethods(_currentUser);
-      if (!mounted) return;
-      setState(() {
-        _availablePaymentMethods = methods;
-        _isLoadingPaymentMethods = false;
-      });
-    } catch (e) {
-      setState(() => _isLoadingPaymentMethods = false);
-    }
+    // Nota: Aquí añadiremos el listener para que cuando el backend avise
+    // que el viaje cambió a 'ACCEPTED', la pantalla cambie a 'DRIVER_ON_WAY'.
   }
 
   void _finishTripAndSave() {
@@ -2419,69 +2397,54 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         (Match m) => '${m[1]}.',
       );
   Widget _buildPriceTicket() {
-    if (_tripDesglose == null) return const SizedBox.shrink();
+    if (_tripPrice <= 0) return const SizedBox.shrink();
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 10),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.symmetric(vertical: 15),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.grey.shade200),
       ),
-      child: Column(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _priceRow("Tarifa Base", _tripDesglose['base'] ?? 0),
-          // --- AQUÍ SE QUITARON LAS LLAVES ---
-          _priceRow(
-            "Recorrido ($_tripDistance)",
-            (_tripDesglose['distancia'] ?? 0) + (_tripDesglose['tiempo'] ?? 0),
-          ),
-          if ((_tripDesglose['peajes'] ?? 0) > 0)
-            _priceRow("Peajes detectados", _tripDesglose['peajes']),
-          const Divider(),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 "Total estimado",
-                style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey[600],
+                  fontSize: 14,
+                ),
               ),
               Text(
-                "\$ ${_formatCurrency(_tripPrice)}",
+                "Sujeto a cambios por tráfico",
                 style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  color: _currentUser.isCorporateMode
-                      ? Colors.blue[800]
-                      : AppColors.primaryGreen,
+                  fontSize: 10,
+                  color: Colors.grey[400],
                 ),
               ),
             ],
           ),
+          Text(
+            "\$ ${_formatCurrency(_tripPrice)}",
+            style: GoogleFonts.poppins(
+              fontWeight: FontWeight.bold,
+              fontSize: 22,
+              color: _currentUser.isCorporateMode
+                  ? Colors.blue[800]
+                  : AppColors.primaryGreen,
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _priceRow(String label, dynamic value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600]),
-          ),
-          Text(
-            "\$ ${_formatCurrency(double.parse(value.toString()))}",
-            style: GoogleFonts.poppins(fontSize: 12),
-          ),
-        ],
-      ),
-    );
-  }
   // ===============================================================
   // 5. MODAL DE VINCULACIÓN CORPORATIVA
   // ===============================================================

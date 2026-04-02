@@ -17,6 +17,7 @@ class TripService {
     required List<Passenger> passengers,
     required bool includeMyself,
     DateTime? scheduledAt,
+    required dynamic desglose,
   }) async {
     final List<Map<String, dynamic>> pasajerosData = [];
 
@@ -55,10 +56,7 @@ class TripService {
       'tipo_viaje': serviceCategory.toLowerCase(),
       'precio_estimado': estimatedPrice,
       'programado_para': scheduledAt?.toIso8601String(),
-      'desglose_precio': {
-        'total': estimatedPrice,
-        'detalles': 'Cotización desde App',
-      },
+      'desglose_precio': desglose,
       'pasajeros': pasajerosData,
     };
 
