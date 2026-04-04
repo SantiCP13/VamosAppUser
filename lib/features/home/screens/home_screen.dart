@@ -13,6 +13,7 @@ import 'package:intl/intl.dart';
 // --- IMPORTS ---
 import '../../../core/theme/app_colors.dart';
 import '../../../core/models/user_model.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../widgets/side_menu.dart';
 import '../services/route_service.dart';
 import '../../home/screens/search_destination_screen.dart';
@@ -20,7 +21,7 @@ import '../../auth/services/auth_service.dart';
 import '../../menu/services/menu_service.dart';
 import '../services/osm_service.dart';
 import '../../payment/services/payment_service.dart';
-import '../../payment/widgets/payment_panel.dart';
+
 import '../../trips/services/trip_service.dart';
 import 'package:flutter/services.dart';
 import '../../../core/models/passenger_model.dart';
@@ -59,10 +60,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   LatLng? _mapCenterPicker;
   bool _isLoadingAddress = false;
   final OsmService _osmService = OsmService();
+  bool _isFinishingLock = false; // El Lock anti-polling
+  Map<String, dynamic>? _driverData; // Datos del conductor (Vacío 2)
+  String? _currentTripId;
 
   // --- PAGO ---
-  List<PaymentMethod> _availablePaymentMethods = [];
-  bool _isLoadingPaymentMethods = false;
+  List<PaymentMethod> _userMethods = []; // Lista real del service
+  PaymentMethod? _selectedMethod;
 
   // --- DATOS DEL VIAJE ---
   String? _destinationName;
@@ -83,12 +87,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String _tripDuration = "0 min";
   dynamic _tripDesglose; // <--- AGREGA ESTA LÍNEA
   Timer? _checkStatusTimer;
-
+  String _selectedPaymentMethod = 'EFECTIVO';
   // --- CONDUCTOR Y SIMULACIÓN ---
   LatLng? _driverPosition;
   Timer? _simulationTimer;
-  final String _driverEta = "5 min";
-
+  String _driverEta = "5 min";
+  int _waitSeconds = 300; // 5 minutos en segundos
+  Timer? _waitTimer;
   DateTime? _scheduledAt;
   // --- CATEGORÍAS ---
   double _baseRoutePrice = 0;
@@ -112,6 +117,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       }
       _checkStatusTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
         _verifyUserStatus();
+        _checkActiveTrip();
       });
       // Si el usuario está PENDING o UNDER_REVIEW, podrías redirigir aquí también
       if (AuthService.currentUser!.verificationStatus ==
@@ -119,7 +125,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         // Navigator.pushReplacementNamed(context, '/verification_check');
       }
     });
-
+    _initSocketCommunication();
     _determinePosition();
     _checkActiveTrip();
   }
@@ -154,27 +160,76 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _checkActiveTrip() async {
+    if (_isFinishingLock) return;
     final tripData = await _homeService.getActiveTrip();
-    if (tripData != null && mounted) {
-      setState(() {
-        // 1. Sincronizar el estado del viaje según lo que diga la BD
-        if (tripData['iniciado_en'] != null) {
-          _tripState = TripState.IN_TRIP;
-        } else if (tripData['llegado_en'] != null ||
-            tripData['asignado_en'] != null) {
+    if (!mounted) return;
+
+    setState(() {
+      if (tripData != null) {
+        _currentTripId = tripData['id'].toString();
+        _driverData = tripData;
+        if (tripData['metodo_pago_preferido'] != null) {
+          _selectedPaymentMethod = tripData['metodo_pago_preferido'];
+        }
+        // 1. LLEGADA AL DESTINO / PAGO
+        if (tripData['finalizado_en'] != null ||
+            tripData['estado'] == 'DROPPED_OFF') {
+          _tripState = TripState.PAYMENT;
+          _waitTimer?.cancel();
+        }
+        // 2. EN VIAJE O CONDUCTOR EN SITIO
+        else if (tripData['iniciado_en'] != null ||
+            tripData['llegado_en'] != null) {
+          bool wasInOtherState =
+              _tripState != TripState.IN_TRIP &&
+              _tripState != TripState.DRIVER_ON_WAY;
+          _tripState = (tripData['iniciado_en'] != null)
+              ? TripState.IN_TRIP
+              : TripState.DRIVER_ON_WAY;
+
+          if (wasInOtherState || _routePoints.isEmpty) {
+            if (_destinationCoordinates != null) {
+              // Recalculamos ruta al destino PERO sin abrir el modal de pedido
+              _calculateRouteAndPrice(
+                _destinationCoordinates!,
+                showPanel: false,
+              );
+            }
+          }
+          if (tripData['llegado_en'] != null && _waitTimer == null) {
+            _startWaitTimer();
+          }
+          if (tripData['iniciado_en'] != null) _waitTimer?.cancel();
+        }
+        // 3. CONDUCTOR EN CAMINO (ACCEPTED)
+        else if (tripData['id_conductor'] != null) {
           _tripState = TripState.DRIVER_ON_WAY;
-        } else {
-          _tripState = TripState.SEARCHING_DRIVER;
+          if (tripData['lat_conductor'] != null) {
+            LatLng driverPos = LatLng(
+              double.parse(tripData['lat_conductor'].toString()),
+              double.parse(tripData['lng_conductor'].toString()),
+            );
+            _driverPosition = driverPos;
+            _calculateDriverToPickupRoute(
+              driverPos,
+            ); // Ruta Conductor -> Usuario
+          }
         }
 
-        // 2. Mapear datos del destino
-        _destinationName = tripData['destino'];
-        _destinationCoordinates = LatLng(
-          double.parse(tripData['lat_destino'].toString()),
-          double.parse(tripData['lng_destino'].toString()),
-        );
-      });
-    }
+        // Tracking activo
+        if (_currentTripId != null &&
+            (_tripState == TripState.DRIVER_ON_WAY ||
+                _tripState == TripState.IN_TRIP)) {
+          _startTrackingListener(_currentTripId!);
+        }
+      } else {
+        if (_tripState == TripState.SEARCHING_DRIVER ||
+            _tripState == TripState.DRIVER_ON_WAY ||
+            _tripState == TripState.IN_TRIP) {
+          _resetApp();
+        }
+      }
+    });
   }
 
   Future<void> _determinePosition() async {
@@ -332,15 +387,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       return true;
     }
 
-    String? startCity = await _getCityFromCoordinates(start);
-    String? endCity = await _getCityFromCoordinates(end);
+    try {
+      String? startCity = await _getCityFromCoordinates(start);
+      String? endCity = await _getCityFromCoordinates(end);
 
-    if (!mounted) return false;
-    if (startCity == null || endCity == null) return false;
+      // LLAVES AÑADIDAS AQUÍ:
+      if (startCity == null || endCity == null) {
+        return true;
+      }
 
-    if (_normalizeString(startCity) == _normalizeString(endCity)) {
-      _showRestrictionError(startCity);
-      return false;
+      if (_normalizeString(startCity) == _normalizeString(endCity)) {
+        _showRestrictionError(startCity);
+        return false;
+      }
+    } catch (e) {
+      return true;
     }
     return true;
   }
@@ -426,17 +487,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
 
-  Future<void> _calculateRouteAndPrice(LatLng destination) async {
+  Future<void> _calculateRouteAndPrice(
+    LatLng destination, {
+    bool showPanel = true,
+  }) async {
     if (_currentPosition == null) await _determinePosition();
     if (_currentPosition == null) return;
 
     // 1. LLAMADO PARA QUITAR EL WARNING DE _isTripAllowed
     bool allowed = await _isTripAllowed(_currentPosition!, destination);
-    if (!mounted || !allowed) {
+    if (!mounted) {
+      return;
+    }
+
+    if (!allowed) {
       setState(() {
         _tripState = TripState.IDLE;
-        _destinationCoordinates = null;
-        _destinationName = null;
       });
       return;
     }
@@ -451,7 +517,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         // ESTA LÍNEA YA NO DEBERÍA TENER ERROR ROJO:
         tipoVehiculo: _getDbCategory(_selectedServiceCategory),
       );
+      _userMethods = await PaymentService().getPaymentMethods(_currentUser);
 
+      // Seleccionamos el default automáticamente
+      _selectedMethod = _userMethods.firstWhere(
+        (m) => m.isDefault,
+        orElse: () => _userMethods.first,
+      );
       setState(() {
         _routePoints = result.points;
         _tripPrice = result.price;
@@ -477,7 +549,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       // 2. LLAMADO PARA QUITAR EL WARNING DE _fitCameraToRoute
       _fitCameraToRoute();
 
-      _showRequestTripPanel();
+      if (showPanel) {
+        _showRequestTripPanel();
+      }
     } catch (e) {
       debugPrint("Error en el proceso de ruta: $e");
 
@@ -653,12 +727,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     if (_driverPosition != null)
                       Marker(
                         point: _driverPosition!,
-                        width: 50,
-                        height: 50,
-                        child: const Icon(
-                          Icons.directions_car_filled,
-                          size: 40,
-                          color: Colors.black,
+                        width: 45,
+                        height: 45,
+                        child: Transform.rotate(
+                          angle:
+                              0.0, // Aquí podrías usar el 'heading' si el backend lo enviara
+                          child: const Icon(
+                            Icons
+                                .directions_car_filled, // O usa un Image.asset si tienes un PNG de carro
+                            size: 40,
+                            color: Colors.black,
+                          ),
                         ),
                       ),
                   ],
@@ -837,7 +916,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               right: 0,
               child: _buildPanelContainer(_buildDriverOnWayContent()),
             ),
-
+          if (_tripState == TripState.IN_TRIP)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: _buildPanelContainer(_buildInTripContent()),
+            ),
           if (_tripState == TripState.CALCULATING)
             Container(
               color: Colors.black12,
@@ -849,18 +934,60 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               left: 0,
               right: 0,
               child: _buildPanelContainer(
-                _isLoadingPaymentMethods
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(20),
-                          child: CircularProgressIndicator(color: mainColor),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.location_on,
+                      color: AppColors.primaryGreen,
+                      size: 40,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      "¡Llegamos a tu destino!",
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      (_selectedPaymentMethod == 'EFECTIVO')
+                          ? "Por favor entrega \$${_formatCurrency(_tripPrice)} al conductor."
+                          : "Esperando a que el conductor finalice el viaje...",
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    if (_selectedPaymentMethod == 'EFECTIVO')
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primaryGreen,
+                          ),
+                          onPressed: () =>
+                              _finishTripAndSave(), // <--- AQUÍ SE CONECTA LA FUNCIÓN
+                          child: const Text(
+                            "ENTREGUÉ EL DINERO",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ),
                       )
-                    : PaymentPanel(
-                        amount: _tripPrice,
-                        methods: _availablePaymentMethods,
-                        onPaymentSuccess: _finishTripAndSave,
+                    else
+                      const CircularProgressIndicator(
+                        color: AppColors.primaryGreen,
                       ),
+                    const SizedBox(height: 10),
+                  ],
+                ),
               ),
             ),
         ],
@@ -933,11 +1060,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             onTap: isDisabled
                 ? null
                 : () async {
+                    // SEGURIDAD: Si no hay coordenadas, no intentamos cotizar
+                    if (_destinationCoordinates == null) return;
+
                     setState(() {
                       _selectedServiceCategory = opt['id'];
                       _tripState = TripState.CALCULATING;
                     });
-                    Navigator.pop(context);
+
+                    Navigator.pop(context); // Cierra el modal de selección
+
+                    // RE-COTIZAR con la nueva categoría
                     await _calculateRouteAndPrice(_destinationCoordinates!);
                   },
             child: Container(
@@ -1025,9 +1158,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           const SizedBox(height: 15),
           _buildVehicleSelector(setModalState),
 
-          _buildPriceTicket(), // <--- AGREGA ESTA LÍNEA AQUÍ
-
+          _buildPriceTicket(),
           const SizedBox(height: 10),
+          _buildPaymentSelector(setModalState),
+
+          // Selector de pago previo
+          const SizedBox(height: 15),
           _buildRequestButton(primaryColor),
           const SizedBox(height: 10),
 
@@ -1570,7 +1706,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         return Passenger(name: b.name, nationalId: b.documentNumber);
       }).toList();
 
-      bool success = await tripService.createTripRequest(
+      String backendPaymentId = 'EFECTIVO';
+      if (_selectedMethod?.id == 'cash') backendPaymentId = 'EFECTIVO';
+      if (_selectedMethod?.id == 'corp') backendPaymentId = 'CORPORATIVO';
+      if (_selectedMethod?.type == PaymentMethodType.card)
+        backendPaymentId = 'TARJETA';
+
+      String? tripId = await tripService.createTripRequest(
         currentUser: _currentUser,
         origin: origin,
         destination: destination,
@@ -1582,15 +1724,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         includeMyself: _includeMyself,
         scheduledAt: _scheduledAt,
         desglose: _tripDesglose,
+        paymentMethod: backendPaymentId,
       );
 
       if (!mounted) return;
 
-      if (success) {
+      // CAMBIA: if (success) {
+      if (tripId != null) {
+        _currentTripId = tripId; // Guardamos el ID para el socket
         if (_scheduledAt != null) {
           _showScheduledSuccessDialog();
         } else {
           _startSearchingDriver();
+          _startTrackingListener(
+            tripId,
+          ); // Iniciamos escucha de GPS inmediatamente
         }
       } else {
         _resetApp(); // Borra la línea azul si el server dice que no hay choferes
@@ -2112,7 +2260,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // que el viaje cambió a 'ACCEPTED', la pantalla cambie a 'DRIVER_ON_WAY'.
   }
 
-  void _finishTripAndSave() {
+  void _finishTripAndSave() async {
+    // 1. Bloqueo de seguridad
+    setState(() => _isFinishingLock = true);
+
+    // 2. OPCIONAL: Si tu PaymentPanel no lo hace, podrías enviar aquí el método al backend
+    // Pero asumiendo que el PaymentPanel ya procesó el pago, procedemos al Reset.
+
     if (_destinationName != null) {
       MenuService().addCompletedTrip(
         "Ubicación Actual",
@@ -2132,7 +2286,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             const Icon(Icons.check_circle, color: Colors.green, size: 60),
             const SizedBox(height: 20),
             Text(
-              "¡Pago Exitoso!",
+              "¡Viaje Completado!",
               style: GoogleFonts.poppins(
                 fontWeight: FontWeight.bold,
                 fontSize: 20,
@@ -2140,44 +2294,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
             const SizedBox(height: 10),
             Text("Gracias por viajar con VAMOS.", style: GoogleFonts.poppins()),
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                "Total: \$ ${_formatCurrency(_tripPrice)}",
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-              ),
-            ),
           ],
         ),
         actions: [
           SizedBox(
             width: double.infinity,
-            height: 48,
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryGreen,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
               ),
               onPressed: () {
                 Navigator.pop(ctx);
-                _resetApp();
+                _resetApp(); // Limpia mapa, variables y estados
+
+                // Liberamos el Lock tras un breve delay para que el backend limpie la sesión
+                Future.delayed(const Duration(seconds: 4), () {
+                  if (mounted) setState(() => _isFinishingLock = false);
+                });
               },
               child: Text(
                 "Finalizar",
-                style: GoogleFonts.poppins(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: GoogleFonts.poppins(color: Colors.white),
               ),
             ),
           ),
@@ -2188,16 +2325,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _resetApp() {
     _simulationTimer?.cancel();
+    _waitTimer?.cancel();
+    _waitTimer = null;
+
     if (mounted) {
       setState(() {
         _tripState = TripState.IDLE;
-        _routePoints = []; // <-- ESTO BORRA LA LÍNEA AZUL DEL MAPA
+        _routePoints = [];
         _destinationCoordinates = null;
         _destinationName = null;
         _driverPosition = null;
         _scheduledAt = null;
+        _currentTripId = null; // IMPORTANTE: Limpiar ID del viaje
+        _driverData = null; // IMPORTANTE: Limpiar datos del conductor (Vacío 2)
         _selectedPassengerIds.clear();
         _includeMyself = true;
+        _driverEta = "Calculando...";
       });
       _moveToCurrentPosition();
     }
@@ -2277,9 +2420,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           });
         } else {
           setState(() {
-            _destinationName = result['name'];
+            _destinationName = result['name']; // Guardamos el nombre primero
             _destinationCoordinates = LatLng(result['lat'], result['lng']);
+            _tripState =
+                TripState.CALCULATING; // Marcamos que estamos calculando
           });
+          // Ahora calculamos la ruta
           if (mounted) _calculateRouteAndPrice(_destinationCoordinates!);
         }
       }
@@ -2354,41 +2500,128 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     ],
   );
 
-  Widget _buildDriverOnWayContent() => Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Text(
-        "Conductor en camino",
-        style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 20),
-      ),
-      const SizedBox(height: 5),
-      Text(
-        "Llegada en $_driverEta",
-        style: GoogleFonts.poppins(
-          color: AppColors.primaryGreen,
-          fontWeight: FontWeight.bold,
-          fontSize: 14,
+  Widget _buildDriverOnWayContent() {
+    // Extraemos los datos que guardamos en _driverData
+    final driver = _driverData?['conductor'] ?? {};
+    String? fotoUrl = driver['foto_perfil'] ?? driver['photo_url'];
+    final vehicle = _driverData?['vehiculo'] ?? {};
+    if (fotoUrl != null && fotoUrl.contains('10.0.2.2')) {
+      fotoUrl = fotoUrl.replaceAll('10.0.2.2', '192.168.10.3');
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          "Tu conductor está en camino",
+          style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 18),
         ),
-      ),
-      const SizedBox(height: 20),
-      Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: Colors.grey.shade50,
-          shape: BoxShape.circle,
+        const SizedBox(height: 15),
+
+        // TARJETA DE INFORMACIÓN (Vacío 2)
+        Container(
+          padding: const EdgeInsets.all(15),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade50,
+            borderRadius: BorderRadius.circular(15),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 30,
+                backgroundColor: Colors.grey[300],
+                backgroundImage: fotoUrl != null ? NetworkImage(fotoUrl) : null,
+                child: fotoUrl == null ? const Icon(Icons.person) : null,
+              ),
+              const SizedBox(width: 15),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      driver['nombre'] ?? "Conductor",
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    Text(
+                      "${vehicle['marca']} ${vehicle['modelo']} • ${vehicle['placa']}",
+                      style: GoogleFonts.poppins(
+                        color: Colors.grey[600],
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.amber[100],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.star, size: 14, color: Colors.orange),
+                    Text(
+                      " 4.8",
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
-        child: const Icon(Icons.local_taxi, size: 40, color: Colors.black87),
-      ),
-      const SizedBox(height: 20),
-      TextButton(
-        onPressed: _resetApp,
-        child: Text(
-          "Cancelar Viaje",
-          style: GoogleFonts.poppins(color: Colors.red),
+
+        const SizedBox(height: 20),
+        Column(
+          children: [
+            Text(
+              _waitTimer == null
+                  ? "Llegada estimada: $_driverEta"
+                  : "¡El conductor ha llegado!",
+              style: GoogleFonts.poppins(
+                color: AppColors.primaryGreen,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+            if (_waitTimer != null) ...[
+              const SizedBox(height: 5),
+              Text(
+                "Tiempo de espera legal: ${(_waitSeconds ~/ 60).toString().padLeft(2, '0')}:${(_waitSeconds % 60).toString().padLeft(2, '0')}",
+                style: GoogleFonts.poppins(
+                  color: Colors.grey[700],
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ],
         ),
-      ),
-    ],
-  );
+        const SizedBox(height: 20),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: _resetApp,
+            icon: const Icon(Icons.close, color: Colors.red),
+            label: Text(
+              "Cancelar Viaje",
+              style: GoogleFonts.poppins(color: Colors.red),
+            ),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Colors.red),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   String _formatCurrency(double amount) => amount
       .toStringAsFixed(0)
@@ -2774,5 +3007,296 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
 
     _calculateRouteAndPrice(_destinationCoordinates!);
+  }
+
+  void _startTrackingListener(String tripId) async {
+    const storage = FlutterSecureStorage();
+    final token = await storage.read(key: 'auth_token');
+
+    if (token != null) {
+      _homeService.subscribeToTripTracking(tripId, token, (lat, lng) {
+        if (!mounted) return;
+
+        LatLng newPos = LatLng(lat, lng);
+
+        setState(() {
+          _driverPosition = newPos; // Actualiza el marcador del carro
+        });
+
+        // Si el conductor aún no llega (ACCEPTED), forzamos el recalculo del ETA
+        if (_tripState == TripState.DRIVER_ON_WAY && _waitTimer == null) {
+          _calculateDriverToPickupRoute(newPos);
+        }
+      });
+    }
+  }
+
+  void _initSocketCommunication() async {
+    const storage = FlutterSecureStorage();
+    final token = await storage.read(key: 'auth_token');
+    if (token != null) {
+      _homeService.initUserSocket(
+        userId: _currentUser.id,
+        token: token,
+        onEvent: (event, data) {
+          if (event == 'ViajeAceptado') {
+            _checkActiveTrip(); // Esto disparará la UI de "Conductor en camino"
+          }
+        },
+      );
+    }
+  }
+
+  // --- AÑADIR AL FINAL DE LA CLASE ---
+  void _startWaitTimer() {
+    _waitTimer?.cancel();
+    setState(() => _waitSeconds = 300); // Reset a 5 minutos
+
+    _waitTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_waitSeconds > 0) {
+        if (mounted) setState(() => _waitSeconds--);
+      } else {
+        _waitTimer?.cancel();
+        // Aquí podrías habilitar un botón de "Cancelar sin penalización"
+      }
+    });
+  }
+
+  Widget _buildInTripContent() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.primaryGreen.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.navigation,
+                color: AppColors.primaryGreen,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    "En viaje hacia el destino",
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                  Text(
+                    _destinationName ?? "Destino seleccionado",
+                    style: GoogleFonts.poppins(
+                      color: Colors.grey[600],
+                      fontSize: 13,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        const Divider(),
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "Valor a pagar",
+                  style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
+                ),
+                Text(
+                  "\$ ${_formatCurrency(_tripPrice)}",
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
+                ),
+              ],
+            ),
+            // BOTÓN SOS (Seguridad)
+            ElevatedButton.icon(
+              onPressed: () => _showSOSDialog(),
+              icon: const Icon(Icons.security, color: Colors.white, size: 18),
+              label: Text(
+                "S.O.S",
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red[700],
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 15),
+      ],
+    );
+  }
+
+  void _showSOSDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Centro de Emergencias"),
+        content: const Text(
+          "¿Deseas comunicarte con la línea de emergencia 123 o compartir tu ubicación con un contacto de confianza?",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancelar"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              /* Lógica para llamar al 123 */
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text(
+              "LLAMAR 123",
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _calculateDriverToPickupRoute(LatLng driverPos) async {
+    if (_currentPosition == null) return;
+
+    try {
+      final result = await _routeService.getRoute(
+        driverPos, // Origen: El carro del conductor
+        _currentPosition!, // Destino: Tú (el pasajero)
+        tipoVehiculo: _getDbCategory(_selectedServiceCategory),
+      );
+
+      if (mounted) {
+        setState(() {
+          _routePoints = result.points; // Dibujamos la ruta hacia el pasajero
+          // Actualizamos el ETA con el tiempo real de la ruta
+          _driverEta = "${(result.durationSeconds / 60).round()} min";
+        });
+        _mapController.fitCamera(
+          CameraFit.bounds(
+            bounds: LatLngBounds.fromPoints([
+              _driverPosition!,
+              _currentPosition!,
+            ]),
+            padding: const EdgeInsets.only(
+              top: 100,
+              bottom: 300,
+              left: 70,
+              right: 70,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint("Error calculando ruta al punto de recogida: $e");
+    }
+  }
+
+  // --- SUSTITUIR EL MÉTODO _buildPaymentSelector COMPLETO ---
+  Widget _buildPaymentSelector(StateSetter setModalState) {
+    if (_userMethods.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            "Pagar con:",
+            style: GoogleFonts.poppins(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey,
+            ),
+          ),
+          DropdownButtonHideUnderline(
+            child: DropdownButton<PaymentMethod>(
+              isExpanded: true,
+              value: _selectedMethod,
+              items: _userMethods
+                  .map(
+                    (m) => DropdownMenuItem<PaymentMethod>(
+                      value: m,
+                      child: Row(
+                        children: [
+                          Icon(
+                            _getPaymentIcon(m.type),
+                            size: 20,
+                            color: AppColors.primaryGreen,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            // <--- AÑADIR EXPANDED
+                            child: Text(
+                              m.name,
+                              style: GoogleFonts.poppins(fontSize: 14),
+                              overflow: TextOverflow
+                                  .ellipsis, // <--- AÑADIR ESTO PARA PONER "..." SI ES MUY LARGO
+                              maxLines: 1,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (val) {
+                setModalState(
+                  () => _selectedMethod = val,
+                ); // Actualiza el modal (Objeto)
+                setState(() {
+                  _selectedMethod = val;
+                  _selectedPaymentMethod =
+                      val!.id; // Actualiza la App (String ID)
+                });
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Helper para iconos basado en tu Enum PaymentMethodType
+  IconData _getPaymentIcon(PaymentMethodType type) {
+    switch (type) {
+      case PaymentMethodType.cash:
+        return Icons.payments_outlined;
+      case PaymentMethodType.card:
+        return Icons.credit_card;
+      case PaymentMethodType.corporateVoucher:
+        return Icons.business_center;
+      case PaymentMethodType.pse:
+        return Icons.account_balance;
+    }
   }
 }
