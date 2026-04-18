@@ -64,7 +64,12 @@ class Beneficiary {
 
 class User {
   final String id; // PK (UUID)
-
+  String? homeAddress;
+  double? homeLat;
+  double? homeLng;
+  String? workAddress;
+  double? workLat;
+  double? workLng;
   // Variables mutables (pueden cambiar en edición de perfil)
   String? idPassenger;
   String? idResponsable; // FK manager_id
@@ -126,6 +131,12 @@ class User {
     this.token,
     this.active = true,
     this.canUseCorporate = false,
+    this.homeAddress,
+    this.homeLat,
+    this.homeLng,
+    this.workAddress,
+    this.workLat,
+    this.workLng,
   });
 
   // Helpers de lógica de negocio
@@ -168,7 +179,20 @@ class User {
       nitEmpresa: empresaData != null ? empresaData['nit'] ?? '' : '',
       canUseCorporate: map['can_use_corporate'] ?? (empresaData != null),
       companyUuid: empresaData != null ? empresaData['id'].toString() : null,
-
+      homeAddress: map['home_address'],
+      homeLat: map['home_lat'] != null
+          ? double.parse(map['home_lat'].toString())
+          : null,
+      homeLng: map['home_lng'] != null
+          ? double.parse(map['home_lng'].toString())
+          : null,
+      workAddress: map['work_address'],
+      workLat: map['work_lat'] != null
+          ? double.parse(map['work_lat'].toString())
+          : null,
+      workLng: map['work_lng'] != null
+          ? double.parse(map['work_lng'].toString())
+          : null,
       role: (map['id_role'] == 2) ? UserRole.EMPLEADO : UserRole.NATURAL,
       photoUrl: map['foto_perfil'],
       // Corregimos el error del linter usando la función aquí:
@@ -183,6 +207,7 @@ class User {
               ?.map((e) => Beneficiary.fromJson(Map<String, dynamic>.from(e)))
               .toList() ??
           [],
+
       token: map['access_token'],
     );
   }

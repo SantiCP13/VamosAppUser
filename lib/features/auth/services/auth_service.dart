@@ -380,4 +380,9 @@ class AuthService {
       'password_confirmation': password,
     },
   );
+  static void updateLocalUser(Map<String, dynamic> userData) {
+    // Usamos fromMap para convertir el JSON del servidor en un objeto User
+    _currentUser = User.fromMap(userData);
+    debugPrint("Usuario actualizado localmente: ${_currentUser?.homeAddress}");
+  }
 }

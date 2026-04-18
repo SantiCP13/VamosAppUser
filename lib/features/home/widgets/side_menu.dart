@@ -6,7 +6,7 @@ import '../../menu/screens/profile_screen.dart';
 import '../../menu/screens/history_screen.dart';
 import '../../menu/screens/support_screen.dart';
 import '../../auth/screens/welcome_screen.dart';
-import '../../payment/screens/payment_methods_screen.dart';
+/*import '../../payment/screens/payment_methods_screen.dart';*/
 
 class SideMenu extends StatelessWidget {
   final Function(bool) onToggleMode;
@@ -170,13 +170,13 @@ class SideMenu extends StatelessWidget {
                   text: "Historial de Viajes",
                   destinationScreen: const HistoryScreen(),
                 ),
-                _buildMenuItem(
+                /*_buildMenuItem(
                   context,
                   icon: Icons.payment_rounded,
                   text: "Métodos de Pago",
                   destinationScreen:
                       const PaymentMethodsScreen(), // Importa la pantalla creada
-                ),
+                ),*/
                 _buildMenuItem(
                   context,
                   icon: Icons.help_outline_rounded,

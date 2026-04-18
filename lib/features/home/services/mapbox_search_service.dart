@@ -40,7 +40,8 @@ class MapboxSearchService {
         '&language=es'
         '&limit=10'
         '&country=co'
-        '&types=poi,address,street'
+        '&bbox=-79.2778,-4.2294,-66.8472,12.5852' // <--- MAGIA: Solo busca dentro de este cuadrado (Colombia)
+        '&types=poi,address' // <--- Limpio: Solo lugares y direcciones
         '&session_token=$_sessionToken'
         '&access_token=$_accessToken';
 

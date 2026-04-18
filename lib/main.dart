@@ -10,9 +10,17 @@ import 'package:intl/date_symbol_data_local.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: ".env");
-  await initializeDateFormatting('es_ES', null);
-  // Ejecutamos la validación de sesión antes de que el usuario vea nada
-  bool isAuthenticated = await AuthService.checkAuthStatus();
+  try {
+    await initializeDateFormatting('es_ES', null);
+  } catch (e) {
+    debugPrint("Error inicializando fechas: $e");
+  }
+  bool isAuthenticated = false;
+  try {
+    isAuthenticated = await AuthService.checkAuthStatus();
+  } catch (e) {
+    isAuthenticated = false;
+  }
 
   runApp(
     VamosApp(

@@ -52,9 +52,10 @@ class RouteService {
   }
 
   List<LatLng> _decodePolyline(String encoded) {
-    List<LatLng> poly = [];
+    List<LatLng> points = [];
     int index = 0, len = encoded.length;
     int lat = 0, lng = 0;
+
     while (index < len) {
       int b, shift = 0, result = 0;
       do {
@@ -64,6 +65,7 @@ class RouteService {
       } while (b >= 0x20);
       int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
       lat += dlat;
+
       shift = 0;
       result = 0;
       do {
@@ -73,9 +75,11 @@ class RouteService {
       } while (b >= 0x20);
       int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
       lng += dlng;
-      poly.add(LatLng(lat / 1000000.0, lng / 1000000.0));
+
+      // IMPORTANTE: Mapbox Polyline6 usa precisión de 1/1,000,000 (1e6)
+      points.add(LatLng(lat / 1000000.0, lng / 1000000.0));
     }
-    return poly;
+    return points;
   }
 }
 

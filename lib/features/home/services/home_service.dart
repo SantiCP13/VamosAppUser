@@ -20,6 +20,30 @@ class HomeService {
     }
   }
 
+  // --- FUNCIÓN DE GUARDADO (Corregida) ---
+  Future<Map<String, dynamic>?> saveQuickAddress({
+    required String type,
+    required String address,
+    required double lat,
+    required double lng,
+  }) async {
+    try {
+      // CAMBIO: Usamos '_api' que es como se llama tu variable arriba
+      final response = await _api.dio.post(
+        '/user/favoritos',
+        data: {'tipo': type, 'address': address, 'lat': lat, 'lng': lng},
+      );
+      if (response.statusCode == 200) {
+        return response.data['user'];
+      }
+      return null;
+    } catch (e) {
+      debugPrint("Error guardando favorito desde HomeService: $e");
+      return null;
+    }
+  }
+
+  // Lógica de Socket para el Usuario
   // Lógica de Socket para el Usuario
   void initUserSocket({
     required String userId,
@@ -33,7 +57,6 @@ class HomeService {
         port: 8080,
         key: '06exymiubefjjglwmvqe',
       ),
-      // CORRECCIÓN: Manejador de errores obligatorio en v1.3.1
       connectionErrorHandler: (exception, trace, client) {
         debugPrint("Socket Error: $exception");
       },
@@ -43,12 +66,18 @@ class HomeService {
       if (event.name == 'pusher:connection_established') {
         final channel = _client!.privateChannel(
           'private-usuario.$userId',
-          // CORRECCIÓN: Usar clase delegada personalizada
           authorizationDelegate: UserPusherAuth(token: token),
         );
         channel.subscribe();
+
+        // Escuchamos cuando un conductor ACEPTA
         channel.bind('ViajeAceptado').listen((e) {
           if (e.data != null) onEvent('ViajeAceptado', json.decode(e.data!));
+        });
+
+        // 🔥 NUEVO: Escuchamos cuando el sistema CANCELA (falta de conductores)
+        channel.bind('ViajeCancelado').listen((e) {
+          if (e.data != null) onEvent('ViajeCancelado', json.decode(e.data!));
         });
       }
     });
