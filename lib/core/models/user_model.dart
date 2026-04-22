@@ -38,24 +38,31 @@ class Beneficiary {
   final String id; // PK
   final String name;
   final String documentNumber; // Requerido por ley para el FUEC.
+  final String documentType; // <--- AÑADIDO PARA FUEC
 
   Beneficiary({
     required this.id,
     required this.name,
     required this.documentNumber,
+    this.documentType = 'CC', // <--- DEFAULT CC
   });
 
   Map<String, dynamic> toJson() => {
     'id': id,
-    'name': name,
-    'document_number': documentNumber,
+    'nombre_completo': name,
+    'numero_documento': documentNumber,
+    'tipo_documento': documentType,
   };
 
   factory Beneficiary.fromJson(Map<String, dynamic> json) {
     return Beneficiary(
       id: json['id']?.toString() ?? '',
-      name: json['name'] ?? '',
-      documentNumber: json['document_number'] ?? json['documentNumber'] ?? '',
+      // Mapeamos 'nombre_completo' a nuestra variable local 'name'
+      name: json['nombre_completo'] ?? json['name'] ?? '',
+      // Mapeamos 'numero_documento' a nuestra variable local 'documentNumber'
+      documentNumber: json['numero_documento'] ?? json['document_number'] ?? '',
+      // Mapeamos 'tipo_documento'
+      documentType: json['tipo_documento'] ?? 'CC',
     );
   }
 }
@@ -82,6 +89,7 @@ class User {
   /// Cédula para FUEC.
   /// Mapea a 'document_number' en USERS.
   final String documentNumber;
+  final String documentType; // <--- TITULAR TAMBIÉN NECESITA TIPO (FUEC)
 
   final String address;
 
@@ -118,6 +126,8 @@ class User {
     required this.name,
     required this.phone,
     this.documentNumber = '',
+    this.documentType = 'CC', // <--- DEFAULT CC
+
     this.address = '',
     this.photoUrl,
     required this.role,
@@ -171,6 +181,8 @@ class User {
       name: map['name'] ?? map['nombre'] ?? '',
       phone: map['telefono'] ?? map['phone'] ?? '',
       documentNumber: map['numero_documento'] ?? map['documento'] ?? '',
+      documentType: map['tipo_documento'] ?? 'CC', // <--- LEER DEL BACK
+
       address: map['direccion'] ?? map['address'] ?? '',
       active: isActive,
 

@@ -8,6 +8,8 @@ class TripModel {
   final String origin;
   final String destination;
   final double price;
+  final double tolls; // <--- AGREGA ESTA LÍNEA
+
   final String status;
 
   // Datos del Conductor y Vehículo
@@ -28,6 +30,8 @@ class TripModel {
     required this.origin,
     required this.destination,
     required this.price,
+    required this.tolls, // <--- AGREGA ESTA LÍNEA
+
     required this.status,
     this.driverId,
     this.driverName,
@@ -44,6 +48,11 @@ class TripModel {
     final driverData = rawDriver is Map ? rawDriver : {};
     final rawVehicle = json['vehiculo'] ?? json['vehicle'];
     final vehicleData = rawVehicle is Map ? rawVehicle : {};
+
+    // --- NUEVA LÓGICA DE PEAJES PARA EL USUARIO ---
+    final desglose = json['desglose_precio'] ?? {};
+    final double totalPeajes =
+        double.tryParse((desglose['total_peajes'] ?? 0).toString()) ?? 0.0;
 
     var passengerList = <Passenger>[];
     if (json['pasajeros'] != null) {
@@ -63,12 +72,20 @@ class TripModel {
           : null,
       origin: json['origen'] ?? 'Origen desconocido',
       destination: json['destino'] ?? 'Destino desconocido',
-      price: double.tryParse((json['precio_estimado'] ?? 0).toString()) ?? 0.0,
+
+      // 🔥 Precio total oficial (Viene del Backend)
+      price:
+          double.tryParse(
+            (json['precio_estimado'] ?? json['monto_final'] ?? 0).toString(),
+          ) ??
+          0.0,
+
       status:
           json['status'] ??
           (json['finalizado_en'] != null
               ? 'COMPLETED'
               : (json['cancelado_en'] != null ? 'CANCELLED' : 'PENDING')),
+
       driverId: driverData['id']?.toString(),
       driverName: driverData['name'] ?? driverData['nombre'] ?? 'Sin nombre',
       driverPhotoUrl: driverData['foto_perfil'] ?? driverData['photo_url'],
@@ -77,6 +94,9 @@ class TripModel {
       vehicleModel: vehicleData['modelo'] ?? vehicleData['model'],
       vehicleColor: vehicleData['color'],
       passengers: passengerList,
+
+      // Guardamos los peajes para que el usuario sepa qué pagó
+      tolls: totalPeajes,
     );
   }
 

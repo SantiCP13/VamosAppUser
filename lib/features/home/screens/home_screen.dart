@@ -16,6 +16,7 @@ import '../../../core/models/user_model.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../widgets/side_menu.dart';
 import '../services/route_service.dart';
+import '../services/search_service.dart';
 import '../../home/screens/search_destination_screen.dart';
 import '../../auth/services/auth_service.dart';
 import '../../menu/services/menu_service.dart';
@@ -49,9 +50,13 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // --- CONTROLADORES ---
   final MapController _mapController = MapController();
+  // En la zona de controladores (donde está el MapController)
+  AnimationController? _mapMoveController;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final RouteService _routeService = RouteService();
   final HomeService _homeService = HomeService();
+  final SearchService _searchService = SearchService(); // <--- AÑADE ESTA LÍNEA
+
   // --- ESTADO GENERAL ---
   TripState _tripState = TripState.IDLE;
   LatLng? _currentPosition;
@@ -59,8 +64,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool _isMapReady = false;
   bool _isPickingLocation =
       false; // Controla si el panel de pedido está abierto o minimizado
-  LatLng? _mapCenterPicker;
-  double _currentSheetExtent = 0.45; // Rastrea el tamaño actual del panel
+
+  String? _lastCityCache;
+  bool _isCalculatingRoute = false;
+  bool _showTollsDetail = false; // Controla el acordeón de peajes
+  // Usamos un ValueNotifier para actualizaciones de alto rendimiento sin redibujar todo el build
+  final ValueNotifier<double> _sheetExtentNotifier = ValueNotifier(0.45);
   bool _isLoadingAddress = false;
   final OsmService _osmService = OsmService();
   bool _isFinishingLock = false; // El Lock anti-polling
@@ -69,6 +78,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // Cerca de las otras variables booleanas (aprox línea 65)
   bool _isPickingOrigin = false;
   // --- PAGO ---
+  // ignore: prefer_final_fields
   List<PaymentMethod> _userMethods = []; // Lista real del service
   PaymentMethod? _selectedMethod;
 
@@ -101,7 +111,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   int _waitSeconds = 300; // 5 minutos en segundos
   Timer? _waitTimer;
   DateTime? _scheduledAt;
+  String _pickingAddress = "Buscando dirección...";
+
   // --- CATEGORÍAS ---
+  // ignore: prefer_final_fields
   double _baseRoutePrice = 0;
   String _selectedServiceCategory = 'STANDARD';
   final Map<String, double> _categoryMultipliers = {
@@ -114,6 +127,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    _loadPaymentMethods();
 
     // Validación de seguridad de último nivel
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -121,7 +135,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         Navigator.pushReplacementNamed(context, '/');
         return;
       }
-      _checkStatusTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      _checkStatusTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
         _verifyUserStatus();
         _checkActiveTrip();
       });
@@ -140,6 +154,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void dispose() {
     _checkStatusTimer?.cancel();
     _simulationTimer?.cancel();
+    _sheetExtentNotifier.dispose(); // <--- Agrega esto
+    _mapMoveController?.dispose();
+
     super.dispose();
   }
 
@@ -147,6 +164,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return _currentUser.beneficiaries
         .where((b) => _selectedPassengerIds.contains(b.id))
         .toList();
+  }
+
+  Future<void> _loadPaymentMethods() async {
+    try {
+      // CAMBIO: Pasamos el objeto User completo (!), no solo el ID
+      final methods = await PaymentService().getPaymentMethods(
+        AuthService.currentUser!,
+      );
+      if (mounted) {
+        setState(() {
+          _userMethods = methods;
+          if (methods.isNotEmpty) _selectedMethod = methods.first;
+        });
+      }
+    } catch (e) {
+      debugPrint("Error cargando métodos de pago: $e");
+    }
   }
 
   int get _totalPassengers =>
@@ -163,81 +197,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     } catch (e) {
       debugPrint("Error: $e");
     }
-  }
-
-  Future<void> _checkActiveTrip() async {
-    if (_isFinishingLock) return;
-    final tripData = await _homeService.getActiveTrip();
-    if (!mounted) return;
-
-    setState(() {
-      if (tripData != null) {
-        _currentTripId = tripData['id'].toString();
-        _driverData = tripData;
-        if (tripData['metodo_pago_preferido'] != null) {
-          _selectedPaymentMethod = tripData['metodo_pago_preferido'];
-        }
-        // 1. LLEGADA AL DESTINO / PAGO
-        if (tripData['finalizado_en'] != null ||
-            tripData['estado'] == 'DROPPED_OFF') {
-          _tripState = TripState.PAYMENT;
-          _waitTimer?.cancel();
-        }
-        // 2. EN VIAJE O CONDUCTOR EN SITIO
-        else if (tripData['iniciado_en'] != null ||
-            tripData['llegado_en'] != null) {
-          bool wasInOtherState =
-              _tripState != TripState.IN_TRIP &&
-              _tripState != TripState.DRIVER_ON_WAY;
-          _tripState = (tripData['iniciado_en'] != null)
-              ? TripState.IN_TRIP
-              : TripState.DRIVER_ON_WAY;
-
-          if (wasInOtherState || _routePoints.isEmpty) {
-            if (_destinationCoordinates != null &&
-                (_originCoordinates != null || _currentPosition != null)) {
-              // <--- Agrega esta seguridad
-              _calculateRouteAndPrice(_destinationCoordinates!);
-            } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Esperando señal de GPS...")),
-              );
-            }
-          }
-          if (tripData['llegado_en'] != null && _waitTimer == null) {
-            _startWaitTimer();
-          }
-          if (tripData['iniciado_en'] != null) _waitTimer?.cancel();
-        }
-        // 3. CONDUCTOR EN CAMINO (ACCEPTED)
-        else if (tripData['id_conductor'] != null) {
-          _tripState = TripState.DRIVER_ON_WAY;
-          if (tripData['lat_conductor'] != null) {
-            LatLng driverPos = LatLng(
-              double.parse(tripData['lat_conductor'].toString()),
-              double.parse(tripData['lng_conductor'].toString()),
-            );
-            _driverPosition = driverPos;
-            _calculateDriverToPickupRoute(
-              driverPos,
-            ); // Ruta Conductor -> Usuario
-          }
-        }
-
-        // Tracking activo
-        if (_currentTripId != null &&
-            (_tripState == TripState.DRIVER_ON_WAY ||
-                _tripState == TripState.IN_TRIP)) {
-          _startTrackingListener(_currentTripId!);
-        }
-      } else {
-        if (_tripState == TripState.SEARCHING_DRIVER ||
-            _tripState == TripState.DRIVER_ON_WAY ||
-            _tripState == TripState.IN_TRIP) {
-          _resetApp();
-        }
-      }
-    });
   }
 
   Future<void> _determinePosition() async {
@@ -276,7 +235,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 15),
+        timeLimit: const Duration(seconds: 5),
       );
 
       if (!mounted) return;
@@ -288,6 +247,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     } catch (e) {
       if (_currentPosition == null) {
         _useDefaultLocation();
+        _showErrorSnackBar(
+          "Error de GPS: No pudimos obtener tu ubicación exacta.",
+        ); // <--- AVISO AL USUARIO
       }
     }
   }
@@ -316,7 +278,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (_tripState == TripState.IDLE &&
         _isMapReady &&
         _currentPosition != null) {
-      _mapController.move(_currentPosition!, 15.0);
+      _animatedMapMove(_currentPosition!, 15.0);
     }
   }
 
@@ -391,25 +353,47 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Future<bool> _isTripAllowed(LatLng start, LatLng end) async {
-    if (_currentUser.isCorporateMode) {
-      return true;
+    if (_currentUser.isCorporateMode) return true;
+
+    // 1. CÁLCULO DE DISTANCIA PREVIO (No consume recursos)
+    double distanceInMeters = Geolocator.distanceBetween(
+      start.latitude,
+      start.longitude,
+      end.latitude,
+      end.longitude,
+    );
+
+    // SI LA DISTANCIA ES MENOR A 500 METROS:
+    // Es físicamente imposible que hayan cambiado de ciudad.
+    // Bloqueamos por "Viaje Urbano" sin preguntar al servidor.
+    if (distanceInMeters < 500) {
+      _showRestrictionError("tu ubicación actual");
+      return false;
     }
 
-    try {
-      String? startCity = await _getCityFromCoordinates(start);
-      String? endCity = await _getCityFromCoordinates(end);
+    // SI LA DISTANCIA ES MAYOR A 50 KM:
+    // Es muy probable que sean ciudades distintas.
+    // Permitimos el viaje sin geocodificar para ahorrar batería y tiempo.
+    if (distanceInMeters > 50000) return true;
 
-      // LLAVES AÑADIDAS AQUÍ:
-      if (startCity == null || endCity == null) {
-        return true;
-      }
+    try {
+      // Solo si el viaje está en el "rango dudoso" (0.5km a 50km) geocodificamos
+      final results = await Future.wait([
+        _getCityFromCoordinates(start),
+        _getCityFromCoordinates(end),
+      ]).timeout(const Duration(seconds: 4));
+
+      String? startCity = results[0];
+      String? endCity = results[1];
+
+      if (startCity == null || endCity == null) return true;
 
       if (_normalizeString(startCity) == _normalizeString(endCity)) {
         _showRestrictionError(startCity);
         return false;
       }
     } catch (e) {
-      return true;
+      return true; // En caso de error de red, dejamos pasar para no bloquear al usuario
     }
     return true;
   }
@@ -426,14 +410,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Future<String?> _getCityFromCoordinates(LatLng point) async {
+    if (_lastCityCache != null && _originCoordinates != null) {
+      double dist = Geolocator.distanceBetween(
+        point.latitude,
+        point.longitude,
+        _originCoordinates!.latitude,
+        _originCoordinates!.longitude,
+      );
+      // CORRECCIÓN LINT: Agregadas llaves {}
+      if (dist < 500) {
+        return _lastCityCache;
+      }
+    }
+
     try {
       List<Placemark> placemarks = await placemarkFromCoordinates(
         point.latitude,
         point.longitude,
-      );
+      ).timeout(const Duration(seconds: 3));
+
       if (placemarks.isNotEmpty) {
-        return placemarks.first.locality ??
-            placemarks.first.subAdministrativeArea;
+        String? city =
+            placemarks.first.locality ?? placemarks.first.subAdministrativeArea;
+        if (city != null) _lastCityCache = city;
+        return city;
       }
     } catch (e) {
       debugPrint("Error Geocoding: $e");
@@ -485,115 +485,311 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // ===============================================================
   // 2. LÓGICA DE RUTAS
   // ===============================================================
+  // --- REEMPLAZA ESTOS MÉTODOS EN home_screen.dart ---
 
-  void _updateFinalPrice() {
-    double multiplier = _categoryMultipliers[_selectedServiceCategory] ?? 1.0;
-    double finalRaw = _baseRoutePrice * multiplier;
-
-    setState(() {
-      _tripPrice = (finalRaw / 100).ceil() * 100;
-    });
-  }
-
-  Future<void> _calculateRouteAndPrice(LatLng destination) async {
-    // ignore: duplicate_ignore
-    // ignore: avoid_print
-    print("DEBUG: Iniciando cálculo de ruta a: $destination");
-    // 1. Verificación de seguridad: si no hay posición todavía, la buscamos
-    if (_currentPosition == null) {
-      await _determinePosition();
-    }
-
-    // 2. Si después de buscar sigue siendo nulo, abortamos sin crashear
-    final LatLng? startPoint = _originCoordinates ?? _currentPosition;
-
-    if (startPoint == null) {
-      if (mounted) {
-        setState(() => _tripState = TripState.IDLE);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              "Error: No se pudo determinar tu ubicación de origen",
-            ),
-          ),
-        );
-      }
-      return;
-    }
-
-    // 3. Validación de zona permitida (Usando startPoint seguro)
-    bool allowed = await _isTripAllowed(startPoint, destination);
-
-    if (!mounted) return;
-    if (!allowed) {
-      setState(() => _tripState = TripState.IDLE);
-      return;
-    }
-
-    // El resto del código se mantiene igual...
-    setState(() => _tripState = TripState.CALCULATING);
+  Future<void> _confirmMapSelection() async {
+    if (_isLoadingAddress) return;
+    final currentCenter = _mapController.camera.center;
+    setState(() => _isLoadingAddress = true);
 
     try {
-      final LatLng? startPoint = _originCoordinates ?? _currentPosition;
-
-      if (startPoint == null) {
-        if (mounted) {
-          setState(() => _tripState = TripState.IDLE);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("No se pudo obtener tu ubicación de origen"),
-            ),
-          );
-        }
+      final data = await _searchService.getReverseGeocode(
+        currentCenter.latitude,
+        currentCenter.longitude,
+      );
+      if (data == null || !mounted) {
+        setState(() => _isLoadingAddress = false);
         return;
       }
 
-      final result = await _routeService.getRoute(
-        startPoint, // <--- Ahora es seguro
-        destination,
-        idContrato: _currentUser.isCorporateMode ? 1 : null,
-        tipoVehiculo: _getDbCategory(_selectedServiceCategory),
+      // 🔥 AQUÍ DEFINES LA VARIABLE PARA QUE NO DE ERROR
+      LatLng snappedPoint = LatLng(data['snapped_lat'], data['snapped_lng']);
+      String address = data['name'];
+
+      setState(() {
+        _isLoadingAddress = false;
+        _isPickingLocation = false;
+        _tripState = TripState.CALCULATING;
+
+        if (_isPickingOrigin) {
+          _originName = address;
+          _originCoordinates = snappedPoint;
+        } else {
+          _destinationName = address;
+          _destinationCoordinates = snappedPoint;
+        }
+      });
+
+      // Ahora sí puedes usar snappedPoint aquí
+      _mapController.move(snappedPoint, 15.0);
+
+      if (_destinationCoordinates != null) {
+        _calculateRouteAndPrice(_destinationCoordinates!);
+      } else {
+        _openSearchFromCurrentState();
+      }
+    } catch (e) {
+      setState(() => _isLoadingAddress = false);
+      _showErrorSnackBar("Error al validar la ubicación");
+    }
+  }
+
+  Future<void> _checkActiveTrip() async {
+    if (_isFinishingLock || _isCalculatingRoute) return;
+
+    try {
+      final tripData = await _homeService.getActiveTrip().timeout(
+        const Duration(seconds: 8),
       );
       if (!mounted) return;
-      _userMethods = await PaymentService().getPaymentMethods(_currentUser);
+
+      if (tripData != null) {
+        String newTripId = tripData['id'].toString();
+
+        // 1. Calculamos cuál sería el "Estado Lógico" según el servidor
+        TripState serverState;
+        if (tripData['finalizado_en'] != null ||
+            tripData['estado'] == 'DROPPED_OFF') {
+          serverState = TripState.PAYMENT;
+        } else if (tripData['iniciado_en'] != null) {
+          serverState = TripState.IN_TRIP;
+        } else if (tripData['id_conductor'] != null ||
+            tripData['estado'] == 'ACCEPTED') {
+          serverState = TripState.DRIVER_ON_WAY;
+        } else {
+          serverState = TripState.SEARCHING_DRIVER;
+        }
+
+        // 2. REGLA DE ORO: El estado solo puede avanzar, nunca retroceder
+        // (A menos que el viaje se haya cancelado o estemos en IDLE)
+        bool esAvance = serverState.index >= _tripState.index;
+        bool esReinicio =
+            _tripState == TripState.IDLE || _tripState == TripState.CALCULATING;
+
+        if (esAvance || esReinicio) {
+          setState(() {
+            _currentTripId = newTripId;
+            _driverData = tripData;
+            _tripState = serverState;
+
+            // Manejo de timers si el conductor llegó
+            if (tripData['llegado_en'] != null && _waitTimer == null) {
+              _startWaitTimer();
+            }
+
+            // Si ya inició el viaje, cancelamos el timer de espera
+            if (serverState == TripState.IN_TRIP) {
+              _waitTimer?.cancel();
+              _waitTimer = null;
+            }
+          });
+
+          // Solo recalculamos la ruta si cambió el estado o no hay puntos
+          if (_routePoints.isEmpty && _destinationCoordinates != null) {
+            _calculateRouteAndPrice(_destinationCoordinates!);
+          }
+        }
+
+        if (_currentTripId != null) {
+          _startTrackingListener(_currentTripId!);
+        }
+      } else {
+        // Si el servidor dice que no hay viaje activo pero nosotros creemos que sí
+        // (Significa que se canceló o terminó en otro lado)
+        if (_tripState == TripState.SEARCHING_DRIVER ||
+            _tripState == TripState.DRIVER_ON_WAY ||
+            _tripState == TripState.IN_TRIP) {
+          _resetApp();
+        }
+      }
+    } catch (e) {
+      debugPrint("Error en polling: $e");
+    }
+  }
+
+  // 3. REEMPLAZA _calculateRouteAndPrice (Para activar _isTripAllowed y evitar avisos)
+  Future<void> _calculateRouteAndPrice(LatLng destination) async {
+    if (_isPickingLocation || _isCalculatingRoute) return;
+
+    // 1. Definir el punto de inicio real
+    LatLng startPoint =
+        _originCoordinates ?? _currentPosition ?? _defaultLocation;
+    // --- VALIDACIÓN DE DISTANCIA MÍNIMA (EVITA CRASH) ---
+    double metrosDeDistancia = Geolocator.distanceBetween(
+      startPoint.latitude,
+      startPoint.longitude,
+      destination.latitude,
+      destination.longitude,
+    );
+
+    if (metrosDeDistancia < 20) {
+      // Si el destino está a menos de 20 metros del origen
+      if (mounted) {
+        setState(() {
+          _tripState = TripState.IDLE;
+          _isCalculatingRoute = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              "El destino está demasiado cerca del origen. Por favor selecciona un lugar más alejado.",
+              style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+            ),
+            backgroundColor: Colors.orange[800],
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(20),
+          ),
+        );
+      }
+      return; // Detiene la ejecución aquí y no llama al servidor
+    }
+    // ---------------------------------------------------
+    if (_routePoints.isEmpty) {
+      setState(() {
+        _isCalculatingRoute = true;
+        _tripState = TripState.CALCULATING;
+      });
+    }
+
+    try {
+      // 2. Snapping de alta potencia (Asegura que los puntos estén en la calle)
+      final results = await Future.wait([
+        _osmService.getSnappedAddress(startPoint),
+        _osmService.getSnappedAddress(destination),
+      ]);
+
+      LatLng finalStart = results[0]['snappedPoint'];
+      LatLng finalEnd = results[1]['snappedPoint'];
+
+      // --- AQUÍ ES DONDE LLAMAMOS A LA FUNCIÓN PARA QUE DEJE DE SER "UNUSED" ---
+      bool allowed = await _isTripAllowed(finalStart, finalEnd);
+      if (!allowed) {
+        setState(() {
+          _tripState = TripState.IDLE;
+          _isCalculatingRoute = false;
+        });
+        return; // Detenemos el proceso si el viaje no está permitido (ej: viaje urbano en modo personal)
+      }
+      // ------------------------------------------------------------------------
+
+      // 3. Normalizar a 6 decimales (Vital para que el backend no se pierda)
+      finalStart = LatLng(
+        double.parse(finalStart.latitude.toStringAsFixed(6)),
+        double.parse(finalStart.longitude.toStringAsFixed(6)),
+      );
+      finalEnd = LatLng(
+        double.parse(finalEnd.latitude.toStringAsFixed(6)),
+        double.parse(finalEnd.longitude.toStringAsFixed(6)),
+      );
+
+      // 4. Cotizar con el servidor
+      final result = await _routeService
+          .getRoute(
+            finalStart,
+            finalEnd,
+            idContrato: _currentUser.isCorporateMode ? 1 : null,
+            tipoVehiculo: _getDbCategory(_selectedServiceCategory),
+          )
+          .timeout(const Duration(seconds: 15));
+
       if (!mounted) return;
 
       setState(() {
         _routePoints = result.points;
         _tripPrice = result.price;
-        _categoryPricesFromServer = result.preciosCategorias ?? {};
+        _baseRoutePrice = result.price; // <--- AGREGA ESTA LÍNEA CLAVE
+
         _tripDesglose = result.desglose;
-
-        // 🔥 IMPORTANTE: Si la categoría es STANDARD, guardamos esto como base global
-        // para que el selector pueda estimar el precio de SUV y VAN correctamente.
-        if (_selectedServiceCategory == 'STANDARD') {
-          _baseRoutePrice = result.price;
-        } else {
-          // Si eligió SUV, calculamos hacia atrás cuál sería el precio base
-          double mult = _categoryMultipliers[_selectedServiceCategory] ?? 1.0;
-          _baseRoutePrice = result.price / mult;
-        }
-
+        _categoryPricesFromServer = result.preciosCategorias ?? {};
         _tripDistance =
             "${(result.distanceMeters / 1000).toStringAsFixed(1)} km";
         _tripDuration = "${(result.durationSeconds / 60).round()} min";
-        _tripState = TripState
-            .ROUTE_PREVIEW; // Al cambiar esto, el Stack mostrará el panel
+        _tripState = TripState.ROUTE_PREVIEW;
+        _isCalculatingRoute = false;
+
+        // Guardar los puntos finales "limpios" para los marcadores
+        _originCoordinates = finalStart;
+        _destinationCoordinates = finalEnd;
+        _originName = results[0]['address'];
+        _destinationName = results[1]['address'];
       });
 
-      // 2. LLAMADO PARA QUITAR EL WARNING DE _fitCameraToRoute
       _fitCameraToRoute();
     } catch (e) {
-      debugPrint("Error en el proceso de ruta: $e");
+      debugPrint("🚨 ERROR FINAL: $e");
+      if (mounted) {
+        setState(() {
+          _tripState = TripState.IDLE;
+          _isCalculatingRoute = false;
+        });
 
-      // 🔥 LA SOLUCIÓN AL CUADRO ROJO:
-      if (!mounted) return;
+        String errorMsg = e.toString();
+        if (errorMsg.contains("Sin ruta")) {
+          errorMsg =
+              "No hay una vía conectada. Prueba marcar una avenida principal cercana.";
+        }
 
-      setState(() => _tripState = TripState.IDLE);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("Error al calcular ruta: $e")));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              errorMsg.replaceAll("Exception: ", ""),
+              style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+            ),
+            backgroundColor: Colors.red[800],
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(20),
+          ),
+        );
+      }
     }
+  }
+
+  // 4. Haz que _fitCameraToRoute sea más robusto
+  void _fitCameraToRoute() {
+    if (_routePoints.length < 2 || !_isMapReady || _isPickingLocation) return;
+
+    try {
+      final bounds = LatLngBounds.fromPoints(_routePoints);
+
+      _mapController.fitCamera(
+        CameraFit.bounds(
+          bounds: bounds,
+          padding: const EdgeInsets.only(
+            top: 80,
+            bottom: 350,
+            left: 50,
+            right: 50,
+          ),
+        ),
+      );
+    } catch (e) {
+      // Si los puntos son inválidos o están muy cerca, solo centrar en el primer punto
+      _mapController.move(_routePoints.first, 15.0);
+    }
+  }
+
+  void _updateFinalPrice() {
+    // Lógica de salto automático de categoría según pasajeros
+    if (_totalPassengers > 4 && _selectedServiceCategory != 'VAN') {
+      _selectedServiceCategory = 'VAN';
+    } else if (_totalPassengers <= 4 && _selectedServiceCategory == 'VAN') {
+      _selectedServiceCategory = 'STANDARD';
+    }
+
+    String dbKey = _getDbCategory(_selectedServiceCategory);
+    double? serverPrice = _categoryPricesFromServer[dbKey]?.toDouble();
+
+    setState(() {
+      if (serverPrice != null && serverPrice > 0) {
+        _tripPrice = serverPrice;
+      } else {
+        double multiplier =
+            _categoryMultipliers[_selectedServiceCategory] ?? 1.0;
+        double finalRaw = _baseRoutePrice * multiplier;
+        _tripPrice = (finalRaw / 100).ceil() * 100;
+      }
+    });
   }
 
   void _showRequestTripPanel() {
@@ -639,38 +835,52 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
 
-  // Dentro de _fitCameraToRoute() (aprox línea 400)
-  void _fitCameraToRoute() {
-    if (_routePoints.isEmpty) return;
-
-    // Incluimos el origen y destino manualmente para asegurar que los marcadores se vean
-    List<LatLng> boundsPoints = List.from(_routePoints);
-    if (_originCoordinates != null) boundsPoints.add(_originCoordinates!);
-    if (_destinationCoordinates != null)
-      // ignore: curly_braces_in_flow_control_structures
-      boundsPoints.add(_destinationCoordinates!);
-
-    _mapController.fitCamera(
-      CameraFit.bounds(
-        bounds: LatLngBounds.fromPoints(boundsPoints),
-        padding: const EdgeInsets.only(
-          top: 150,
-          bottom: 300,
-          left: 50,
-          right: 50,
-        ),
-      ),
-    );
-  }
-
   void _moveToCurrentPosition() {
     if (_currentPosition != null) {
-      _mapController.move(_currentPosition!, 16.0);
+      _animatedMapMove(_currentPosition!, 16.0);
     } else {
       _determinePosition();
     }
   }
 
+  void _animatedMapMove(LatLng destLocation, double destZoom) {
+    // 1. Si ya hay una animación corriendo, la detenemos y cerramos
+    _mapMoveController?.dispose();
+
+    final latTween = Tween<double>(
+      begin: _mapController.camera.center.latitude,
+      end: destLocation.latitude,
+    );
+    final lngTween = Tween<double>(
+      begin: _mapController.camera.center.longitude,
+      end: destLocation.longitude,
+    );
+    final zoomTween = Tween<double>(
+      begin: _mapController.camera.zoom,
+      end: destZoom,
+    );
+
+    // 2. Asignamos el nuevo controlador a nuestra variable de clase
+    _mapMoveController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+
+    final animation = CurvedAnimation(
+      parent: _mapMoveController!,
+      curve: Curves.fastOutSlowIn,
+    );
+
+    _mapMoveController!.addListener(() {
+      _mapController.move(
+        LatLng(latTween.evaluate(animation), lngTween.evaluate(animation)),
+        zoomTween.evaluate(animation),
+      );
+    });
+
+    // 3. Iniciamos y nos aseguramos de no llamar a dispose si ya se destruyó el widget
+    _mapMoveController!.forward();
+  }
   // ===============================================================
   // 3. UI PRINCIPAL
   // ===============================================================
@@ -708,8 +918,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   }
                 },
                 onPositionChanged: (camera, hasGesture) {
+                  // Si estamos en modo de elegir ubicación, ponemos un texto de ayuda
                   if (_isPickingLocation) {
-                    _mapCenterPicker = camera.center;
+                    if (_pickingAddress != "Ubica el pin en el punto exacto") {
+                      setState(() {
+                        _pickingAddress = "Ubica el pin en el punto exacto";
+                      });
+                    }
                   }
                 },
                 interactionOptions: const InteractionOptions(
@@ -718,16 +933,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
               children: [
                 TileLayer(
-                  urlTemplate: isDark
-                      ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-                      : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-                  subdomains: const ['a', 'b', 'c', 'd'],
+                  // Usamos {r} para que flutter_map decida si cargar @2x basado en la pantalla
+                  urlTemplate:
+                      'https://api.mapbox.com/styles/v1/${isDark ? "mapbox/dark-v11" : "mapbox/streets-v12"}/tiles/{z}/{x}/{y}{r}?access_token=$myMapboxToken',
+
+                  // Identificación de la app (Debe coincidir con el provider)
+                  userAgentPackageName: 'com.example.vamos_user',
+                  tileDisplay: const TileDisplay.fadeIn(
+                    duration: Duration(milliseconds: 300),
+                  ), // Hace que el mapa aparezca suave
+                  keepBuffer: 5,
+                  // IMPORTANTE: Pon esto en true para que use el {r} de la URL correctamente
+                  retinaMode: MediaQuery.of(context).devicePixelRatio > 1.0,
+
                   tileProvider: CachedTileProvider(),
                 ),
 
                 // Capas de Ruta y Marcadores (Solo si no estamos eligiendo ubicación manualmente)
                 if (!_isPickingLocation) ...[
-                  if (_routePoints.isNotEmpty)
+                  // Solo dibuja la ruta si hay puntos Y NO estamos en estado IDLE
+                  if (_routePoints.isNotEmpty && _tripState != TripState.IDLE)
                     PolylineLayer(
                       polylines: [
                         Polyline(
@@ -739,6 +964,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                   MarkerLayer(
                     markers: [
+                      // 1. MARCADOR DE MI UBICACIÓN REAL (GPS)
+                      // Siempre lo mostramos para que el usuario sepa dónde está él físicamente
                       if (_currentPosition != null)
                         Marker(
                           point: _currentPosition!,
@@ -755,6 +982,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             ),
                           ),
                         ),
+
+                      // 2. NUEVO: MARCADOR DE ORIGEN MANUAL (Solo si el origen NO es mi ubicación actual)
+                      if (_originCoordinates != null &&
+                          _originCoordinates != _currentPosition &&
+                          _tripState != TripState.IDLE)
+                        Marker(
+                          point: _originCoordinates!,
+                          width: 40,
+                          height: 40,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: mainColor, width: 2),
+                              boxShadow: const [
+                                BoxShadow(blurRadius: 4, color: Colors.black26),
+                              ],
+                            ),
+                            child: Icon(
+                              Icons.person_pin_circle,
+                              color: mainColor,
+                              size: 25,
+                            ),
+                          ),
+                        ),
+
+                      // 3. MARCADOR DE DESTINO
                       if (_destinationCoordinates != null &&
                           _tripState != TripState.IDLE)
                         Marker(
@@ -767,6 +1021,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             size: 40,
                           ),
                         ),
+
+                      // 4. MARCADOR DEL CONDUCTOR (Cuando ya viene en camino)
                       if (_driverPosition != null)
                         Marker(
                           point: _driverPosition!,
@@ -778,6 +1034,42 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             color: Colors.black,
                           ),
                         ),
+                      // MODIFICACIÓN AQUÍ: DIBUJAR PEAJES DETECTADOS
+                      // =======================================================
+                      if (_tripDesglose != null &&
+                          _tripDesglose?['peajes_detalles'] != null)
+                        ...(_tripDesglose?['peajes_detalles'] as List).map((p) {
+                          return Marker(
+                            point: LatLng(
+                              (p['lat'] as num).toDouble(),
+                              (p['lng'] as num).toDouble(),
+                            ),
+                            width: 35,
+                            height: 35,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.amber[900]!,
+                                  width: 2,
+                                ),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Colors.black26,
+                                    blurRadius: 4,
+                                    offset: Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Icon(
+                                Icons.toll, // Icono de peaje
+                                color: Colors.amber[900],
+                                size: 20,
+                              ),
+                            ),
+                          );
+                        }),
                     ],
                   ),
                 ],
@@ -826,9 +1118,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           if (_tripState != TripState.IDLE && !_isPickingLocation)
             NotificationListener<DraggableScrollableNotification>(
               onNotification: (notification) {
-                setState(() {
-                  _currentSheetExtent = notification.extent;
-                });
+                // Esto actualiza el valor internamente de forma ultra rápida
+                _sheetExtentNotifier.value = notification.extent;
                 return true;
               },
               child: DraggableScrollableSheet(
@@ -866,7 +1157,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               borderRadius: BorderRadius.circular(2),
                             ),
                           ),
-                          _buildDynamicSheetContent(),
+                          ValueListenableBuilder<double>(
+                            valueListenable: _sheetExtentNotifier,
+                            builder: (context, extent, child) {
+                              return _buildDynamicSheetContent(
+                                extent,
+                              ); // Pasamos el extent actual
+                            },
+                          ),
                           const SizedBox(height: 20),
                         ],
                       ),
@@ -892,11 +1190,44 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     return Stack(
       children: [
-        // Pin fijo en el centro de la pantalla
+        // 1. PIN CENTRAL FIJO
         Center(
           child: Padding(
             padding: const EdgeInsets.only(bottom: 35),
             child: Icon(Icons.location_on, size: 50, color: mainColor),
+          ),
+        ),
+
+        // 2. 🔥 ETIQUETA FLOTANTE (Nivel Superior)
+        // Aparece justo encima del pin con la dirección que el backend va encontrando
+        Positioned(
+          top: MediaQuery.of(context).size.height * 0.40, // Ajuste de altura
+          left: 40,
+          right: 40,
+          child: Center(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                // ignore: deprecated_member_use
+                color: Colors.black.withOpacity(0.85),
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black26, blurRadius: 10),
+                ],
+              ),
+              child: Text(
+                _pickingAddress, // <--- AQUÍ USAMOS LA VARIABLE
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ),
         ),
 
@@ -970,8 +1301,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 TextButton(
                   onPressed: () {
                     setState(() {
+                      // 1. Apagamos el modo selección de mapa
                       _isPickingLocation = false;
                       _isLoadingAddress = false;
+
+                      // 2. LÓGICA DE RETORNO INTELIGENTE:
+                      // Si ya teníamos una ruta calculada (puntos en el mapa),
+                      // restauramos el estado ROUTE_PREVIEW para que el modal vuelva a aparecer.
+                      if (_routePoints.isNotEmpty) {
+                        _tripState = TripState.ROUTE_PREVIEW;
+
+                        // Ajustamos la cámara para volver a ver la ruta completa
+                        _fitCameraToRoute();
+                      } else {
+                        // Si no había nada, ahí sí volvemos al estado inicial (Home)
+                        _tripState = TripState.IDLE;
+                      }
                     });
                   },
                   child: Container(
@@ -1050,129 +1395,146 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       {
         'id': 'STANDARD',
         'label': 'Económico',
-        'icon': Icons.directions_car,
+        'icon': Icons.directions_car_filled,
         'capacity': '1-4',
+        'dbKey': 'CITY CAR',
+        'max': 4,
       },
       {
         'id': 'PREMIUM',
         'label': 'Confort',
         'icon': Icons.local_taxi,
         'capacity': '1-4',
+        'dbKey': 'SUV',
+        'max': 4,
       },
       {
         'id': 'VAN',
         'label': 'Van',
         'icon': Icons.airport_shuttle,
         'capacity': '5-10',
+        'dbKey': 'VAN',
+        'max': 10,
       },
     ];
 
-    bool isCorp = _currentUser.isCorporateMode;
-    Color activeColor = isCorp ? Colors.blue[800]! : AppColors.primaryGreen;
+    final isCorp = _currentUser.isCorporateMode;
+    final activeColor = isCorp
+        ? const Color(0xFF1565C0)
+        : AppColors.primaryGreen;
 
-    return SizedBox(
-      height: 110,
+    return Container(
+      height: 125, // Altura optimizada para que no se vea apretado
+      margin: const EdgeInsets.symmetric(vertical: 8),
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
         itemCount: options.length,
-        separatorBuilder: (context, index) => const SizedBox(width: 10),
+        // ignore: unnecessary_underscores
+        separatorBuilder: (_, __) => const SizedBox(width: 12),
         itemBuilder: (context, index) {
           final opt = options[index];
-          bool isSelected = _selectedServiceCategory == opt['id'];
+          final bool isSelected = _selectedServiceCategory == opt['id'];
 
-          // 1. TRADUCIR CATEGORÍA (Ej: STANDARD -> CITY CAR)
-          String dbKey = _getDbCategory(opt['id']); // <--- CAMBIO
-
-          // 2. OBTENER PRECIO REAL DEL SERVIDOR
-          double displayPrice = (_categoryPricesFromServer[dbKey] ?? 0)
-              .toDouble(); // <--- CAMBIO
-
-          // 3. SI EL SERVIDOR AÚN NO RESPONDE, USAR EL MULTIPLICADOR COMO RESPALDO
-          if (displayPrice <= 0) {
-            double mult = _categoryMultipliers[opt['id']]!;
-            displayPrice = ((_baseRoutePrice * mult) / 100).ceil() * 100;
-          }
-
-          // LÓGICA DE BLOQUEO POR CUPOS
+          // --- LÓGICA DE BLOQUEO ESTRICTO ---
           bool isDisabled = false;
-          if (_totalPassengers > 4 &&
-              (opt['id'] == 'STANDARD' || opt['id'] == 'PREMIUM')) {
-            isDisabled = true;
-          }
-          if (_totalPassengers <= 4 && opt['id'] == 'VAN') {
-            isDisabled = true;
+          if (_totalPassengers > 4 && opt['max'] == 4) isDisabled = true;
+          if (_totalPassengers <= 4 && opt['id'] == 'VAN') isDisabled = true;
+
+          // --- PRECIO ---
+          double displayPrice = (_categoryPricesFromServer[opt['dbKey']] ?? 0)
+              .toDouble();
+          if (displayPrice <= 0) {
+            double mult = _categoryMultipliers[opt['id']] ?? 1.0;
+            displayPrice = ((_baseRoutePrice * mult) / 100).ceil() * 100;
           }
 
           return GestureDetector(
             onTap: isDisabled
                 ? null
-                : () async {
-                    // SEGURIDAD: Si no hay coordenadas, no intentamos cotizar
-                    if (_destinationCoordinates == null) return;
-
+                : () {
+                    setModalState(() {
+                      _selectedServiceCategory = opt['id'];
+                      _tripPrice = displayPrice;
+                    });
                     setState(() {
                       _selectedServiceCategory = opt['id'];
-                      _tripState = TripState.CALCULATING;
+                      _tripPrice = displayPrice;
                     });
-
-                    // RE-COTIZAR con la nueva categoría
-                    await _calculateRouteAndPrice(_destinationCoordinates!);
                   },
-            child: Container(
-              width: 110,
-              padding: const EdgeInsets.all(8),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              width: 105,
               decoration: BoxDecoration(
+                // CORRECCIÓN LINTER: Uso de withValues en lugar de withOpacity
                 color: isSelected
-                    ? activeColor.withValues(alpha: 0.05)
+                    ? activeColor.withValues(alpha: 0.08)
                     : Colors.white,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(20),
                 border: Border.all(
                   color: isSelected ? activeColor : Colors.grey.shade200,
-                  width: isSelected ? 1.5 : 1,
+                  width: isSelected ? 2 : 1,
                 ),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: activeColor.withValues(alpha: 0.15),
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
+                        ),
+                      ]
+                    : [],
               ),
               child: Opacity(
-                opacity: isDisabled ? 0.5 : 1.0,
+                opacity: isDisabled ? 0.35 : 1.0,
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Icon(
                       opt['icon'],
-                      color: isSelected ? activeColor : Colors.grey[600],
+                      color: isSelected ? activeColor : Colors.grey[500],
                       size: 28,
                     ),
-                    const SizedBox(height: 5),
+                    const SizedBox(height: 6),
                     Text(
                       opt['label'],
                       style: GoogleFonts.poppins(
-                        fontWeight: FontWeight.bold,
+                        fontWeight: isSelected
+                            ? FontWeight.bold
+                            : FontWeight.w600,
                         fontSize: 12,
+                        color: isSelected ? activeColor : Colors.black87,
                       ),
                     ),
-                    // USAMOS displayPrice EN LUGAR DE priceEst
                     Text(
-                      "\$ ${_formatCurrency(displayPrice)}", // <--- CAMBIO
+                      "\$ ${_formatCurrency(displayPrice)}",
                       style: GoogleFonts.poppins(
                         fontSize: 11,
-                        color: Colors.grey[700],
+                        fontWeight: isSelected
+                            ? FontWeight.bold
+                            : FontWeight.w500,
+                        color: isSelected ? activeColor : Colors.grey[600],
                       ),
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 4),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 4,
-                        vertical: 1,
+                        horizontal: 6,
+                        vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.grey[100],
-                        borderRadius: BorderRadius.circular(4),
+                        color: isSelected
+                            ? activeColor.withValues(alpha: 0.1)
+                            : Colors.grey[100],
+                        borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
                         "${opt['capacity']} pax",
                         style: GoogleFonts.poppins(
-                          fontSize: 9,
+                          fontSize: 8,
                           fontWeight: FontWeight.bold,
-                          color: Colors.grey[600],
+                          color: isSelected ? activeColor : Colors.grey[500],
                         ),
                       ),
                     ),
@@ -1195,40 +1557,61 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
+        crossAxisAlignment:
+            CrossAxisAlignment.start, // Alineación a la izquierda
         mainAxisSize: MainAxisSize.min,
         children: [
           _buildTimeSelector(primaryColor, setModalState),
-          const SizedBox(height: 15),
+          const SizedBox(height: 20),
+
+          _sectionLabel("VAMOS PARA"),
           _buildTripDetailsCard(primaryColor, setModalState),
-          const SizedBox(height: 15),
+
+          const SizedBox(height: 20),
+          _sectionLabel("¿EN CUÁL CARRO NOS VAMOS?"),
           _buildVehicleSelector(setModalState),
 
-          _buildPriceTicket(),
-          const SizedBox(height: 10),
+          const SizedBox(height: 5),
+          _buildPriceTicket(setModalState),
+
+          const SizedBox(height: 15),
+          _sectionLabel("¿CÓMO VAS A PAGAR?"),
           _buildPaymentSelector(setModalState),
 
-          // Selector de pago previo
-          const SizedBox(height: 15),
+          const SizedBox(height: 20),
           _buildRequestButton(primaryColor),
-          const SizedBox(height: 10),
 
-          // --- BOTÓN NUEVO DE CANCELAR ---
-          SizedBox(
-            width: double.infinity,
+          const SizedBox(height: 5),
+          Center(
             child: TextButton(
-              onPressed: () {
-                _resetApp(); // Limpia el mapa y vuelve al buscador
-              },
+              onPressed: () => _resetApp(),
               child: Text(
                 "Cancelar solicitud",
                 style: GoogleFonts.poppins(
-                  color: Colors.red,
-                  fontWeight: FontWeight.bold,
+                  color: Colors.red[400],
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
                 ),
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // Widget auxiliar para las etiquetas de sección
+  Widget _sectionLabel(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      child: Text(
+        text,
+        style: GoogleFonts.poppins(
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+          color: Colors.grey[400],
+          letterSpacing: 1.1,
+        ),
       ),
     );
   }
@@ -1273,10 +1656,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   // Retorna el contenido correcto para el panel
-  Widget _buildDynamicSheetContent() {
+  Widget _buildDynamicSheetContent(double extent) {
+    // <--- Agrega 'double extent'
     // Aumentamos ligeramente el umbral de 0.13 a 0.16 para que
     // el cambio de cabecera ocurra un poco antes de llegar al fondo total.
-    bool isBottom = _currentSheetExtent <= 0.16;
+    bool isBottom = extent <= 0.16;
 
     switch (_tripState) {
       case TripState.CALCULATING:
@@ -1514,14 +1898,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildTripDetailsCard(Color color, StateSetter setModalState) {
     return Container(
-      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.grey.shade200),
       ),
       child: Column(
         children: [
+          // --- SECCIÓN DESTINO ---
           InkWell(
             onTap: () async {
               final result = await Navigator.push(
@@ -1536,88 +1920,109 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               );
               if (result != null) _handleSearchResult(result);
             },
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.location_on,
-                  color: Colors.redAccent,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        "Viajar a:",
-                        style: GoogleFonts.poppins(
-                          fontSize: 11,
-                          color: Colors.grey,
-                        ),
-                      ),
-                      Text(
-                        _destinationName ?? "Sin destino",
-                        style: GoogleFonts.poppins(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      // --- ESTO USA LA VARIABLE Y QUITA EL WARNING ---
-                      Text(
-                        "$_tripDistance • $_tripDuration aprox.",
-                        style: GoogleFonts.poppins(
-                          fontSize: 11,
-                          color: Colors.grey[500],
-                        ),
-                      ),
-                    ],
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.location_on,
+                    color: Colors.redAccent,
+                    size: 20,
                   ),
-                ),
-                const Icon(
-                  Icons.edit_location_alt_outlined,
-                  color: Colors.grey,
-                  size: 18,
-                ),
-              ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _destinationName ?? "Seleccionar destino",
+                          style: GoogleFonts.poppins(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        // USAMOS LAS VARIABLES AQUÍ (Esto quita los warnings)
+                        Text(
+                          "$_tripDistance • $_tripDuration aprox.",
+                          style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            color: Colors.grey[500],
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.edit_location_alt_outlined,
+                    color: color.withValues(alpha: 0.4),
+                    size: 18,
+                  ),
+                ],
+              ),
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 10),
-            child: Divider(),
-          ),
+
+          const Divider(height: 1, indent: 50, endIndent: 20),
+
+          // --- SECCIÓN PASAJEROS ---
           InkWell(
             onTap: () async {
               await _showBeneficiarySelector();
               setModalState(() {});
             },
-            child: Row(
-              children: [
-                Icon(Icons.people_outline, color: color, size: 20),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            borderRadius: const BorderRadius.vertical(
+              bottom: Radius.circular(20),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      Text(
-                        "Pasajeros ($_totalPassengers)",
-                        style: GoogleFonts.poppins(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
+                      Icon(
+                        Icons.person_add_alt_1_rounded,
+                        color: color,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          "Añade un pasajero a tu viaje",
+                          style: GoogleFonts.poppins(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.grey[600],
+                          ),
                         ),
                       ),
-                      Text(
-                        _getPassengerSummary(),
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                        ),
+                      const Icon(
+                        Icons.chevron_right,
+                        color: Colors.grey,
+                        size: 20,
                       ),
                     ],
                   ),
-                ),
-                const Icon(Icons.chevron_right, color: Colors.grey),
-              ],
+                  if (_selectedPassengerIds.isNotEmpty || _includeMyself)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 32, top: 4),
+                      child: Text(
+                        _getPassengerSummary(),
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: color,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ],
@@ -2001,11 +2406,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     setState(() => _tripState = TripState.CALCULATING);
 
     try {
-      // 1. OBTENER DIRECCIÓN REAL DE ORIGEN (Para el FUEC)
-      // Usamos el osmService que ya tienes para convertir coordenadas en texto real
-      String realOriginAddress = await _osmService.getAddressFromCoordinates(
-        _currentPosition!,
-      );
+      // 1. Obtener dirección con Timeout
+      String realOriginAddress = "Ubicación actual";
+      try {
+        realOriginAddress = await _osmService
+            .getAddressFromCoordinates(_currentPosition!)
+            .timeout(const Duration(seconds: 5));
+      } catch (_) {
+        /* Ignorar error de dirección, usar fallback */
+      }
 
       // Si falla el servicio de mapas, usamos un fallback pero intentamos que sea descriptivo
       if (realOriginAddress.isEmpty ||
@@ -2017,11 +2426,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final tripService = TripService();
 
       // 2. MAPEO DE PASAJEROS
+      // Dentro de _processTripCreation en home_screen.dart
       List<Passenger> passengersList = _selectedBeneficiariesList.map((b) {
-        return Passenger(name: b.name, nationalId: b.documentNumber);
+        return Passenger(
+          id: b.id,
+          name: b.name,
+          nationalId: b.documentNumber,
+          documentType:
+              b.documentType, // <--- IMPORTANTE: Usar el campo del modelo
+        );
       }).toList();
 
       // 3. DEFINICIÓN DE MÉTODO DE PAGO PARA EL BACKEND
+
       String backendPaymentId = 'EFECTIVO';
       if (_selectedMethod?.id == 'cash') backendPaymentId = 'EFECTIVO';
       if (_selectedMethod?.id == 'corp') backendPaymentId = 'CORPORATIVO';
@@ -2030,20 +2447,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         backendPaymentId = 'TARJETA';
 
       // 4. LLAMADA AL SERVICIO CON LA DIRECCIÓN REAL
-      String? tripId = await tripService.createTripRequest(
-        currentUser: _currentUser,
-        origin: _currentPosition!,
-        destination: _destinationCoordinates!,
-        originAddress: realOriginAddress, // <--- AQUÍ PASAMOS LA DIRECCIÓN REAL
-        destinationAddress: _destinationName!,
-        serviceCategory: _selectedServiceCategory,
-        estimatedPrice: _tripPrice,
-        passengers: passengersList,
-        includeMyself: _includeMyself,
-        scheduledAt: _scheduledAt,
-        desglose: _tripDesglose,
-        paymentMethod: backendPaymentId,
-      );
+      String? tripId = await tripService
+          .createTripRequest(
+            currentUser: _currentUser,
+            origin: _currentPosition!,
+            destination: _destinationCoordinates!,
+            originAddress:
+                realOriginAddress, // <--- AQUÍ PASAMOS LA DIRECCIÓN REAL
+            destinationAddress: _destinationName!,
+            serviceCategory: _selectedServiceCategory,
+            estimatedPrice: _tripPrice,
+            passengers: passengersList,
+            includeMyself: _includeMyself,
+            scheduledAt: _scheduledAt,
+            desglose: _tripDesglose,
+            paymentMethod: backendPaymentId,
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (!mounted) return;
 
@@ -2064,16 +2484,44 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         );
       }
     } catch (e) {
-      _resetApp();
+      _resetApp(); // Volvemos al mapa
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("Error de conexión: $e"),
-            backgroundColor: Colors.red,
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(15),
+            ),
+            title: const Text("Lo sentimos"),
+            content: Text(
+              e.toString(),
+            ), // Aquí aparecerá "No hay conductores disponibles"
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text(
+                  "Entendido",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
           ),
         );
       }
     }
+  }
+
+  void _showErrorSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: GoogleFonts.poppins(color: Colors.white)),
+        backgroundColor: Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   // NUEVO: Diálogo de éxito para viajes programados
@@ -2266,6 +2714,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             separatorBuilder: (context, index) =>
                                 const SizedBox(height: 10),
                             itemBuilder: (ctx, index) {
+                              if (index >= _currentUser.beneficiaries.length)
+                                // ignore: curly_braces_in_flow_control_structures
+                                return const SizedBox.shrink();
+
                               final b = _currentUser.beneficiaries[index];
                               final isSelected = _selectedPassengerIds.contains(
                                 b.id,
@@ -2327,12 +2779,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   );
                                 },
                                 onDismissed: (_) async {
-                                  await AuthService.removeBeneficiary(b.id);
-                                  if (_selectedPassengerIds.contains(b.id)) {
-                                    _selectedPassengerIds.remove(b.id);
+                                  // 1. Llamar al borrado persistente que acabamos de crear
+                                  bool deleted =
+                                      await AuthService.removeBeneficiary(b.id);
+
+                                  if (deleted) {
+                                    setModalState(() {
+                                      // 2. ¡CLAVE! Si estaba seleccionado para el viaje, quitarlo del set
+                                      _selectedPassengerIds.remove(b.id);
+                                    });
+
+                                    setState(() {
+                                      // 3. Recalcular precio y categoría de una vez
+                                      _updateFinalPrice();
+                                    });
                                   }
-                                  setModalState(() {});
-                                  setState(() {});
                                 },
                                 child: Container(
                                   decoration: BoxDecoration(
@@ -2355,8 +2816,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                         fontWeight: FontWeight.w600,
                                       ),
                                     ),
+                                    // Busca esta parte en el listado de beneficiarios:
                                     subtitle: Text(
-                                      "CC: ${b.documentNumber}",
+                                      "${b.documentType}: ${b.documentNumber}", // <--- Ahora mostrará "CC: 12345"
                                       style: GoogleFonts.poppins(fontSize: 12),
                                     ),
                                     secondary: Container(
@@ -2430,132 +2892,167 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _showAddBeneficiaryDialog(StateSetter parentModalState) {
     final nameCtrl = TextEditingController();
     final docCtrl = TextEditingController();
+    String selectedDocType = 'CC'; // Valor inicial
 
-    // Estilo local para inputs
-    InputDecoration inputDeco(String label) {
-      return InputDecoration(
-        labelText: label,
-        labelStyle: GoogleFonts.poppins(
-          fontSize: 14,
-          color: Colors.grey.shade600,
-        ),
-        filled: true,
-        fillColor: Colors.grey.shade50,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide.none,
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.grey.shade200),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(
-            color: AppColors.primaryGreen,
-            width: 1.5,
-          ),
-        ),
-      );
-    }
+    final List<String> docTypes = ['CC', 'CE', 'TI', 'PP'];
 
     showDialog(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(
-          "Nuevo Pasajero",
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              style: GoogleFonts.poppins(),
-              decoration: inputDeco("Nombre Completo"),
-              textCapitalization: TextCapitalization.words,
+      builder: (dialogContext) => StatefulBuilder(
+        // Necesario para actualizar el dropdown dentro del dialog
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Text(
+            "Nuevo Pasajero",
+            style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // --- Selector de Tipo de Documento ---
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey.shade200),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: selectedDocType,
+                    isExpanded: true,
+                    items: docTypes.map((String type) {
+                      return DropdownMenuItem<String>(
+                        value: type,
+                        child: Text(
+                          "$type - ${_getDocName(type)}",
+                          style: GoogleFonts.poppins(fontSize: 14),
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (val) =>
+                        setDialogState(() => selectedDocType = val!),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 15),
+
+              // --- Campo Nombre ---
+              TextField(
+                controller: nameCtrl,
+                textCapitalization: TextCapitalization.words,
+                decoration: _inputDeco("Nombre Completo"),
+              ),
+              const SizedBox(height: 15),
+
+              // --- Campo Documento ---
+              TextField(
+                controller: docCtrl,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: _inputDeco("Número de Identificación"),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(
+                "Cancelar",
+                style: GoogleFonts.poppins(color: Colors.grey),
+              ),
             ),
-            const SizedBox(height: 15),
-            TextField(
-              controller: docCtrl,
-              style: GoogleFonts.poppins(),
-              decoration: inputDeco("Identificación (CC)"),
-              keyboardType: TextInputType.number,
-              // --- CAMBIO CLAVE: Restricción estricta de Input ---
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly, // Solo 0-9
-                LengthLimitingTextInputFormatter(
-                  10,
-                ), // Máx 10 dígitos (CC estándar)
-              ],
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _currentUser.isCorporateMode
+                    ? Colors.blue[800]
+                    : AppColors.primaryGreen,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              onPressed: () async {
+                final name = nameCtrl.text.trim();
+                final doc = docCtrl.text.trim();
+
+                if (name.isEmpty || doc.isEmpty) return;
+
+                // 1. Llamada al servicio
+                bool success = await AuthService.addBeneficiary(
+                  name,
+                  doc,
+                  selectedDocType,
+                );
+
+                if (success && mounted) {
+                  // 2. Obtenemos el último beneficiario agregado (el que acabamos de crear)
+                  final nuevoPasajero =
+                      AuthService.currentUser!.beneficiaries.last;
+
+                  // 3. Cerramos el diálogo de texto
+                  // ignore: use_build_context_synchronously
+                  Navigator.pop(dialogContext);
+
+                  // 4. Actualizamos el Modal de "Quiénes viajan" (parentModalState)
+                  parentModalState(() {
+                    _selectedPassengerIds.add(
+                      nuevoPasajero.id,
+                    ); // Lo seleccionamos de una vez
+                  });
+
+                  // 5. Actualizamos la HomeScreen (Precios y Categoría)
+                  setState(() {
+                    if (_totalPassengers > 4) {
+                      _selectedServiceCategory = 'VAN';
+                    }
+                    _updateFinalPrice();
+                  });
+                }
+              },
+              child: Text(
+                "Guardar",
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: Text(
-              "Cancelar",
-              style: GoogleFonts.poppins(color: Colors.grey),
-            ),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primaryGreen,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-            onPressed: () async {
-              final name = nameCtrl.text.trim();
-              final doc = docCtrl.text.trim();
+      ),
+    );
+  }
 
-              if (name.isEmpty || doc.isEmpty || doc.length < 6) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Datos inválidos")),
-                );
-                return;
-              }
+  // Helpers para el diseño
+  String _getDocName(String type) {
+    switch (type) {
+      case 'CC':
+        return 'Cédula';
+      case 'CE':
+        return 'Cédula Extranjería';
+      case 'TI':
+        return 'Tarjeta Identidad';
+      case 'PP':
+        return 'Pasaporte';
+      default:
+        return '';
+    }
+  }
 
-              // 1. Llamada al servicio
-              bool success = await AuthService.addBeneficiary(name, doc);
-
-              if (!dialogContext.mounted) return;
-
-              if (success) {
-                // 2. Cerramos el diálogo de texto
-                Navigator.pop(dialogContext);
-
-                // 3. MAGIA: Obtenemos el último beneficiario agregado (el que acaba de entrar a la lista)
-                final nuevoPasajero = _currentUser.beneficiaries.last;
-
-                // 4. Actualizamos el Modal de "Quiénes viajan"
-                parentModalState(() {
-                  // Lo marcamos como seleccionado automáticamente
-                  _selectedPassengerIds.add(nuevoPasajero.id);
-                });
-
-                // 5. Actualizamos el estado general (Precio y Categoría)
-                setState(() {
-                  _updateFinalPrice();
-                });
-              } else {
-                // ignore: use_build_context_synchronously
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Error al conectar con el servidor"),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-            },
-            child: Text(
-              "Guardar",
-              style: GoogleFonts.poppins(color: Colors.white),
-            ),
-          ),
-        ],
+  InputDecoration _inputDeco(String label) {
+    return InputDecoration(
+      labelText: label,
+      filled: true,
+      fillColor: Colors.grey.shade50,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade200),
       ),
     );
   }
@@ -2647,6 +3144,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _routePoints = [];
         _destinationCoordinates = null;
         _destinationName = null;
+        _originCoordinates = null; // Sugerencia: Limpiar origen también
+        _sheetExtentNotifier.value = 0.45; // Resetear posición del panel
         _driverPosition = null;
         _scheduledAt = null;
         _currentTripId = null; // IMPORTANTE: Limpiar ID del viaje
@@ -2654,6 +3153,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _selectedPassengerIds.clear();
         _includeMyself = true;
         _driverEta = "Calculando...";
+        _tripDesglose = null;
       });
       _moveToCurrentPosition();
     }
@@ -2763,33 +3263,60 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       SizedBox(
         width: double.infinity,
         height: 50,
-        child: OutlinedButton(
-          onPressed: _resetApp,
-          style: OutlinedButton.styleFrom(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+        child: // Busca el OutlinedButton dentro de _buildSearchingDriverContent y déjalo así:
+            // Busca el OutlinedButton dentro de _buildSearchingDriverContent
+            OutlinedButton(
+              onPressed: () async {
+                if (_currentTripId != null) {
+                  // 1. Mostramos un pequeño loading o deshabilitamos el botón
+                  // 2. Esperamos la confirmación del servidor
+                  bool canceladoEnServer = await MenuService().cancelTrip(
+                    _currentTripId!,
+                  );
+
+                  if (canceladoEnServer) {
+                    _resetApp(); // Solo limpiamos la pantalla si el server confirmó
+                  } else {
+                    // ignore: use_build_context_synchronously
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text("No se pudo cancelar. Intenta de nuevo."),
+                      ),
+                    );
+                  }
+                }
+              },
+              child: Text("Cancelar Solicitud"),
             ),
-          ),
-          child: Text(
-            "Cancelar Solicitud",
-            style: GoogleFonts.poppins(color: Colors.grey[700]),
-          ),
-        ),
       ),
     ],
   );
 
   Widget _buildDriverOnWayContent() {
-    // Extraemos los datos que guardamos en _driverData
-    final driver = _driverData?['conductor'] ?? {};
-    String? fotoUrl = driver['foto_perfil'] ?? driver['photo_url'];
-    final vehicle = _driverData?['vehiculo'] ?? {};
+    final data = _driverData ?? {};
+    final driver =
+        data['conductor'] as Map<String, dynamic>? ?? {}; // <--- CAST SEGURO
+    final vehicle =
+        data['vehiculo'] as Map<String, dynamic>? ?? {}; // <--- CAST SEGURO
+
+    String? fotoUrl =
+        driver['foto_perfil']?.toString() ?? driver['photo_url']?.toString();
+
+    // Si la URL contiene la IP local de Android, corregirla
     if (fotoUrl != null && fotoUrl.contains('10.0.2.2')) {
       fotoUrl = fotoUrl.replaceAll('10.0.2.2', '192.168.10.3');
     }
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        Text(
+          driver['nombre']?.toString() ?? "Conductor asignado",
+          style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        Text(
+          "${vehicle['marca'] ?? ''} ${vehicle['placa'] ?? 'Sin placa'}",
+          style: GoogleFonts.poppins(color: Colors.grey[600], fontSize: 13),
+        ),
         Text(
           "Tu conductor está en camino",
           style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 18),
@@ -2908,50 +3435,205 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
         (Match m) => '${m[1]}.',
       );
-  Widget _buildPriceTicket() {
+  Widget _buildPriceTicket(StateSetter setModalState) {
     if (_tripPrice <= 0) return const SizedBox.shrink();
 
+    final isCorp = _currentUser.isCorporateMode;
+    final primaryColor = isCorp
+        ? const Color(0xFF1565C0)
+        : AppColors.primaryGreen;
+
+    // Extraemos info de peajes
+    final List peajes = _tripDesglose?['peajes_detalles'] ?? [];
+    final double totalPeajes = (_tripDesglose?['total_peajes'] ?? 0).toDouble();
+    final bool tienePeajes = peajes.isNotEmpty;
+
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 15),
-      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                "Total estimado",
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w500,
-                  color: Colors.grey[600],
-                  fontSize: 14,
-                ),
-              ),
-              Text(
-                "Sujeto a cambios por tráfico",
-                style: GoogleFonts.poppins(
-                  fontSize: 10,
-                  color: Colors.grey[400],
-                ),
-              ),
-            ],
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.grey.shade100),
+        boxShadow: [
+          BoxShadow(
+            // ignore: deprecated_member_use
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
-          Text(
-            "\$ ${_formatCurrency(_tripPrice)}",
-            style: GoogleFonts.poppins(
-              fontWeight: FontWeight.bold,
-              fontSize: 22,
-              color: _currentUser.isCorporateMode
-                  ? Colors.blue[800]
-                  : AppColors.primaryGreen,
+        ],
+      ),
+      child: Column(
+        children: [
+          // --- PARTE SUPERIOR: PRECIO PRINCIPAL ---
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "Total estimado",
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.grey[600],
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.info_outline,
+                          size: 12,
+                          color: Colors.grey[400],
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          "Sujeto a cambios por tráfico",
+                          style: GoogleFonts.poppins(
+                            fontSize: 10,
+                            color: Colors.grey[400],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                Text(
+                  "\$ ${_formatCurrency(_tripPrice)}",
+                  style: GoogleFonts.poppins(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: primaryColor,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+              ],
             ),
           ),
+
+          // --- PARTE INFERIOR: BARRA DE PEAJES (Solo si existen) ---
+          if (tienePeajes) ...[
+            const Divider(height: 1),
+            InkWell(
+              onTap: () {
+                // Usamos setModalState para que el cambio sea instantáneo en el modal
+                setModalState(() {
+                  _showTollsDetail = !_showTollsDetail;
+                });
+              },
+              borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(20),
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: _showTollsDetail
+                      ? Colors.grey[50]
+                      : Colors.transparent,
+                  borderRadius: const BorderRadius.vertical(
+                    bottom: Radius.circular(20),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: Colors.amber[100],
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.toll,
+                            size: 16,
+                            color: Colors.amber[900],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            "${peajes.length} peajes incluidos en el precio",
+                            style: GoogleFonts.poppins(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey[800],
+                            ),
+                          ),
+                        ),
+                        Text(
+                          "\$ ${_formatCurrency(totalPeajes)}",
+                          style: GoogleFonts.poppins(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Icon(
+                          _showTollsDetail
+                              ? Icons.keyboard_arrow_up
+                              : Icons.keyboard_arrow_down,
+                          color: Colors.grey[400],
+                          size: 20,
+                        ),
+                      ],
+                    ),
+
+                    // --- DESGLOSE EXPANDIBLE ---
+                    if (_showTollsDetail)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 15, bottom: 5),
+                        child: Column(
+                          children: peajes.map((p) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 6,
+                                    height: 6,
+                                    decoration: BoxDecoration(
+                                      color: Colors.amber[600],
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      p['nombre'],
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                  ),
+                                  Text(
+                                    "\$ ${_formatCurrency(p['precio'].toDouble())}",
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.grey[800],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -3268,41 +3950,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Future<void> _confirmMapSelection() async {
-    if (_mapCenterPicker == null) return;
-    setState(() => _isLoadingAddress = true);
-
-    // Convertimos las coordenadas del PIN en dirección de texto
-    String address = await _osmService.getAddressFromCoordinates(
-      _mapCenterPicker!,
-    );
-
-    if (!mounted) return;
-
-    setState(() {
-      _isLoadingAddress = false;
-      _isPickingLocation = false; // Apagamos el modo mapa
-
-      if (_isPickingOrigin) {
-        _originName = address;
-        _originCoordinates = _mapCenterPicker;
-      } else {
-        _destinationName = address;
-        _destinationCoordinates = _mapCenterPicker;
-      }
-    });
-
-    // LOGICA RE-INICIO:
-    // Si falta alguno de los dos puntos, abrimos el buscador otra vez
-    // con los datos que ya tenemos para que el usuario complete el flujo.
-    if (_originCoordinates == null || _destinationCoordinates == null) {
-      _openSearchFromCurrentState();
-    } else {
-      // Si ya tiene ambos, lanzamos la cotización de ruta
-      _calculateRouteAndPrice(_destinationCoordinates!);
-    }
-  }
-
   // Función auxiliar para no repetir el código del Navigator.push
   void _openSearchFromCurrentState() async {
     final result = await Navigator.push(
@@ -3327,10 +3974,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       setState(() {
         // Si el usuario elige fijar en mapa
         if (result is Map && result['isMapPick'] == true) {
-          _isPickingLocation = true; // Activamos el PIN central
           _tripState = TripState.IDLE; // Ocultamos el modal Draggable
+          _isPickingLocation = true; // Activamos el PIN central
+
           _isPickingOrigin = result['isPickingOrigin'] ?? false;
-          _mapCenterPicker = _mapController.camera.center;
           return; // Detenemos aquí, el build se encarga del resto
         }
 
@@ -3342,7 +3989,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           _destinationCoordinates = result['destinationCoords'];
 
           _tripState = TripState.CALCULATING;
-          _currentSheetExtent = 0.22;
+          _sheetExtentNotifier.value = 0.22;
         }
       });
 
@@ -3596,7 +4243,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (_userMethods.isEmpty) return const SizedBox.shrink();
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       decoration: BoxDecoration(
         color: Colors.grey[50],
         borderRadius: BorderRadius.circular(15),
@@ -3604,25 +4251,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          // 1. Cambiamos de <PaymentMethod> a <String>
           isExpanded: true,
-          value: _selectedMethod?.id, // 2. Usamos el ID como valor seleccionado
+          icon: const Icon(
+            Icons.arrow_drop_down_circle_outlined,
+            size: 20,
+            color: Colors.grey,
+          ),
+          value: _selectedMethod?.id,
           items: _userMethods
               .map(
                 (m) => DropdownMenuItem<String>(
-                  value: m.id, // 3. El valor de cada item ahora es su ID
+                  value: m.id,
                   child: Row(
                     children: [
                       Icon(
                         _getPaymentIcon(m.type),
                         size: 20,
-                        color: AppColors.primaryGreen,
+                        color: Colors.blueGrey[700],
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          m.name,
-                          style: GoogleFonts.poppins(fontSize: 14),
+                      const SizedBox(width: 12),
+                      Text(
+                        m.name,
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
@@ -3631,15 +4283,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               )
               .toList(),
           onChanged: (String? newId) {
-            // 4. Recibimos el ID seleccionado
             if (newId == null) return;
-
-            // Buscamos el objeto completo correspondiente a ese ID
             final methodObj = _userMethods.firstWhere((m) => m.id == newId);
-
-            setModalState(() {
-              _selectedMethod = methodObj;
-            });
+            setModalState(() => _selectedMethod = methodObj);
             setState(() {
               _selectedMethod = methodObj;
               _selectedPaymentMethod = methodObj.id;

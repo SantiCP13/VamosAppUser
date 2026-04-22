@@ -83,9 +83,11 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
 
   @override
   void dispose() {
+    _debounce?.cancel(); // Ya lo tienes, está bien.
     _searchController.dispose();
+    _originController.dispose(); // <--- AGREGA ESTO
     _focusNode.dispose();
-    _debounce?.cancel();
+    _originFocusNode.dispose(); // <--- AGREGA ESTA LÍNEA TAMBIÉN
     super.dispose();
   }
 
@@ -166,15 +168,21 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
   Future<void> _handleResultTap(Map<String, dynamic> place) async {
     // 1. Obtención de coordenadas (Google Place ID)
     if (place.containsKey('place_id') && place['lat'] == null) {
-      setState(() => _isLoading = true);
+      if (mounted) setState(() => _isLoading = true);
+
       final coords = await _searchService.getPlaceCoords(
         place['place_id'],
         _sessionToken,
       );
+
+      // 🔥 ESTA ES LA LÍNEA QUE FALTA PARA EVITAR EL CRASH
+      if (!mounted) return;
+
       setState(() {
         _isLoading = false;
         _sessionToken = null;
       });
+
       if (coords != null) {
         place['lat'] = coords['lat'];
         place['lng'] = coords['lng'];
@@ -183,7 +191,7 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
       }
     }
 
-    // 2. Lógica de guardado rápido (Casa/Oficina) - SE MANTIENE IGUAL
+    // 2. Lógica de guardado rápido (Casa/Oficina)
     if (_settingMode != null) {
       final updatedUser = await _searchService.saveQuickAddress(
         type: _settingMode!,
@@ -191,6 +199,10 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
         lat: place['lat'],
         lng: place['lng'],
       );
+
+      // 🔥 TAMBIÉN DEBES PONERLO AQUÍ
+      if (!mounted) return;
+
       if (updatedUser != null) {
         AuthService.updateLocalUser(updatedUser);
         setState(() => _settingMode = null);
@@ -334,6 +346,7 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
                   children: [
                     // SI NO ESTÁ BUSCANDO: Mostrar accesos rápidos y favoritos
                     if (!isSearching) ...[
+                      // --- BUSCA EL ListTile "Fijar en el mapa" Y REEMPLÁZALO ---
                       ListTile(
                         leading: const Icon(
                           Icons.location_on,
@@ -344,16 +357,14 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
                           style: GoogleFonts.poppins(fontSize: 14),
                         ),
                         onTap: () {
-                          // 1. Cerramos el teclado para evitar errores visuales
-                          FocusScope.of(context).unfocus();
-
-                          // 2. Identificamos qué campo está activo
+                          // CAPTURAMOS el estado del foco antes de que desaparezca
+                          // Si el cursor estaba arriba (origen), pickingOrigin es true.
                           bool pickingOrigin =
-                              _originFocusNode.hasFocus ||
-                              (_isEditingOrigin && !_focusNode.hasFocus);
+                              _originFocusNode.hasFocus || _isEditingOrigin;
 
-                          // 3. MANDAMOS UN SOLO POP con un pequeño delay
-                          // para que la animación del teclado no choque con la transición
+                          FocusScope.of(context).unfocus(); // Quitamos teclado
+
+                          // Un pequeño delay para estabilidad visual
                           Future.delayed(const Duration(milliseconds: 150), () {
                             if (mounted) {
                               Navigator.pop(context, {

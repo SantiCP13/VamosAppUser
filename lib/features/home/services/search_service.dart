@@ -60,6 +60,26 @@ class SearchService {
     return null;
   }
 
+  Future<Map<String, dynamic>?> getReverseGeocode(
+    double lat,
+    double lng,
+  ) async {
+    try {
+      // 🔥 Eliminamos la llamada duplicada y dejamos solo la ruta oficial del backend
+      final response = await _apiClient.dio.get(
+        '/maps/reverse',
+        queryParameters: {'lat': lat, 'lng': lng},
+      );
+
+      if (response.statusCode == 200) {
+        return response.data['data'];
+      }
+    } catch (e) {
+      print("Error en Reverse Geocode: $e");
+    }
+    return null;
+  }
+
   // NUEVO: Pedir los destinos recientes del usuario al Backend
   Future<List<Map<String, dynamic>>> getRecentPlaces() async {
     try {

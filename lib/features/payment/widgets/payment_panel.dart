@@ -64,19 +64,33 @@ class _PaymentPanelState extends State<PaymentPanel> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              "Resumen de Viaje",
-              style: GoogleFonts.poppins(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "Resumen de Viaje",
+                  style: GoogleFonts.poppins(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                // 🔥 NUEVA LÍNEA DE TRANSPARENCIA
+                Text(
+                  "* Incluye peajes y seguros de ley",
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    color: Colors.green[700],
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
             ),
             Text(
-              "\$${widget.amount.toStringAsFixed(0)}",
+              "\$${widget.amount.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')}",
               style: GoogleFonts.poppins(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
-                color: Colors.green[700],
+                color: Colors.black,
               ),
             ),
           ],

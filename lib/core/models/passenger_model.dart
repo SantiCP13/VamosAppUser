@@ -1,17 +1,30 @@
 class Passenger {
+  final String? id; // Útil para favoritos
   final String name;
-  final String nationalId; // Cédula para el FUEC
+  final String nationalId;
+  final String documentType; // CC, CE, TI, PP, etc.
 
-  Passenger({required this.name, required this.nationalId});
+  Passenger({
+    this.id,
+    required this.name,
+    required this.nationalId,
+    this.documentType = 'CC',
+  });
 
   Map<String, dynamic> toJson() {
-    return {'name': name, 'national_id': nationalId};
+    return {
+      'nombre_completo': name,
+      'numero_documento': nationalId,
+      'tipo_documento': documentType,
+    };
   }
 
   factory Passenger.fromJson(Map<String, dynamic> json) {
     return Passenger(
-      name: json['name'] ?? '',
-      nationalId: json['national_id'] ?? '',
+      id: json['id']?.toString() ?? '',
+      name: json['nombre_completo'] ?? json['name'] ?? '',
+      nationalId: json['numero_documento'] ?? json['national_id'] ?? '',
+      documentType: json['tipo_documento'] ?? 'CC',
     );
   }
 }

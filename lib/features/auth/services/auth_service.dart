@@ -231,14 +231,30 @@ class AuthService {
     return true;
   }
 
-  static Future<void> removeBeneficiary(String id) async {
-    if (_currentUser == null) {
-      return;
+  static Future<bool> removeBeneficiary(String id) async {
+    if (_currentUser == null) return false;
+
+    try {
+      // 1. Avisar al servidor para que lo borre de la DB
+      final response = await ApiClient().dio.delete('/beneficiarios/$id');
+
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        // 2. Si el servidor confirma, lo borramos de la lista local
+        _currentUser!.beneficiaries.removeWhere((b) => b.id == id);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint("Error al borrar beneficiario: $e");
+      return false;
     }
-    _currentUser!.beneficiaries.removeWhere((b) => b.id == id);
   }
 
-  static Future<bool> addBeneficiary(String name, String docId) async {
+  static Future<bool> addBeneficiary(
+    String name,
+    String doc,
+    String type,
+  ) async {
     if (_currentUser == null) return false;
 
     try {
@@ -247,8 +263,8 @@ class AuthService {
         '/beneficiarios',
         data: {
           'nombre_completo': name,
-          'numero_documento': docId,
-          'tipo_documento': 'CC',
+          'numero_documento': doc,
+          'tipo_documento': type, // <--- Enviamos el tipo real
         },
       );
 

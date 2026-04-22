@@ -80,6 +80,8 @@ class MenuService {
       origin: origin,
       destination: destination,
       price: price,
+      tolls:
+          0.0, // Por ahora, asumimos que no hay peajes en los viajes reales. Esto se puede mejorar luego.
       status: "COMPLETED",
       passengers: [],
     );
