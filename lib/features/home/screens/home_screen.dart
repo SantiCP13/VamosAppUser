@@ -3302,9 +3302,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     String? fotoUrl =
         driver['foto_perfil']?.toString() ?? driver['photo_url']?.toString();
 
-    // Si la URL contiene la IP local de Android, corregirla
-    if (fotoUrl != null && fotoUrl.contains('10.0.2.2')) {
-      fotoUrl = fotoUrl.replaceAll('10.0.2.2', '192.168.10.3');
+    // Si la URL contiene la IP local de Android (emulador) o de tu PC, corregirla
+    if (fotoUrl != null) {
+      if (fotoUrl.contains('10.0.2.2') || fotoUrl.contains('192.168.')) {
+        // 1. Reemplazamos la IP por tu dominio
+        // 2. Nos aseguramos de que use HTTPS en lugar de HTTP
+        fotoUrl = fotoUrl
+            .replaceAll('10.0.2.2:8000', 'api.vamosapp.com.co')
+            .replaceAll('192.168.10.3:8000', 'api.vamosapp.com.co')
+            .replaceAll('http://', 'https://');
+      }
     }
     return Column(
       mainAxisSize: MainAxisSize.min,

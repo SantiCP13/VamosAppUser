@@ -5,6 +5,13 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../../core/models/user_model.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+// Para jsonEncode
+// Para http.post
+import 'package:flutter_dotenv/flutter_dotenv.dart'; // Para el baseUrl
+
+// Busca esta línea y cámbiala:
+final String baseUrl =
+    dotenv.env['API_URL'] ?? 'https://api.vamosapp.com.co/api';
 
 enum AuthResponseStatus {
   active,
@@ -98,28 +105,20 @@ class AuthService {
   // ===========================================================================
 
   // lib/features/auth/services/auth_service.dart
-
-  static Future<bool> requestCompanyAffiliation(
-    Map<String, dynamic> payload,
+  static Future<String?> requestCompanyAffiliation(
+    Map<String, dynamic> data,
   ) async {
     try {
-      final response = await ApiClient().dio.post(
-        '/empresas/afiliar',
-        data: {
-          'razon_social': payload['empresa']['razon_social'],
-          'nit': payload['empresa']['nit'],
-          'ciudad': payload['empresa']['ciudad'],
-          'direccion': payload['empresa']['direccion'],
-          'telefono': payload['empresa']['telefono_corporativo'],
-          'correo': payload['empresa']['email_corporativo'],
-          'nombre_contacto': payload['contacto_administrativo']['nombre'],
-          'cedula_contacto': payload['contacto_administrativo']['cedula'],
-        },
-      );
-      return response.data['success'] == true;
+      await _api.dio.post('/empresas/afiliar', data: data);
+      return null; // Si no hay error, devolvemos null (Éxito)
     } on DioException catch (e) {
-      final serverMessage = e.response?.data['message'] ?? "Error desconocido";
-      throw Exception(serverMessage);
+      // Capturamos el mensaje real del servidor (ej: "El correo ya existe")
+      if (e.response != null && e.response!.data['message'] != null) {
+        return e.response!.data['message'];
+      }
+      return "Error inesperado en el servidor";
+    } catch (e) {
+      return "Error de conexión";
     }
   }
 
@@ -129,39 +128,68 @@ class AuthService {
     File? selfie,
   }) async {
     try {
-      FormData formData = FormData.fromMap({
+      // 1. Creamos el mapa base sin campos nulos
+      Map<String, dynamic> body = {
         'nombre': datos['nombre'],
         'email': datos['email'],
         'password': datos['password'],
         'password_confirmation': datos['password'],
         'documento': datos['documento'],
+        'tipo_documento': datos['tipo_documento'],
         'telefono': datos['telefono'],
         'direccion': datos['direccion'] ?? '',
-        'role': 2,
-        'empresa': datos['empresa_id'],
-      });
+        'role': datos['role'] ?? 2,
+      };
 
+      // 2. Solo agregamos la empresa si existe
+      if (datos['empresa_id'] != null) {
+        body['empresa'] = datos['empresa_id'];
+      }
+
+      FormData formData = FormData.fromMap(body);
+
+      // 3. Adjuntamos archivos con nombres seguros
       if (cedulaPdf != null) {
         formData.files.add(
-          MapEntry('cedula_pdf', await MultipartFile.fromFile(cedulaPdf.path)),
+          MapEntry(
+            'cedula_pdf',
+            await MultipartFile.fromFile(
+              cedulaPdf.path,
+              filename: 'documento.pdf',
+            ),
+          ),
         );
       }
 
       if (selfie != null) {
         formData.files.add(
-          MapEntry('selfie', await MultipartFile.fromFile(selfie.path)),
+          MapEntry(
+            'selfie',
+            await MultipartFile.fromFile(selfie.path, filename: 'selfie.jpg'),
+          ),
         );
       }
 
       final response = await ApiClient().dio.post('/register', data: formData);
-      if (response.statusCode == 201 && response.data['data'] != null) {
-        _currentUser = User.fromMap(response.data['data']['user']);
-        return true;
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        // Log para debug
+        debugPrint("Respuesta del servidor: ${response.data}");
+
+        if (response.data['data'] != null &&
+            response.data['data']['user'] != null) {
+          _currentUser = User.fromMap(response.data['data']['user']);
+          return true;
+        }
       }
       return false;
     } on DioException catch (e) {
-      final msg = e.response?.data['message'] ?? "Error en el servidor";
+      debugPrint("Error Dio: ${e.response?.data}");
+      final msg = e.response?.data['message'] ?? "Error en validación";
       throw Exception(msg);
+    } catch (e) {
+      debugPrint("Error Inesperado: $e");
+      throw Exception("Error al procesar datos del servidor");
     }
   }
 

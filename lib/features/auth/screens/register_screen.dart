@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
-import 'verification_check_screen.dart';
+import 'pending_approval_screen.dart';
 import 'widgets/company_selector_widget.dart';
+import 'dart:ui';
+import 'splash_screen.dart'; // Ajusta la ruta si es necesario
 
 class RegisterScreen extends StatefulWidget {
   final String? emailPreIngresado;
@@ -14,10 +16,11 @@ class RegisterScreen extends StatefulWidget {
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
-  // ignore: prefer_final_fields
   bool _isLoading = false;
-  bool _obscurePass = true; // Agregado para consistencia con otras pantallas
+  bool _obscurePass = true;
+  final _scrollController = ScrollController();
 
+  // Controladores
   late TextEditingController _emailController;
   final _passwordController = TextEditingController();
   final _nombreController = TextEditingController();
@@ -26,8 +29,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _direccionController = TextEditingController();
 
   String? _selectedCompanyName;
-  String? _selectedCompanyNit;
-
+  String? _selectedCompanyId;
+  Map<String, bool> _fieldErrors = {};
+  final _confirmPasswordController = TextEditingController(); // Nueva
+  String _tipoDocumento = 'CC'; // Valor inicial
+  bool _aceptaTerminos = false; // Estado del checkbox legal
   @override
   void initState() {
     super.initState();
@@ -36,6 +42,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   void dispose() {
+    _confirmPasswordController.dispose();
+
+    _scrollController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     _nombreController.dispose();
@@ -45,361 +54,553 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  // --- ESTILOS VISUALES UNIFICADOS ---
-
-  void _showSnack(String msg, {bool isError = false}) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).removeCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(
-              isError ? Icons.cancel_outlined : Icons.check_circle_outline,
-              color: Colors.white,
-            ),
-            const SizedBox(width: 10),
-            Expanded(child: Text(msg, style: GoogleFonts.poppins())),
-          ],
-        ),
-        backgroundColor: isError
-            ? const Color(0xFFE53935)
-            : AppColors.primaryGreen,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(20),
-      ),
-    );
-  }
-
-  InputDecoration _getInputStyle({
-    required String label,
-    required IconData icon,
-    Widget? suffixIcon,
-  }) {
-    return InputDecoration(
-      labelText: label,
-      labelStyle: GoogleFonts.poppins(
-        fontSize: 14,
-        color: Colors.grey.shade600,
-      ),
-      prefixIcon: Icon(icon, size: 20, color: AppColors.primaryGreen),
-      filled: true,
-      fillColor: Colors.grey.shade50,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide.none,
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.grey.shade200),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.primaryGreen, width: 1.5),
-      ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-      suffixIcon: suffixIcon,
-    );
-  }
-
-  // --- LÓGICA ---
+  bool _isValidEmail(String email) =>
+      RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(email);
 
   Future<void> _handleRegister() async {
-    // 1. Validar Campos Personales
-    if (_nombreController.text.isEmpty ||
-        _docController.text.isEmpty ||
-        _emailController.text.isEmpty ||
-        _passwordController.text.isEmpty ||
-        _telefonoController.text.isEmpty) {
-      _showSnack("Completa todos los datos personales.", isError: true);
+    String? errorDetail;
+    setState(() => _fieldErrors = {});
+
+    // 1. Validaciones Locales
+    if (_nombreController.text.trim().length < 3) {
+      _fieldErrors['nombre'] = true;
+      errorDetail = "Escribe tu nombre completo.";
+    } else if (_docController.text.length < 6) {
+      _fieldErrors['documento'] = true;
+      errorDetail = "Número de documento inválido.";
+    } else if (_telefonoController.text.length != 10) {
+      _fieldErrors['telefono'] = true;
+      errorDetail = "El celular debe tener 10 dígitos.";
+    } else if (!_isValidEmail(_emailController.text)) {
+      _fieldErrors['email'] = true;
+      errorDetail = "Formato de email inválido.";
+    } else if (_passwordController.text.length < 8) {
+      _fieldErrors['password'] = true;
+      errorDetail = "La contraseña debe tener mínimo 8 caracteres.";
+    } else if (_passwordController.text != _confirmPasswordController.text) {
+      _fieldErrors['confirmPassword'] = true;
+      errorDetail = "Las contraseñas no coinciden.";
+    } else if (_selectedCompanyId == null) {
+      _fieldErrors['empresa'] = true;
+      errorDetail = "Debes seleccionar una empresa.";
+    } else if (!_aceptaTerminos) {
+      errorDetail = "Debes aceptar los términos y condiciones.";
+    }
+
+    if (errorDetail != null) {
+      _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 600),
+        curve: Curves.easeOutCubic,
+      );
+      _showSnack(errorDetail, isError: true);
       return;
     }
 
-    // 2. Validar Selección de Empresa
-    if (_selectedCompanyName == null || _selectedCompanyNit == null) {
-      _showSnack("Selecciona una empresa.", isError: true);
-      return;
-    }
+    // 2. INICIO DE CARGA PREMIUM
+    setState(() => _isLoading = true);
 
-    // 🔥 3. MOSTRAR PANTALLA DE CARGA (MODAL INAMOVIBLE)
-    showDialog(
-      context: context,
-      barrierDismissible:
-          false, // Evita que el usuario lo cierre tocando afuera
-      builder: (BuildContext c) {
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const CircularProgressIndicator(color: AppColors.primaryGreen),
-                const SizedBox(height: 20),
-                Text(
-                  "Vinculando cuenta...",
-                  style: GoogleFonts.poppins(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  "Enviando solicitud corporativa.",
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+    // Lanzamos el Splash como Loader (isDark: false porque es User App)
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const SplashScreen(
+          logoPath: 'assets/images/logo.png',
+          isLoader: true,
+          isDark: false,
+        ),
+      ),
     );
 
     try {
       final payload = {
+        'nombre': _nombreController.text.trim(),
         'email': _emailController.text.trim(),
         'password': _passwordController.text,
-        'nombre': _nombreController.text.trim(),
         'documento': _docController.text.trim(),
+        'tipo_documento': _tipoDocumento,
         'telefono': _telefonoController.text.trim(),
         'direccion': _direccionController.text.trim(),
-        // ⚠️ ALERTA: Asegúrate de que tu CompanySelectorWidget devuelva el ID de base de datos en lugar del NIT.
-        // Laravel tiene la regla 'empresa' => 'exists:empresas,id'. Si le pasas un NIT de texto, dará error 422.
-        'empresa_id': _selectedCompanyNit,
+        'empresa_id': _selectedCompanyId,
+        'role': 2,
       };
 
-      // Llamada al servicio
       bool success = await AuthService.registerCorporateUser(payload);
 
       if (!mounted) return;
 
-      // 🔥 CERRAMOS EL MODAL DE CARGA
-      Navigator.of(context).pop();
+      // 3. CIERRE DE CARGA
+      Navigator.pop(context); // Quitamos el Splash
 
       if (success) {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (_) => VerificationCheckScreen(
-              isCorporateRegistration:
-                  true, // 🔥 Le avisamos que es Corporativo
-              companyName:
-                  _selectedCompanyName, // 🔥 Le mandamos el nombre exacto de la empresa
+            builder: (_) => PendingApprovalScreen(
+              isNatural: false,
+              empresaNombre: _selectedCompanyName,
             ),
           ),
         );
-      } else {
-        throw Exception("Error al procesar el registro.");
       }
     } catch (e) {
-      if (!mounted) return;
-      // SI HAY ERROR: Cerramos el modal de carga y mostramos el error rojo
-      Navigator.of(context).pop();
+      if (mounted) Navigator.pop(context); // Quitar splash si hay error
       _showSnack(e.toString().replaceAll("Exception: ", ""), isError: true);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _showSnack(String msg, {bool isError = false}) {
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: isError ? const Color(0xFFD32F2F) : AppColors.darkBlue,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+        content: Row(
+          children: [
+            Icon(
+              isError ? Icons.error_outline : Icons.check_circle_outline,
+              color: Colors.white,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                msg,
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: Colors.transparent,
         elevation: 0,
-        leading: const BackButton(color: Colors.black),
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 10),
-              // Encabezado H1
-              Text(
-                "Crear cuenta como Empleado",
-                style: GoogleFonts.poppins(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.bgColor,
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(top: 8.0, bottom: 30),
-                child: Text(
-                  "Ingresa tus datos y vincula tu cuenta a tu empresa.",
-                  style: GoogleFonts.poppins(
-                    fontSize: 14,
-                    color: Colors.grey[600],
-                  ),
-                ),
-              ),
-
-              // --- SECCIÓN 1: DATOS PERSONALES ---
-              Text(
-                "Datos Personales",
-                style: GoogleFonts.poppins(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.bgColor,
-                ),
-              ),
-              const SizedBox(height: 15),
-
-              TextField(
-                controller: _nombreController,
-                style: GoogleFonts.poppins(),
-                textCapitalization: TextCapitalization.words,
-                decoration: _getInputStyle(
-                  label: "Nombre Completo",
-                  icon: Icons.person_outline,
-                ),
-              ),
-              const SizedBox(height: 15),
-
-              TextField(
-                controller: _docController,
-                keyboardType: TextInputType.number,
-                style: GoogleFonts.poppins(),
-                decoration: _getInputStyle(
-                  label: "Número de Cédula",
-                  icon: Icons.badge_outlined,
-                ),
-              ),
-              const SizedBox(height: 15),
-
-              TextField(
-                controller: _telefonoController,
-                keyboardType: TextInputType.phone,
-                style: GoogleFonts.poppins(),
-                decoration: _getInputStyle(
-                  label: "Celular",
-                  icon: Icons.phone_android_outlined,
-                ),
-              ),
-              const SizedBox(height: 15),
-
-              TextField(
-                controller: _direccionController,
-                textCapitalization: TextCapitalization.sentences,
-                style: GoogleFonts.poppins(),
-                decoration: _getInputStyle(
-                  label: "Dirección",
-                  icon: Icons.map_outlined,
-                ),
-              ),
-              const SizedBox(height: 15),
-
-              TextField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                style: GoogleFonts.poppins(),
-                decoration: _getInputStyle(
-                  label: "Correo Electrónico",
-                  icon: Icons.email_outlined,
-                ),
-              ),
-              const SizedBox(height: 15),
-
-              TextField(
-                controller: _passwordController,
-                obscureText: _obscurePass,
-                style: GoogleFonts.poppins(),
-                decoration: _getInputStyle(
-                  label: "Contraseña",
-                  icon: Icons.lock_outline,
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                      _obscurePass ? Icons.visibility_off : Icons.visibility,
-                      color: Colors.grey,
-                    ),
-                    onPressed: () =>
-                        setState(() => _obscurePass = !_obscurePass),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 30),
-              Divider(color: Colors.grey[200], thickness: 2),
-              const SizedBox(height: 20),
-
-              // --- SECCIÓN 2: EMPRESA ---
-              Text(
-                "Vinculación Laboral",
-                style: GoogleFonts.poppins(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.bgColor,
-                ),
-              ),
-              const SizedBox(height: 5),
-              Text(
-                "Busca y selecciona tu empresa:",
-                style: GoogleFonts.poppins(
-                  fontSize: 13,
-                  color: Colors.grey[600],
-                ),
-              ),
-              const SizedBox(height: 15),
-
-              // Nota: Asegúrate de que el CompanySelectorWidget también use
-              // GoogleFonts.poppins internamente para consistencia total.
-              CompanySelectorWidget(
-                onCompanySelected: (name, nit) {
-                  setState(() {
-                    _selectedCompanyName = name.isNotEmpty ? name : null;
-                    _selectedCompanyNit = nit.isNotEmpty ? nit : null;
-                  });
-                },
-              ),
-
-              const SizedBox(height: 40),
-
-              // --- BOTÓN PRINCIPAL ---
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _handleRegister,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryGreen,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                    elevation: 4,
-                    shadowColor: AppColors.primaryGreen.withValues(alpha: 0.4),
-                  ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          height: 24,
-                          width: 24,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : Text(
-                          "Registrarme",
-                          style: GoogleFonts.poppins(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                ),
-              ),
-              const SizedBox(height: 30),
-            ],
+        leading: Container(
+          margin: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.5),
+            shape: BoxShape.circle,
+          ),
+          child: IconButton(
+            icon: const Icon(
+              Icons.arrow_back_ios_new_rounded,
+              size: 18,
+              color: AppColors.darkBlue,
+            ),
+            onPressed: () => Navigator.pop(context),
           ),
         ),
+      ),
+      body: Stack(
+        children: [
+          Container(
+            decoration: const BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(0.0, -0.45),
+                radius: 1.8,
+                colors: [Color(0xFFFFFFFF), Color(0xFFE6E8EB)],
+              ),
+            ),
+          ),
+          SafeArea(
+            child: SingleChildScrollView(
+              controller: _scrollController,
+              padding: const EdgeInsets.symmetric(horizontal: 28.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 20),
+                  Text(
+                    "Registro Empleado",
+                    style: GoogleFonts.montserrat(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.darkBlue, // CAMBIADO A DARK BLUE
+                      height: 1.1,
+                      letterSpacing: -1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    "Vincula tu cuenta a los beneficios corporativos de tu empresa.",
+                    style: GoogleFonts.montserrat(
+                      fontSize: 13,
+                      color: Colors.grey.shade600,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 40),
+                  _buildSectionHeader("Información Personal"),
+                  const SizedBox(height: 20),
+                  _buildPremiumField(
+                    _nombreController,
+                    "Nombre Completo",
+                    Icons.person_pin_rounded,
+                    fieldKey: 'nombre',
+                  ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // SELECTOR DE TIPO
+                      Expanded(flex: 2, child: _buildIdTypeDropdown()),
+                      const SizedBox(width: 12),
+                      // NÚMERO DE DOCUMENTO
+                      Expanded(
+                        flex: 4,
+                        child: _buildPremiumField(
+                          _docController,
+                          "Número ID",
+                          Icons.badge_rounded,
+                          type: TextInputType.number,
+                          fieldKey: 'documento',
+                          maxLength: 10, // <--- AGREGADO
+                        ),
+                      ),
+                    ],
+                  ),
+                  _buildPremiumField(
+                    _telefonoController,
+                    "Celular",
+                    Icons.phone_android_rounded,
+                    type: TextInputType.phone,
+                    fieldKey: 'telefono',
+                    maxLength: 10, // <--- AGREGADO (Importante para Colombia)
+                  ),
+                  _buildPremiumField(
+                    _direccionController,
+                    "Dirección Residencia",
+                    Icons.location_on_rounded,
+                    fieldKey: 'direccion',
+                  ),
+                  _buildPremiumField(
+                    _emailController,
+                    "Correo Electrónico",
+                    Icons.email_rounded,
+                    type: TextInputType.emailAddress,
+                    fieldKey: 'email',
+                  ),
+                  _buildPremiumField(
+                    _passwordController,
+                    "Contraseña",
+                    Icons.lock_rounded,
+                    isPass: true,
+                    fieldKey: 'password',
+                  ),
+                  _buildPremiumField(
+                    _confirmPasswordController,
+                    "Confirmar Contraseña",
+                    Icons.lock_reset_rounded,
+                    isPass: true,
+                    fieldKey: 'confirmPassword',
+                  ),
+                  const SizedBox(height: 30),
+                  _buildSectionHeader("Vinculación Laboral"),
+                  const SizedBox(height: 20),
+                  _buildCompanySelectorLabel(),
+                  CompanySelectorWidget(
+                    onCompanySelected: (name, id) {
+                      setState(() {
+                        _selectedCompanyName = name;
+                        _selectedCompanyId = id;
+                        _fieldErrors['empresa'] = false;
+                      });
+                    },
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      children: [
+                        Checkbox(
+                          value: _aceptaTerminos,
+                          activeColor: AppColors.darkBlue,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          onChanged: (val) =>
+                              setState(() => _aceptaTerminos = val ?? false),
+                        ),
+                        Expanded(
+                          child: Text(
+                            "Acepto los Términos, Condiciones y la Política de Tratamiento de Datos Personales.",
+                            style: GoogleFonts.montserrat(
+                              fontSize: 11,
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 50),
+                  _buildSubmitButton(),
+                  const SizedBox(height: 50),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIdTypeDropdown() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 8),
+          child: Text(
+            "Tipo",
+            style: GoogleFonts.montserrat(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppColors.darkBlue.withValues(alpha: 0.6),
+            ),
+          ),
+        ),
+        Container(
+          height: 62, // Alineado con los otros campos
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.8),
+              width: 1.5,
+            ),
+          ),
+          child: Center(
+            child: DropdownButton<String>(
+              value: _tipoDocumento,
+              isExpanded: true,
+              underline: const SizedBox(),
+              icon: const Icon(
+                Icons.keyboard_arrow_down,
+                color: AppColors.darkBlue,
+              ),
+              items: ['CC', 'CE', 'PPT'].map((String value) {
+                return DropdownMenuItem<String>(
+                  value: value,
+                  child: Text(
+                    value,
+                    style: GoogleFonts.montserrat(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.darkBlue,
+                    ),
+                  ),
+                );
+              }).toList(),
+              onChanged: (val) => setState(() => _tipoDocumento = val!),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.darkBlue.withValues(alpha: 0.1), // CAMBIADO A BLUE
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        title.toUpperCase(),
+        style: GoogleFonts.montserrat(
+          fontWeight: FontWeight.w800,
+          fontSize: 11,
+          color: AppColors.darkBlue, // CAMBIADO A BLUE
+          letterSpacing: 2,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCompanySelectorLabel() {
+    bool hasError = _fieldErrors['empresa'] ?? false;
+    return Padding(
+      padding: const EdgeInsets.only(left: 8, bottom: 8),
+      child: Text(
+        "Selecciona tu Empresa",
+        style: GoogleFonts.montserrat(
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          color: hasError
+              ? Colors.red
+              : AppColors.darkBlue.withValues(alpha: 0.6),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPremiumField(
+    TextEditingController controller,
+    String label,
+    IconData icon, {
+    TextInputType type = TextInputType.text,
+    bool isPass = false,
+    String? fieldKey,
+    int? maxLength, // <--- AGREGADO
+  }) {
+    bool hasError = fieldKey != null && (_fieldErrors[fieldKey] ?? false);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 8),
+          child: Text(
+            label,
+            style: GoogleFonts.montserrat(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: hasError
+                  ? Colors.red
+                  : AppColors.darkBlue.withValues(alpha: 0.6),
+            ),
+          ),
+        ),
+        Container(
+          margin: const EdgeInsets.only(bottom: 20),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: hasError
+                  ? Colors.red.withValues(alpha: 0.6)
+                  : Colors.transparent,
+              width: 2,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+              child: TextFormField(
+                controller: controller,
+                obscureText: isPass && _obscurePass,
+                keyboardType: type,
+                maxLength: maxLength, // <--- VITAL: Esto limita los dígitos
+                cursorColor: AppColors.darkBlue,
+                onChanged: (val) {
+                  if (fieldKey != null && hasError) {
+                    setState(() => _fieldErrors[fieldKey] = false);
+                  }
+                },
+                style: GoogleFonts.montserrat(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.darkBlue,
+                ),
+                decoration: InputDecoration(
+                  counterText: "", // Oculta el contador de caracteres feo
+                  hintText: "Escribe aquí...",
+                  hintStyle: GoogleFonts.montserrat(
+                    fontSize: 13,
+                    color: Colors.grey.shade400,
+                  ),
+                  prefixIcon: Icon(
+                    icon,
+                    color: hasError ? Colors.red : AppColors.darkBlue,
+                    size: 22,
+                  ),
+                  suffixIcon: isPass
+                      ? IconButton(
+                          icon: Icon(
+                            _obscurePass
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                            color: Colors.grey,
+                          ),
+                          onPressed: () =>
+                              setState(() => _obscurePass = !_obscurePass),
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: 0.6),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    borderSide: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.8),
+                      width: 1.5,
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    borderSide: const BorderSide(
+                      color: AppColors.darkBlue,
+                      width: 2,
+                    ),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 22,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSubmitButton() {
+    return Container(
+      width: double.infinity,
+      height: 65,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryGreen.withValues(alpha: 0.3),
+            blurRadius: 25,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: ElevatedButton(
+        onPressed: _isLoading ? null : _handleRegister,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primaryGreen,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          elevation: 0,
+        ),
+        child: _isLoading
+            ? const CircularProgressIndicator(color: Colors.white)
+            : Text(
+                "VINCULAR MI CUENTA",
+                style: GoogleFonts.montserrat(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                  letterSpacing: 1.5,
+                ),
+              ),
       ),
     );
   }

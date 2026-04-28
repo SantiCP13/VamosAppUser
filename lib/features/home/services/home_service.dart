@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:dart_pusher_channels/dart_pusher_channels.dart';
 import '../../../core/network/api_client.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class HomeService {
   final ApiClient _api = ApiClient();
@@ -43,8 +44,6 @@ class HomeService {
     }
   }
 
-  // Lógica de Socket para el Usuario
-  // Lógica de Socket para el Usuario
   void initUserSocket({
     required String userId,
     required String token,
@@ -52,13 +51,13 @@ class HomeService {
   }) {
     _client = PusherChannelsClient.websocket(
       options: PusherChannelsOptions.fromHost(
-        scheme: 'ws',
-        host: '192.168.10.3',
-        port: 8080,
-        key: '06exymiubefjjglwmvqe',
+        scheme: dotenv.env['REVERB_SCHEME'] ?? 'wss',
+        host: dotenv.env['REVERB_HOST'] ?? 'api.vamosapp.com.co',
+        port: int.parse(dotenv.env['REVERB_PORT'] ?? '443'),
+        key: dotenv.env['REVERB_KEY'] ?? '06exymiubefjjglwmvqe',
       ),
       connectionErrorHandler: (exception, trace, client) {
-        debugPrint("Socket Error: $exception");
+        debugPrint("🚨 Error de Socket en Producción: $exception");
       },
     );
 
@@ -146,12 +145,14 @@ class UserPusherAuth
     String socketId,
     String channelName,
   ) async {
-    // Usamos la configuración de tu ApiClient
     final dio = ApiClient().dio;
+
+    // Usamos el baseUrl que ya tiene configurado el ApiClient (https://api.vamosapp.com.co/api)
     final response = await dio.post(
-      'http://192.168.10.3:8000/api/broadcasting/auth',
+      '/broadcasting/auth', // Al poner solo esto, Dio usa automáticamente la URL del .env
       data: {'socket_id': socketId, 'channel_name': channelName},
     );
+
     return PrivateChannelAuthorizationData(
       authKey: response.data['auth'] ?? '',
     );

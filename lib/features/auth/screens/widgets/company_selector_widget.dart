@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'dart:ui';
 import '../../services/auth_service.dart';
 import '../../../../core/theme/app_colors.dart';
 
 class CompanySelectorWidget extends StatefulWidget {
-  // 🔥 AHORA DEVUELVE EL ID EN LUGAR DEL NIT
   final Function(String name, String idEmpresa) onCompanySelected;
 
   const CompanySelectorWidget({super.key, required this.onCompanySelected});
@@ -16,7 +16,7 @@ class CompanySelectorWidget extends StatefulWidget {
 class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
   List<Map<String, String>> _companies = [];
   bool _isLoading = true;
-  String? _selectedId; // 🔥 Cambiado para almacenar el ID
+  String? _selectedId;
 
   @override
   void initState() {
@@ -34,56 +34,23 @@ class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
         });
       }
     } catch (e) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return Container(
-        height: 60,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: Colors.grey.shade50,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.grey.shade200),
-        ),
-        child: Row(
-          children: [
-            const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: AppColors.primaryGreen,
-              ),
+      return _buildGlassContainer(
+        child: const Center(
+          child: SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(
+              color: AppColors.darkBlue, // CAMBIADO A DARK BLUE
+              strokeWidth: 2,
             ),
-            const SizedBox(width: 12),
-            Text(
-              "Cargando empresas...",
-              style: GoogleFonts.poppins(color: Colors.grey.shade500),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (_companies.isEmpty) {
-      return Container(
-        height: 60,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: Colors.red.shade50,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.red.shade200),
-        ),
-        alignment: Alignment.centerLeft,
-        child: Text(
-          "No hay empresas disponibles.",
-          style: GoogleFonts.poppins(color: Colors.red.shade400),
+          ),
         ),
       );
     }
@@ -91,105 +58,123 @@ class _CompanySelectorWidgetState extends State<CompanySelectorWidget> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        DropdownButtonFormField<String>(
-          isExpanded: true,
-          decoration: InputDecoration(
-            labelText: "Seleccionar Empresa",
-            labelStyle: GoogleFonts.poppins(
-              fontSize: 14,
-              color: Colors.grey.shade600,
-            ),
-            prefixIcon: const Icon(
-              Icons.business_center_outlined,
-              size: 20,
-              color: AppColors.primaryGreen,
-            ),
-            filled: true,
-            fillColor: Colors.grey.shade50,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide.none,
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade200),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(
-                color: AppColors.primaryGreen,
-                width: 1.5,
+        Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+              child: DropdownButtonFormField<String>(
+                isExpanded: true,
+                dropdownColor: Colors.white.withValues(alpha: 0.98),
+                borderRadius: BorderRadius.circular(18),
+                icon: const Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  color: AppColors.darkBlue,
+                ),
+                style: GoogleFonts.montserrat(
+                  color: AppColors.darkBlue,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+                decoration: InputDecoration(
+                  hintText: "Selecciona tu empresa",
+                  hintStyle: GoogleFonts.montserrat(
+                    fontSize: 14,
+                    color: Colors.grey.shade400,
+                  ),
+                  prefixIcon: const Icon(
+                    Icons.business_rounded,
+                    color: AppColors.darkBlue, // CAMBIADO A DARK BLUE
+                    size: 22,
+                  ),
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: 0.6),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    borderSide: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.8),
+                      width: 1.5,
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    borderSide: const BorderSide(
+                      color: AppColors.darkBlue, // CAMBIADO A DARK BLUE
+                      width: 2,
+                    ),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 20,
+                  ),
+                ),
+                items: _companies
+                    .map(
+                      (company) => DropdownMenuItem(
+                        value: company['id'],
+                        child: Text(company['name'] ?? ""),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (newId) {
+                  if (newId != null) {
+                    setState(() => _selectedId = newId);
+                    final sel = _companies.firstWhere((c) => c['id'] == newId);
+                    widget.onCompanySelected(sel['name']!, sel['id']!);
+                  }
+                },
               ),
             ),
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 16,
-            ),
           ),
-          icon: Icon(
-            Icons.keyboard_arrow_down_rounded,
-            color: Colors.grey.shade600,
-          ),
-          initialValue: _selectedId,
-          hint: Text(
-            "Toca para ver la lista",
-            style: GoogleFonts.poppins(
-              fontSize: 14,
-              color: Colors.grey.shade400,
-            ),
-          ),
-          items: _companies.map((company) {
-            return DropdownMenuItem<String>(
-              value: company['id'], // 🔥 AHORA EL VALUE ES EL ID
-              child: Text(
-                company['name'] ?? "Sin Nombre",
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
-                style: GoogleFonts.poppins(fontSize: 14, color: Colors.black87),
-              ),
-            );
-          }).toList(),
-          onChanged: (String? newId) {
-            setState(() {
-              _selectedId = newId;
-            });
-
-            if (newId != null) {
-              final selectedCompany = _companies.firstWhere(
-                (c) => c['id'] == newId,
-              );
-              // 🔥 Enviamos el nombre y el ID al RegisterScreen
-              widget.onCompanySelected(
-                selectedCompany['name']!,
-                selectedCompany['id']!,
-              );
-            }
-          },
         ),
-
         if (_selectedId != null)
           Padding(
-            padding: const EdgeInsets.only(top: 8.0, left: 12),
+            padding: const EdgeInsets.only(top: 10, left: 12),
             child: Row(
               children: [
                 const Icon(
-                  Icons.check_circle_outline,
-                  color: AppColors.primaryGreen,
-                  size: 14,
+                  Icons.check_circle_rounded,
+                  size: 16,
+                  color: AppColors.darkBlue,
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  "Empresa seleccionada correctamente",
-                  style: GoogleFonts.poppins(
+                  "Empresa vinculada correctamente",
+                  style: GoogleFonts.montserrat(
                     fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.primaryGreen,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.darkBlue, // CAMBIADO A DARK BLUE
                   ),
                 ),
               ],
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildGlassContainer({required Widget child}) {
+    return Container(
+      height: 65,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.8),
+          width: 1.5,
+        ),
+      ),
+      child: child,
     );
   }
 }
