@@ -2,19 +2,25 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_colors.dart';
 import 'welcome_screen.dart';
 import '../../home/screens/home_screen.dart';
+import 'company_register_screen.dart';
+import 'register_screen.dart'; // Importante aquí
+import 'register_natural_screen.dart'; // Importante aquí
+import 'forgot_password_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   final String logoPath;
   final String nextRoute;
+  final String? email; // <--- SE AGREGA ESTO
   final bool isLoader;
-  final bool isDark; // <--- AGREGADO PARA SOLUCIONAR ERROR EN MAIN
+  final bool isDark;
 
   const SplashScreen({
     super.key,
     required this.logoPath,
     this.nextRoute = '',
+    this.email, // <--- SE AGREGA ESTO
     this.isLoader = false,
-    this.isDark = false, // Por defecto claro
+    this.isDark = false,
   });
 
   @override
@@ -32,44 +38,64 @@ class _SplashScreenState extends State<SplashScreen>
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1500),
+      duration: const Duration(milliseconds: 1200),
     );
+
     _scale = Tween<double>(
-      begin: 0.0,
+      begin: 0.5,
       end: 1.0,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
+
     _opacity = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(
         parent: _controller,
         curve: const Interval(0.0, 0.5, curve: Curves.easeIn),
       ),
     );
+
     _controller.forward();
 
     if (!widget.isLoader) {
-      Future.delayed(const Duration(milliseconds: 3500), () {
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            PageRouteBuilder(
-              transitionDuration: const Duration(milliseconds: 1200),
-              pageBuilder: (context, animation, secondaryAnimation) {
-                if (widget.nextRoute == '/home') return const HomeScreen();
-                return const WelcomeScreen();
-              },
-              transitionsBuilder:
-                  (context, animation, secondaryAnimation, child) {
-                    return FadeTransition(
-                      opacity: CurvedAnimation(
-                        parent: animation,
-                        curve: Curves.easeIn,
-                      ),
-                      child: child,
+      Future.delayed(
+        Duration(
+          milliseconds: widget.nextRoute.contains('register') ? 1500 : 3500,
+        ),
+        () {
+          if (mounted) {
+            Navigator.of(context).pushReplacement(
+              PageRouteBuilder(
+                transitionDuration: const Duration(milliseconds: 800),
+                pageBuilder: (context, animation, secondaryAnimation) {
+                  // LÓGICA DE RUTAS CON CORREO
+                  if (widget.nextRoute == '/home') {
+                    return const HomeScreen();
+                  }
+                  if (widget.nextRoute == '/register') {
+                    return const CompanyRegisterScreen();
+                  }
+                  if (widget.nextRoute == '/register_corporate') {
+                    return RegisterScreen(emailPreIngresado: widget.email);
+                  }
+                  if (widget.nextRoute == '/register_natural') {
+                    return RegisterNaturalScreen(
+                      emailPreIngresado: widget.email,
                     );
-                  },
-            ),
-          );
-        }
-      });
+                  }
+                  // Busca el bloque de rutas y agrega este:
+                  if (widget.nextRoute == '/forgot_password') {
+                    return ForgotPasswordScreen(emailPreloadded: widget.email);
+                  }
+                  return const WelcomeScreen();
+                },
+                transitionsBuilder:
+                    (context, animation, secondaryAnimation, child) {
+                      return FadeTransition(opacity: animation, child: child);
+                    },
+              ),
+            );
+          }
+        },
+      );
     }
   }
 
@@ -90,11 +116,8 @@ class _SplashScreenState extends State<SplashScreen>
             center: Alignment.center,
             radius: 1.2,
             colors: widget.isDark
-                ? [
-                    const Color(0xFF25335A),
-                    const Color(0xFF0D121F),
-                  ] // Fondo Driver
-                : [AppColors.white, AppColors.greyLight], // Fondo User
+                ? [const Color(0xFF25335A), const Color(0xFF0D121F)]
+                : [AppColors.white, AppColors.greyLight],
           ),
         ),
         child: Center(
@@ -102,10 +125,7 @@ class _SplashScreenState extends State<SplashScreen>
             opacity: _opacity,
             child: ScaleTransition(
               scale: _scale,
-              child: Hero(
-                tag: 'logo',
-                child: Image.asset(widget.logoPath, width: 220),
-              ),
+              child: Image.asset(widget.logoPath, width: 220),
             ),
           ),
         ),

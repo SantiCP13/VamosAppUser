@@ -7,8 +7,14 @@ class CachedTileProvider extends TileProvider {
   static final customCacheManager = CacheManager(
     Config(
       'mapboxTilesCache',
-      stalePeriod: const Duration(days: 30),
-      maxNrOfCacheObjects: 5000,
+      stalePeriod: const Duration(
+        days: 15,
+      ), // Bajamos a 15 días (suficiente para rutas frecuentes)
+      maxNrOfCacheObjects:
+          3000, // 3000 tiles es el punto dulce entre ahorro y espacio
+      repo: JsonCacheInfoRepository(
+        databaseName: 'mapboxTilesCache',
+      ), // Asegura persistencia tras reiniciar
     ),
   );
 

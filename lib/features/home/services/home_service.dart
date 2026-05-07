@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:dart_pusher_channels/dart_pusher_channels.dart';
 import '../../../core/network/api_client.dart';
+// ignore: unused_import
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class HomeService {
@@ -49,32 +50,35 @@ class HomeService {
     required String token,
     required Function(String event, Map<String, dynamic> data) onEvent,
   }) {
+    // CONFIGURACIÓN PARA PRODUCCIÓN (HOSTINGER)
+    // Ignoramos el .env si este tiene 127.0.0.1 para forzar la URL pública
     _client = PusherChannelsClient.websocket(
       options: PusherChannelsOptions.fromHost(
-        scheme: dotenv.env['REVERB_SCHEME'] ?? 'wss',
-        host: dotenv.env['REVERB_HOST'] ?? 'api.vamosapp.com.co',
-        port: int.parse(dotenv.env['REVERB_PORT'] ?? '443'),
-        key: dotenv.env['REVERB_KEY'] ?? '06exymiubefjjglwmvqe',
+        scheme: 'wss', // Siempre wss en producción con SSL
+        host: 'api.vamosapp.com.co', // Tu dominio de Hostinger
+        port: 443, // El puerto SSL estándar
+        key: '06exymiubefjjglwmvqe', // Tu Reverb Key
       ),
       connectionErrorHandler: (exception, trace, client) {
-        debugPrint("🚨 Error de Socket en Producción: $exception");
+        debugPrint("🚨 Error de Socket: $exception");
       },
     );
 
     _client!.eventStream.listen((event) {
+      // Log para depuración: Ver si realmente se conecta
       if (event.name == 'pusher:connection_established') {
+        debugPrint("✅ Conexión establecida con el servidor de VAMOS");
+
         final channel = _client!.privateChannel(
           'private-usuario.$userId',
           authorizationDelegate: UserPusherAuth(token: token),
         );
         channel.subscribe();
 
-        // Escuchamos cuando un conductor ACEPTA
         channel.bind('ViajeAceptado').listen((e) {
           if (e.data != null) onEvent('ViajeAceptado', json.decode(e.data!));
         });
 
-        // 🔥 NUEVO: Escuchamos cuando el sistema CANCELA (falta de conductores)
         channel.bind('ViajeCancelado').listen((e) {
           if (e.data != null) onEvent('ViajeCancelado', json.decode(e.data!));
         });
@@ -145,16 +149,21 @@ class UserPusherAuth
     String socketId,
     String channelName,
   ) async {
+    // IMPORTANTE: Asegúrate de que el ApiClient incluya el Token en los headers
     final dio = ApiClient().dio;
 
-    // Usamos el baseUrl que ya tiene configurado el ApiClient (https://api.vamosapp.com.co/api)
-    final response = await dio.post(
-      '/broadcasting/auth', // Al poner solo esto, Dio usa automáticamente la URL del .env
-      data: {'socket_id': socketId, 'channel_name': channelName},
-    );
+    try {
+      final response = await dio.post(
+        '/broadcasting/auth', // Tu endpoint de Laravel
+        data: {'socket_id': socketId, 'channel_name': channelName},
+      );
 
-    return PrivateChannelAuthorizationData(
-      authKey: response.data['auth'] ?? '',
-    );
+      return PrivateChannelAuthorizationData(
+        authKey: response.data['auth'] ?? '',
+      );
+    } catch (e) {
+      debugPrint("🚨 Error en el POST de /broadcasting/auth: $e");
+      rethrow;
+    }
   }
 }

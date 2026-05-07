@@ -11,27 +11,36 @@ List<LatLng> _decodePolylineIsolate(String encoded) {
   int index = 0, len = encoded.length;
   int lat = 0, lng = 0;
 
-  while (index < len) {
-    int b, shift = 0, result = 0;
-    do {
-      b = encoded.codeUnitAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
-    lat += dlat;
+  try {
+    while (index < len) {
+      int b, shift = 0, result = 0;
+      do {
+        // Validación de seguridad para evitar el "offset" error
+        if (index >= len) return points;
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+      lat += dlat;
 
-    shift = 0;
-    result = 0;
-    do {
-      b = encoded.codeUnitAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
-    lng += dlng;
+      shift = 0;
+      result = 0;
+      do {
+        // Validación de seguridad para evitar el "offset" error
+        if (index >= len) return points;
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+      lng += dlng;
 
-    points.add(LatLng(lat / 1000000.0, lng / 1000000.0));
+      points.add(LatLng(lat / 1000000.0, lng / 1000000.0));
+    }
+  } catch (e) {
+    // Si hay un error en un viaje largo, devolvemos lo que alcanzamos a decodificar
+    debugPrint("Error decodificando parte de la ruta: $e");
   }
   return points;
 }
@@ -71,14 +80,22 @@ class RouteService {
       if (response.statusCode == 200) {
         final data = response.data['data'];
         final geometryData = data['geometry'];
+        print("DEBUG GEOMETRY: ${data['geometry']}"); // <-- AÑADE ESTO
 
         List<LatLng> points = [];
         if (geometryData is String) {
           points = await compute(_decodePolylineIsolate, geometryData);
+          // En route_service.dart, reemplaza el bloque else if por este:
         } else if (geometryData is List) {
-          points = geometryData
-              .map((c) => LatLng(c[1].toDouble(), c[0].toDouble()))
-              .toList();
+          // Eliminamos el (geometryData as List) porque es redundante
+          points = geometryData.map((coord) {
+            // Aseguramos que cada coordenada sea una lista de números [lng, lat]
+            final pair = List<num>.from(coord as List);
+            return LatLng(
+              pair[1].toDouble(), // Latitud
+              pair[0].toDouble(), // Longitud
+            );
+          }).toList();
         }
 
         return RouteResult(
@@ -91,14 +108,21 @@ class RouteService {
         );
       }
       throw Exception("Error en la respuesta del servidor");
+      // Busca el catch dentro de getRoute en RouteService y cámbialo por este:
     } catch (e) {
       if (e is DioException && e.response != null) {
+        print("🚨 ERROR COMPLETO DEL SERVIDOR: ${e.response?.data}");
+
         final serverData = e.response?.data;
         if (serverData is Map && serverData['message'] != null) {
+          // Lanzamos el mensaje exacto: "Viaje No Permitido: En Modo Personal..."
           throw serverData['message'];
         }
       }
-      throw "No se pudo calcular la ruta. Verifica tu conexión.";
+      // Si no es un error controlado del servidor, lanzamos un error de conexión
+      throw e.toString().contains("Viaje No Permitido")
+          ? e
+          : "Error de conexión con el servidor de rutas.";
     }
   }
 }

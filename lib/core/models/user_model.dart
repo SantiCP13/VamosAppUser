@@ -81,7 +81,7 @@ class User {
   String? idPassenger;
   String? idResponsable; // FK manager_id
   String? photoUrl;
-
+  final int idRole; // <--- AGREGAR ESTA LÍNEA
   final String email; // Unique Login
   final String name;
   final String phone;
@@ -120,6 +120,8 @@ class User {
 
   User({
     required this.id,
+    required this.idRole, // <--- AGREGAR ESTA LÍNEA
+
     this.idPassenger,
     this.idResponsable,
     required this.email,
@@ -175,6 +177,10 @@ class User {
 
     return User(
       id: map['id']?.toString() ?? '',
+      idRole: map['id_role'] != null
+          ? int.parse(map['id_role'].toString())
+          : 2, // <--- AGREGAR ESTA LÍNEA (Por defecto 2 si es nulo)
+
       idPassenger: map['id_pasajero']?.toString(),
       idResponsable: responsable != null ? responsable['id'].toString() : null,
       email: map['email'] ?? '',

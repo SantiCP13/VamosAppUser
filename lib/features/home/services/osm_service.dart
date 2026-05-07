@@ -114,46 +114,31 @@ class OsmService {
 
       if (response.statusCode == 200 && response.data['status'] == 'success') {
         final data = response.data['data'];
+        // ignore: avoid_print
+        print("DEBUG BACKEND DATA: ${json.encode(data)}");
+        // IMPORTANTE: Ahora el servidor devuelve 'snapped_lat' y 'snapped_lng'
+        // que son los puntos exactos EN LA CALLE, fuera de edificios.
+        double finalLat = double.parse(
+          (data['snapped_lat'] ?? data['lat'] ?? point.latitude).toString(),
+        );
+        double finalLng = double.parse(
+          (data['snapped_lng'] ?? data['lng'] ?? point.longitude).toString(),
+        );
+
         return {
-          'name': data['name'],
-          'address': data['address'],
-          'es_interior': data['es_interior'] ?? false,
-          // Usamos snapped_lat/lng si vienen del servidor, si no, el punto original
-          'snappedPoint': LatLng(
-            double.parse((data['snapped_lat'] ?? data['lat']).toString()),
-            double.parse((data['snapped_lng'] ?? data['lng']).toString()),
-          ),
+          'name': data['name'] ?? "Ubicación en vía",
+          'address': data['address'] ?? "Dirección detectada",
+          'snappedPoint': LatLng(finalLat, finalLng),
         };
       }
     } catch (e) {
-      debugPrint("Error consultando caché del servidor: $e");
+      debugPrint("Error en el snapping del servidor: $e");
     }
+    // Si falla el servidor, devolvemos el punto original para no bloquear al usuario
     return {
-      'name': "Ubicación en mapa",
-      'address': "Seleccionada manualmente",
+      'name': "Ubicación seleccionada",
+      'address': "Toca para confirmar",
       'snappedPoint': point,
     };
-  }
-
-  // 4. Obtener punto de calle más cercano (OSRM directo)
-  Future<LatLng> getNearestRoadPoint(LatLng point) async {
-    try {
-      final url =
-          'https://router.project-osrm.org/nearest/v1/driving/'
-          '${point.longitude},${point.latitude}?number=1&radiuses=1000';
-
-      final response = await _dio.get(url);
-
-      if (response.statusCode == 200 &&
-          response.data['waypoints'] != null &&
-          (response.data['waypoints'] as List).isNotEmpty) {
-        final List coords = response.data['waypoints'][0]['location'];
-        return LatLng(coords[1].toDouble(), coords[0].toDouble());
-      }
-      return point;
-    } catch (e) {
-      debugPrint("Error al ajustar coordenada: $e");
-      return point;
-    }
   }
 }

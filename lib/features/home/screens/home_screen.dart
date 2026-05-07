@@ -1,15 +1,14 @@
 // lib/features/home/screens/home_screen.dart
 // ignore_for_file: constant_identifier_names, avoid_print
-
+import 'dart:ui' as ui; // O simplemente el import de material
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart';
 import 'package:intl/intl.dart';
-
+import 'package:dio/dio.dart';
 // --- IMPORTS ---
 import '../../../core/theme/app_colors.dart';
 import '../../../core/models/user_model.dart';
@@ -29,11 +28,13 @@ import '../../../core/models/passenger_model.dart';
 import '../../home/services/home_service.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../../../core/utils/cached_tile_provider.dart';
+// Verifica que esta sea la ruta real en tu proyecto
 
 enum TripState {
-  IDLE,
-  CALCULATING,
-  ROUTE_PREVIEW,
+  DASHBOARD, // Antes IDLE
+  CALCULATING, // Estado de carga
+  ROUTE_PREVIEW, // Ver ruta y precio
+  CONFIRMING_PICKUP, // Mover el pin de salida
   SEARCHING_DRIVER,
   DRIVER_ON_WAY,
   IN_TRIP,
@@ -56,16 +57,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final RouteService _routeService = RouteService();
   final HomeService _homeService = HomeService();
   final SearchService _searchService = SearchService(); // <--- AÑADE ESTA LÍNEA
-
+  Timer? _debounceGeocoding;
+  LatLng?
+  _lastGeocodedPosition; // Rastrear dónde pedimos dirección por última vez
+  // --- ANIMACIÓN DE RUTA ---
+  AnimationController? _routeDrawingController;
+  LatLng? _referenceOriginCoords; // Guardará el punto original buscado
+  List<LatLng> _animatedRoutePoints = []; // Esta lista es la que verá el mapa
   // --- ESTADO GENERAL ---
-  TripState _tripState = TripState.IDLE;
+
+  TripState _tripState = TripState.DASHBOARD;
+  String? _addressTypeToSave; // Guardará 'home' o 'work'
+
   LatLng? _currentPosition;
   final LatLng _defaultLocation = const LatLng(4.9183, -74.0258); // Cajicá
   bool _isMapReady = false;
   bool _isPickingLocation =
       false; // Controla si el panel de pedido está abierto o minimizado
-
-  String? _lastCityCache;
+  bool _isOriginConfirmed = false; // Nueva bandera
   bool _isCalculatingRoute = false;
   bool _showTollsDetail = false; // Controla el acordeón de peajes
   // Usamos un ValueNotifier para actualizaciones de alto rendimiento sin redibujar todo el build
@@ -112,7 +121,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Timer? _waitTimer;
   DateTime? _scheduledAt;
   String _pickingAddress = "Buscando dirección...";
-
+  // ignore: unused_field
+  String _pickingSubAddress = ""; // <--- AÑADE ESTA LÍNEA
+  LatLng _mapCenter = const LatLng(0, 0);
+  List<Map<String, dynamic>> _recentPlaces =
+      []; // Asegúrate de que no falte esta línea
   // --- CATEGORÍAS ---
   // ignore: prefer_final_fields
   double _baseRoutePrice = 0;
@@ -123,13 +136,40 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     'VAN': 1.8,
   };
   Map<String, dynamic> _categoryPricesFromServer = {};
-  final String myMapboxToken = dotenv.env['MAPBOX_TOKEN'] ?? '';
+  String get myMapboxToken => dotenv.env['MAPBOX_TOKEN'] ?? '';
+
   @override
   void initState() {
     super.initState();
     _loadPaymentMethods();
+    _loadRecentPlaces();
 
-    // Validación de seguridad de último nivel
+    // 1. Inicializamos el controlador
+    _routeDrawingController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    );
+
+    // 2. Agregamos el Listener AQUÍ (Solo una vez)
+    // Esto asegura que cada vez que el controlador se mueva, intente dibujar
+    _routeDrawingController!.addListener(() {
+      if (_routePoints.isEmpty) return;
+
+      double progress = Curves.fastOutSlowIn.transform(
+        _routeDrawingController!.value,
+      );
+
+      // Calculamos el conteo, pero aseguramos un mínimo de 2 puntos siempre que progrese
+      int count = (progress * _routePoints.length).floor();
+      if (count < 2 && progress > 0) count = 2;
+
+      if (count >= 2 && count <= _routePoints.length && mounted) {
+        setState(() {
+          _animatedRoutePoints = _routePoints.take(count).toList();
+        });
+      }
+    });
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (AuthService.currentUser == null) {
         Navigator.pushReplacementNamed(context, '/');
@@ -139,19 +179,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _verifyUserStatus();
         _checkActiveTrip();
       });
-      // Si el usuario está PENDING o UNDER_REVIEW, podrías redirigir aquí también
-      if (AuthService.currentUser!.verificationStatus ==
-          UserVerificationStatus.PENDING) {
-        // Navigator.pushReplacementNamed(context, '/verification_check');
-      }
     });
     _initSocketCommunication();
     _determinePosition();
     _checkActiveTrip();
+    print("HORA DISPOSITIVO: ${DateTime.now().toLocal()}");
   }
 
   @override
   void dispose() {
+    _routeDrawingController?.dispose(); // <--- VITAL para no gastar memoria
+
     _checkStatusTimer?.cancel();
     _simulationTimer?.cancel();
     _sheetExtentNotifier.dispose(); // <--- Agrega esto
@@ -160,6 +198,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
+  Future<void> _loadRecentPlaces() async {
+    final res = await _searchService.getRecentPlaces();
+    if (mounted) setState(() => _recentPlaces = res);
+  }
+
+  void _animateRouteDrawing() {
+    if (_routePoints.isEmpty || _routeDrawingController == null) return;
+
+    // Detenemos cualquier dibujo previo, limpiamos la lista visual e iniciamos
+    _routeDrawingController!.stop();
+    _routeDrawingController!.reset();
+
+    setState(() {
+      _animatedRoutePoints = [];
+    });
+
+    _routeDrawingController!.forward();
+  }
+
+  // Llama a _loadRecentPlaces() dentro de tu initState() al final
   List<Beneficiary> get _selectedBeneficiariesList {
     return _currentUser.beneficiaries
         .where((b) => _selectedPassengerIds.contains(b.id))
@@ -191,12 +249,46 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // ===============================================================
   Future<void> _verifyUserStatus() async {
     try {
-      // Solo con llamar a esto, si el usuario es inactivo,
-      // el ApiClient lo detectará y lo sacará automáticamente.
-      await AuthService.checkAuthStatus();
+      // Solo verificar si estamos "quietos" en el dashboard
+      if (_tripState == TripState.DASHBOARD) {
+        await AuthService.checkAuthStatus();
+      }
     } catch (e) {
-      debugPrint("Error: $e");
+      // Silenciamos el error para que el polling no rompa la navegación
+      debugPrint("Error silencioso en polling de estado: $e");
     }
+  }
+
+  void _showAppSnackBar(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              isError ? Icons.error_outline : Icons.check_circle_outline,
+              color: Colors.white,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: isError ? Colors.redAccent : AppColors.primaryGreen,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        margin: const EdgeInsets.all(20),
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   Future<void> _determinePosition() async {
@@ -224,33 +316,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
 
     try {
-      Position? lastKnown = await Geolocator.getLastKnownPosition();
-
-      if (lastKnown != null && mounted) {
-        setState(() {
-          _currentPosition = LatLng(lastKnown.latitude, lastKnown.longitude);
-        });
-        _moveMapToCurrent();
-      }
-
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 5),
       );
 
       if (!mounted) return;
 
       setState(() {
         _currentPosition = LatLng(position.latitude, position.longitude);
+        _originCoordinates = _currentPosition;
+        // IMPORTANTE: No llamamos a reverseGeocode aquí si estamos en el Dashboard.
+        // Solo ponemos un texto genérico.
+        _originName = "Mi ubicación";
       });
+
       _moveMapToCurrent();
     } catch (e) {
-      if (_currentPosition == null) {
-        _useDefaultLocation();
-        _showErrorSnackBar(
-          "Error de GPS: No pudimos obtener tu ubicación exacta.",
-        ); // <--- AVISO AL USUARIO
-      }
+      _useDefaultLocation();
     }
   }
 
@@ -275,57 +357,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _moveMapToCurrent() {
-    if (_tripState == TripState.IDLE &&
-        _isMapReady &&
-        _currentPosition != null) {
+    if (_currentPosition != null && _isMapReady) {
       _animatedMapMove(_currentPosition!, 15.0);
     }
   }
 
   void _toggleAppMode(bool isTargetCorporate) async {
-    // 1. Bloqueo de seguridad si hay un viaje en curso
-    if (_tripState != TripState.IDLE) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "No puedes cambiar de modo durante un viaje",
-            style: GoogleFonts.poppins(),
-          ),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
+    if (_tripState != TripState.DASHBOARD) {
+      _showAppSnackBar(
+        "No puedes cambiar de modo durante un viaje activo",
+        isError: true,
       );
       return;
     }
 
-    // 2. Lógica para MODO CORPORATIVO
+    // Si el usuario cambia de modo, limpiamos la ruta previa para evitar cobros erróneos
+    setState(() {
+      _resetTripData(); // Limpia coordenadas, nombres y puntos de polilínea
+      _tripState = TripState.DASHBOARD;
+      _tripPrice = 0;
+    });
+
     if (isTargetCorporate) {
-      // Si ya tiene empresa vinculada, cambiamos DIRECTO al backend
       if (_currentUser.canUseCorporateMode) {
         bool success = await AuthService.toggleAppMode(true);
         if (success && mounted) {
-          setState(() {
-            _resetTripData();
-          });
           _showModeSnackBar("Modo Corporativo activado", Colors.blue[800]!);
         }
       } else {
-        // Solo si NO tiene empresa, mostramos el modal para que la busque
         _showCorporateLinkingModal();
       }
-      return;
-    }
-
-    // 3. Lógica para MODO NATURAL (Personal)
-    // El cambio es directo, ya que todo usuario registrado puede usar el modo personal.
-    if (!isTargetCorporate) {
+    } else {
       bool success = await AuthService.toggleAppMode(false);
       if (success && mounted) {
-        setState(() {
-          _resetTripData();
-        });
         _showModeSnackBar("Modo Personal activado", AppColors.primaryGreen);
       }
     }
@@ -353,116 +417,236 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Future<bool> _isTripAllowed(LatLng start, LatLng end) async {
-    if (_currentUser.isCorporateMode) return true;
-
-    // 1. CÁLCULO DE DISTANCIA PREVIO (No consume recursos)
-    double distanceInMeters = Geolocator.distanceBetween(
-      start.latitude,
-      start.longitude,
-      end.latitude,
-      end.longitude,
-    );
-
-    // SI LA DISTANCIA ES MENOR A 500 METROS:
-    // Es físicamente imposible que hayan cambiado de ciudad.
-    // Bloqueamos por "Viaje Urbano" sin preguntar al servidor.
-    if (distanceInMeters < 500) {
-      _showRestrictionError("tu ubicación actual");
-      return false;
+    // 1. Siempre permitir si es corporativo
+    if (_currentUser.isCorporateMode) {
+      print("✅ MODO CORPORATIVO DETECTADO: Saltando restricción DANE.");
+      return true;
     }
-
-    // SI LA DISTANCIA ES MAYOR A 50 KM:
-    // Es muy probable que sean ciudades distintas.
-    // Permitimos el viaje sin geocodificar para ahorrar batería y tiempo.
-    if (distanceInMeters > 50000) return true;
-
     try {
-      // Solo si el viaje está en el "rango dudoso" (0.5km a 50km) geocodificamos
+      // 2. Pedir datos al servidor
       final results = await Future.wait([
-        _getCityFromCoordinates(start),
-        _getCityFromCoordinates(end),
-      ]).timeout(const Duration(seconds: 4));
+        _searchService.getReverseGeocode(start.latitude, start.longitude),
+        _searchService.getReverseGeocode(end.latitude, end.longitude),
+      ]);
 
-      String? startCity = results[0];
-      String? endCity = results[1];
+      // 3. Extraer IDs y nombres de forma segura
+      final String? idOrigen = results[0]?['municipality_id']?.toString();
+      final String? idDestino = results[1]?['municipality_id']?.toString();
+      final String cityOrigen = results[0]?['city'] ?? "Desconocido";
+      final String cityDestino = results[1]?['city'] ?? "Desconocido";
 
-      if (startCity == null || endCity == null) return true;
+      // --- 📊 BLOQUE DE DEBUG PARA CONSOLA ---
+      print("--------------------------------------------------");
+      print("🔍 VERIFICACIÓN DE RESTRICCIÓN DANE");
+      print("📍 ORIGEN: $cityOrigen (DANE: $idOrigen)");
+      print("📍 DESTINO: $cityDestino (DANE: $idDestino)");
 
-      if (_normalizeString(startCity) == _normalizeString(endCity)) {
-        _showRestrictionError(startCity);
+      if (idOrigen == null || idDestino == null) {
+        print("⚠️ ADVERTENCIA: Código DANE nulo. Delegando al servidor.");
+        print("--------------------------------------------------");
+        return true;
+      }
+
+      if (idOrigen == idDestino) {
+        print("⛔ RESULTADO: BLOQUEADO (Mismo municipio)");
+        print("--------------------------------------------------");
+        _showRestrictionError(cityOrigen);
         return false;
       }
+
+      print("✅ RESULTADO: PERMITIDO (Diferentes municipios)");
+      print("--------------------------------------------------");
+      return true;
     } catch (e) {
-      return true; // En caso de error de red, dejamos pasar para no bloquear al usuario
+      print("❌ Error en validación local DANE: $e");
+      return true; // En error de red, dejamos que el servidor decida
     }
-    return true;
   }
 
-  String _normalizeString(String input) {
-    return input
-        .toLowerCase()
-        .replaceAll('á', 'a')
-        .replaceAll('é', 'e')
-        .replaceAll('í', 'i')
-        .replaceAll('ó', 'o')
-        .replaceAll('ú', 'u')
-        .trim();
-  }
-
-  Future<String?> _getCityFromCoordinates(LatLng point) async {
-    if (_lastCityCache != null && _originCoordinates != null) {
-      double dist = Geolocator.distanceBetween(
-        point.latitude,
-        point.longitude,
-        _originCoordinates!.latitude,
-        _originCoordinates!.longitude,
-      );
-      // CORRECCIÓN LINT: Agregadas llaves {}
-      if (dist < 500) {
-        return _lastCityCache;
-      }
-    }
-
-    try {
-      List<Placemark> placemarks = await placemarkFromCoordinates(
-        point.latitude,
-        point.longitude,
-      ).timeout(const Duration(seconds: 3));
-
-      if (placemarks.isNotEmpty) {
-        String? city =
-            placemarks.first.locality ?? placemarks.first.subAdministrativeArea;
-        if (city != null) _lastCityCache = city;
-        return city;
-      }
-    } catch (e) {
-      debugPrint("Error Geocoding: $e");
-    }
-    return null;
-  }
-
+  // 1. Error de Restricción (Viaje Urbano en Modo Personal)
   void _showRestrictionError(String city) {
     if (!mounted) return;
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(
-          "Viaje No Permitido",
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: Column(
+          children: [
+            CircleAvatar(
+              backgroundColor: const Color.fromARGB(28, 111, 182, 52),
+              radius: 30,
+              child: Icon(
+                Icons.shield_outlined,
+                color: AppColors.primaryGreen,
+                size: 35,
+              ),
+            ),
+            const SizedBox(height: 15),
+            Text(
+              "Viaje No Permitido",
+              style: GoogleFonts.montserrat(
+                fontWeight: FontWeight.w800,
+                color: AppColors.darkBlue,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ),
         content: Text(
-          "Estás en MODO PERSONAL.\n\n"
-          "Origen: $city\nDestino: $city\n\n"
-          "❌ Viajes urbanos bloqueados en este modo.",
-          style: GoogleFonts.poppins(),
+          "En MODO PERSONAL, los viajes dentro de la misma ciudad no están permitidos.\n\nPara traslados urbanos, por favor activa el MODO CORPORATIVO.",
+          style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[700]),
+          textAlign: TextAlign.center,
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(
-              "OK",
-              style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(ctx),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.darkBlue,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 15),
+              ),
+              child: Text(
+                "ENTENDIDO",
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 2. Diálogo de Cédula Faltante (Dentro de _handleTripRequest)
+  void _showIncompleteProfileDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: Column(
+          children: [
+            CircleAvatar(
+              backgroundColor: Colors.red.withValues(alpha: 0.1),
+              radius: 30,
+              child: Icon(
+                Icons.badge_outlined,
+                color: Colors.red[800],
+                size: 35,
+              ),
+            ),
+            const SizedBox(height: 15),
+            Text(
+              "Perfil Incompleto",
+              style: GoogleFonts.montserrat(
+                fontWeight: FontWeight.w800,
+                color: AppColors.darkBlue,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          "Para generar el seguro de viaje (FUEC), es obligatorio tener tu número de documento registrado.",
+          textAlign: TextAlign.center,
+          style: GoogleFonts.poppins(fontSize: 14),
+        ),
+        actions: [
+          Column(
+            children: [
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    Navigator.pushNamed(context, '/profile_edit');
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGreen,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                  ),
+                  child: Text(
+                    "IR A MI PERFIL",
+                    style: GoogleFonts.montserrat(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(
+                  "CANCELAR",
+                  style: GoogleFonts.montserrat(
+                    color: Colors.grey,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showNoDriversDialog(String? message) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: Column(
+          children: [
+            Icon(
+              Icons.person_search_rounded,
+              color: AppColors.primaryGreen,
+              size: 60,
+            ),
+            const SizedBox(height: 15),
+            Text(
+              "Lo sentimos",
+              style: GoogleFonts.montserrat(
+                fontWeight: FontWeight.w800,
+                fontSize: 20,
+                color: AppColors.darkBlue,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          message ??
+              "No hay conductores disponibles cerca de ti en este momento. Por favor, intenta de nuevo en unos minutos.",
+          textAlign: TextAlign.center,
+          style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[700]),
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryGreen,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 15),
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(
+                "ENTENDIDO",
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
             ),
           ),
         ],
@@ -488,49 +672,81 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // --- REEMPLAZA ESTOS MÉTODOS EN home_screen.dart ---
 
   Future<void> _confirmMapSelection() async {
-    if (_isLoadingAddress) return;
-    final currentCenter = _mapController.camera.center;
+    if (_isLoadingAddress || _pickingAddress == "Buscando dirección...") return;
+
+    final LatLng pointOnMap = _mapController.camera.center;
+
+    // 1. VALIDACIÓN DE SEGURIDAD (Solo si viene de BUSCADOR)
+    // Si _referenceOriginCoords existe, significa que el usuario buscó una dirección por texto
+    if (_isPickingOrigin && _referenceOriginCoords != null) {
+      double distance = Geolocator.distanceBetween(
+        _referenceOriginCoords!.latitude,
+        _referenceOriginCoords!.longitude,
+        pointOnMap.latitude,
+        pointOnMap.longitude,
+      );
+
+      if (distance > 200) {
+        _showAppSnackBar(
+          "Por seguridad, ajusta el pin cerca de la dirección (Máx 200m).",
+          isError: true,
+        );
+        return;
+      }
+    }
+
     setState(() => _isLoadingAddress = true);
 
     try {
       final data = await _searchService.getReverseGeocode(
-        currentCenter.latitude,
-        currentCenter.longitude,
+        pointOnMap.latitude,
+        pointOnMap.longitude,
+        persist: true,
       );
-      if (data == null || !mounted) {
-        setState(() => _isLoadingAddress = false);
-        return;
-      }
 
-      // 🔥 AQUÍ DEFINES LA VARIABLE PARA QUE NO DE ERROR
-      LatLng snappedPoint = LatLng(data['snapped_lat'], data['snapped_lng']);
-      String address = data['name'];
+      if (data != null && mounted) {
+        final LatLng snappedPoint = LatLng(
+          (data['snapped_lat'] as num).toDouble(),
+          (data['snapped_lng'] as num).toDouble(),
+        );
 
-      setState(() {
-        _isLoadingAddress = false;
-        _isPickingLocation = false;
-        _tripState = TripState.CALCULATING;
+        setState(() {
+          _isLoadingAddress = false;
 
-        if (_isPickingOrigin) {
-          _originName = address;
-          _originCoordinates = snappedPoint;
-        } else {
-          _destinationName = address;
-          _destinationCoordinates = snappedPoint;
-        }
-      });
+          if (_isPickingOrigin) {
+            // --- FINALIZAR ORIGEN ---
+            _originName = data['name'];
+            _originCoordinates = snappedPoint;
+            _isOriginConfirmed = true;
+            _isPickingLocation = false; // Cerramos el mapa
+            _referenceOriginCoords =
+                null; // Limpiamos la referencia de seguridad
 
-      // Ahora sí puedes usar snappedPoint aquí
-      _mapController.move(snappedPoint, 15.0);
+            if (_destinationCoordinates != null) {
+              _calculateRouteAndPrice(_destinationCoordinates!);
+            }
+          } else {
+            // --- FINALIZAR DESTINO ---
+            _destinationName = data['name'];
+            _destinationCoordinates = snappedPoint;
 
-      if (_destinationCoordinates != null) {
-        _calculateRouteAndPrice(_destinationCoordinates!);
-      } else {
-        _openSearchFromCurrentState();
+            // ¿De dónde venimos?
+            if (_originCoordinates == null || _referenceOriginCoords != null) {
+              // Si no hay origen o venimos de buscador, PEDIMOS RECOGIDA
+              _isPickingOrigin = true;
+              _isOriginConfirmed = false;
+              _isPickingLocation = true;
+              _startPickupConfirmation();
+            } else {
+              // Si el origen ya fue fijado manualmente antes, saltamos directo al precio
+              _isPickingLocation = false;
+              _calculateRouteAndPrice(_destinationCoordinates!);
+            }
+          }
+        });
       }
     } catch (e) {
-      setState(() => _isLoadingAddress = false);
-      _showErrorSnackBar("Error al validar la ubicación");
+      if (mounted) setState(() => _isLoadingAddress = false);
     }
   }
 
@@ -564,7 +780,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         // (A menos que el viaje se haya cancelado o estemos en IDLE)
         bool esAvance = serverState.index >= _tripState.index;
         bool esReinicio =
-            _tripState == TripState.IDLE || _tripState == TripState.CALCULATING;
+            _tripState == TripState.DASHBOARD ||
+            _tripState == TripState.CALCULATING;
 
         if (esAvance || esReinicio) {
           setState(() {
@@ -572,7 +789,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             _driverData = tripData;
             _tripState = serverState;
 
-            // Manejo de timers si el conductor llegó
+            // 🔥 VITAL: Avisar al detector de inactividad
+            // Si el estado NO es DASHBOARD, significa que hay un proceso de viaje activo.
+            AuthService.isTripActive = (serverState != TripState.DASHBOARD);
+
             if (tripData['llegado_en'] != null && _waitTimer == null) {
               _startWaitTimer();
             }
@@ -607,44 +827,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
-  // 3. REEMPLAZA _calculateRouteAndPrice (Para activar _isTripAllowed y evitar avisos)
   Future<void> _calculateRouteAndPrice(LatLng destination) async {
     if (_isPickingLocation || _isCalculatingRoute) return;
 
-    // 1. Definir el punto de inicio real
+    // 1. Usamos los puntos que YA fueron "snapped" en _confirmMapSelection
     LatLng startPoint =
         _originCoordinates ?? _currentPosition ?? _defaultLocation;
-    // --- VALIDACIÓN DE DISTANCIA MÍNIMA (EVITA CRASH) ---
+    LatLng endPoint = destination;
+
+    // --- VALIDACIÓN DE DISTANCIA MÍNIMA ---
     double metrosDeDistancia = Geolocator.distanceBetween(
       startPoint.latitude,
       startPoint.longitude,
-      destination.latitude,
-      destination.longitude,
+      endPoint.latitude,
+      endPoint.longitude,
     );
 
     if (metrosDeDistancia < 20) {
-      // Si el destino está a menos de 20 metros del origen
       if (mounted) {
         setState(() {
-          _tripState = TripState.IDLE;
+          _tripState = TripState.DASHBOARD;
           _isCalculatingRoute = false;
         });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              "El destino está demasiado cerca del origen. Por favor selecciona un lugar más alejado.",
-              style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-            ),
-            backgroundColor: Colors.orange[800],
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.all(20),
-          ),
-        );
+        _showAppSnackBar("El destino está demasiado cerca.", isError: true);
       }
-      return; // Detiene la ejecución aquí y no llama al servidor
+      return;
     }
-    // ---------------------------------------------------
+
     if (_routePoints.isEmpty) {
       setState(() {
         _isCalculatingRoute = true;
@@ -653,119 +862,83 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
 
     try {
-      // 2. Snapping de alta potencia (Asegura que los puntos estén en la calle)
-      final results = await Future.wait([
-        _osmService.getSnappedAddress(startPoint),
-        _osmService.getSnappedAddress(destination),
-      ]);
-
-      LatLng finalStart = results[0]['snappedPoint'];
-      LatLng finalEnd = results[1]['snappedPoint'];
-
-      // --- AQUÍ ES DONDE LLAMAMOS A LA FUNCIÓN PARA QUE DEJE DE SER "UNUSED" ---
-      bool allowed = await _isTripAllowed(finalStart, finalEnd);
+      // --- BLOQUE LEGAL ---
+      bool allowed = await _isTripAllowed(startPoint, endPoint);
       if (!allowed) {
         setState(() {
-          _tripState = TripState.IDLE;
+          _tripState = TripState.DASHBOARD;
           _isCalculatingRoute = false;
         });
-        return; // Detenemos el proceso si el viaje no está permitido (ej: viaje urbano en modo personal)
+        return;
       }
-      // ------------------------------------------------------------------------
 
-      // 3. Normalizar a 6 decimales (Vital para que el backend no se pierda)
-      finalStart = LatLng(
-        double.parse(finalStart.latitude.toStringAsFixed(6)),
-        double.parse(finalStart.longitude.toStringAsFixed(6)),
+      // 2. NORMALIZACIÓN A 4 DECIMALES (Vital para el Caché del Backend)
+      // Esto asegura que el "Hash" en el servidor coincida exactamente.
+      LatLng finalStart = LatLng(
+        double.parse(startPoint.latitude.toStringAsFixed(4)),
+        double.parse(startPoint.longitude.toStringAsFixed(4)),
       );
-      finalEnd = LatLng(
-        double.parse(finalEnd.latitude.toStringAsFixed(6)),
-        double.parse(finalEnd.longitude.toStringAsFixed(6)),
+      LatLng finalEnd = LatLng(
+        double.parse(endPoint.latitude.toStringAsFixed(4)),
+        double.parse(endPoint.longitude.toStringAsFixed(4)),
       );
 
-      // 4. Cotizar con el servidor
-      final result = await _routeService
-          .getRoute(
-            finalStart,
-            finalEnd,
-            idContrato: _currentUser.isCorporateMode ? 1 : null,
-            tipoVehiculo: _getDbCategory(_selectedServiceCategory),
-          )
-          .timeout(const Duration(seconds: 15));
+      // 3. Cotizar con el servidor (Ya con el imán aplicado y decimales unificados)
+      final result = await _routeService.getRoute(
+        finalStart,
+        finalEnd,
+        idContrato: _currentUser.isCorporateMode
+            ? (_currentUser.companyUuid != null
+                  ? int.tryParse(_currentUser.companyUuid!)
+                  : null)
+            : null,
+        tipoVehiculo: _getDbCategory(_selectedServiceCategory),
+      );
 
       if (!mounted) return;
 
       setState(() {
         _routePoints = result.points;
-        _tripPrice = result.price;
-        _baseRoutePrice = result.price; // <--- AGREGA ESTA LÍNEA CLAVE
+        // Actualizamos pines a la ruta real del mapa
+        _originCoordinates = result.points.first;
+        _destinationCoordinates = result.points.last;
 
+        _animatedRoutePoints = [];
+        _tripPrice = result.price;
+        _baseRoutePrice = result.price;
         _tripDesglose = result.desglose;
         _categoryPricesFromServer = result.preciosCategorias ?? {};
         _tripDistance =
             "${(result.distanceMeters / 1000).toStringAsFixed(1)} km";
         _tripDuration = "${(result.durationSeconds / 60).round()} min";
-        _tripState = TripState.ROUTE_PREVIEW;
         _isCalculatingRoute = false;
-
-        // Guardar los puntos finales "limpios" para los marcadores
-        _originCoordinates = finalStart;
-        _destinationCoordinates = finalEnd;
-        _originName = results[0]['address'];
-        _destinationName = results[1]['address'];
       });
 
+      // 4. Animación y cámara
       _fitCameraToRoute();
-    } catch (e) {
-      debugPrint("🚨 ERROR FINAL: $e");
+      await Future.delayed(const Duration(milliseconds: 200));
+      _animateRouteDrawing();
+      await Future.delayed(const Duration(milliseconds: 2000));
+
       if (mounted) {
         setState(() {
-          _tripState = TripState.IDLE;
+          _tripState = TripState.ROUTE_PREVIEW;
+          AuthService.isTripActive = true;
+        });
+      }
+    } catch (e) {
+      debugPrint("🚨 Error en ruta: $e");
+      if (mounted) {
+        setState(() {
+          _tripState = TripState.DASHBOARD;
           _isCalculatingRoute = false;
         });
-
-        String errorMsg = e.toString();
-        if (errorMsg.contains("Sin ruta")) {
-          errorMsg =
-              "No hay una vía conectada. Prueba marcar una avenida principal cercana.";
-        }
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              errorMsg.replaceAll("Exception: ", ""),
-              style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-            ),
-            backgroundColor: Colors.red[800],
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.all(20),
-          ),
+        _showAppSnackBar(
+          e.toString().replaceAll("Exception: ", ""),
+          isError: true,
         );
+        _moveToCurrentPosition();
       }
-    }
-  }
-
-  // 4. Haz que _fitCameraToRoute sea más robusto
-  void _fitCameraToRoute() {
-    if (_routePoints.length < 2 || !_isMapReady || _isPickingLocation) return;
-
-    try {
-      final bounds = LatLngBounds.fromPoints(_routePoints);
-
-      _mapController.fitCamera(
-        CameraFit.bounds(
-          bounds: bounds,
-          padding: const EdgeInsets.only(
-            top: 80,
-            bottom: 350,
-            left: 50,
-            right: 50,
-          ),
-        ),
-      );
-    } catch (e) {
-      // Si los puntos son inválidos o están muy cerca, solo centrar en el primer punto
-      _mapController.move(_routePoints.first, 15.0);
     }
   }
 
@@ -844,498 +1017,1081 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _animatedMapMove(LatLng destLocation, double destZoom) {
+    // CRUCIAL: Si el mapa no está renderizado, el MapController lanzará una excepción.
+    // Usamos la bandera _isMapReady que ya tienes definida.
+    if (!_isMapReady || !mounted) return;
+
     // 1. Si ya hay una animación corriendo, la detenemos y cerramos
     _mapMoveController?.dispose();
 
-    final latTween = Tween<double>(
-      begin: _mapController.camera.center.latitude,
-      end: destLocation.latitude,
-    );
-    final lngTween = Tween<double>(
-      begin: _mapController.camera.center.longitude,
-      end: destLocation.longitude,
-    );
-    final zoomTween = Tween<double>(
-      begin: _mapController.camera.zoom,
-      end: destZoom,
-    );
-
-    // 2. Asignamos el nuevo controlador a nuestra variable de clase
-    _mapMoveController = AnimationController(
-      duration: const Duration(milliseconds: 800),
-      vsync: this,
-    );
-
-    final animation = CurvedAnimation(
-      parent: _mapMoveController!,
-      curve: Curves.fastOutSlowIn,
-    );
-
-    _mapMoveController!.addListener(() {
-      _mapController.move(
-        LatLng(latTween.evaluate(animation), lngTween.evaluate(animation)),
-        zoomTween.evaluate(animation),
+    // Encapsulamos en un try-catch por seguridad adicional con MapController
+    try {
+      final latTween = Tween<double>(
+        begin: _mapController.camera.center.latitude,
+        end: destLocation.latitude,
       );
-    });
+      final lngTween = Tween<double>(
+        begin: _mapController.camera.center.longitude,
+        end: destLocation.longitude,
+      );
+      final zoomTween = Tween<double>(
+        begin: _mapController.camera.zoom,
+        end: destZoom,
+      );
 
-    // 3. Iniciamos y nos aseguramos de no llamar a dispose si ya se destruyó el widget
-    _mapMoveController!.forward();
+      _mapMoveController = AnimationController(
+        duration: const Duration(milliseconds: 800),
+        vsync: this,
+      );
+
+      final animation = CurvedAnimation(
+        parent: _mapMoveController!,
+        curve: Curves.fastOutSlowIn,
+      );
+
+      _mapMoveController!.addListener(() {
+        _mapController.move(
+          LatLng(latTween.evaluate(animation), lngTween.evaluate(animation)),
+          zoomTween.evaluate(animation),
+        );
+      });
+
+      _mapMoveController!.forward();
+    } catch (e) {
+      debugPrint("Error en animación de mapa: $e");
+      // Si falla la animación, intentamos un movimiento directo sin Tween
+      _mapController.move(destLocation, destZoom);
+    }
   }
+
   // ===============================================================
   // 3. UI PRINCIPAL
   // ===============================================================
+  List<Marker> _buildMarkers() {
+    final List<Marker> markers = [];
+
+    // 1. Ubicación GPS actual
+    if (_currentPosition != null) {
+      markers.add(
+        Marker(
+          point: _currentPosition!,
+          width: 15,
+          height: 15,
+          child: Container(
+            decoration: const BoxDecoration(
+              color: AppColors.primaryGreen,
+              shape: BoxShape.circle,
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (_routePoints.isNotEmpty && _tripState != TripState.DASHBOARD) {
+      final LatLng startPt = _routePoints.first;
+      final LatLng endPt = _routePoints.last;
+
+      // 1. PUNTOS BLANCOS (Base en la calle)
+      markers.add(_buildBaseDot(startPt, AppColors.primaryGreen));
+      markers.add(_buildBaseDot(endPt, AppColors.darkBlue));
+
+      // 2. PINES (Aumentamos width y height para que no se corten y sean grandes)
+      markers.add(
+        Marker(
+          point: startPt,
+          width: 200, // Más ancho para nombres largos
+          height: 100, // Más alto para que respire
+          rotate:
+              true, // CLAVE: No rotar con el mapa, siempre hacia arriba del móvil
+
+          alignment: Alignment.topCenter, // La base del widget toca el punto
+          child: _buildSimplePin(
+            label: _originName?.split(',').first ?? "Inicio",
+            color: AppColors.primaryGreen,
+            icon: Icons.person_pin_circle,
+          ),
+        ),
+      );
+
+      markers.add(
+        Marker(
+          point: endPt,
+          width: 220,
+          height: 110,
+          rotate:
+              true, // CLAVE: No rotar con el mapa, siempre hacia arriba del móvil
+
+          alignment: Alignment.topCenter,
+          child: _buildSimplePin(
+            label: _destinationName?.split(',').first ?? "Destino",
+            color: AppColors.darkBlue,
+            icon: Icons.location_on,
+          ),
+        ),
+      );
+
+      // 4. BURBUJA DE TIEMPO (En la mitad de la ruta)
+      if (_animatedRoutePoints.length > 5) {
+        final midIndex = (_animatedRoutePoints.length / 2).floor();
+        markers.add(
+          Marker(
+            point: _animatedRoutePoints[midIndex],
+            width: 80,
+            height: 35,
+            rotate:
+                true, // CLAVE: No rotar con el mapa, siempre hacia arriba del móvil
+
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black12, blurRadius: 4),
+                ],
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.access_time_filled,
+                    size: 14,
+                    color: AppColors.primaryGreen,
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    _tripDuration,
+                    style: GoogleFonts.montserrat(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.darkBlue,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+    }
+    return markers;
+  }
+
+  // Widget auxiliar para el punto blanco exacto (Agrégalo debajo de _buildMarkers)
+  Marker _buildBaseDot(LatLng point, Color color) {
+    return Marker(
+      point: point,
+      width: 12,
+      height: 12,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          border: Border.all(color: color, width: 3),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSimplePin({
+    required String label,
+    required Color color,
+    required IconData icon,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment
+          .end, // Asegura que el icono quede al final de la columna
+      children: [
+        // 1. ETIQUETA NEGRA (Arriba)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1A1A),
+            borderRadius: BorderRadius.circular(8),
+            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+          ),
+          child: Text(
+            label.toUpperCase(),
+            style: GoogleFonts.montserrat(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ),
+        // 2. TRIÁNGULO (Apunta hacia abajo)
+        CustomPaint(size: const Size(12, 6), painter: _TrianglePainter()),
+        const SizedBox(height: 2),
+        // 3. ICONO CIRCULAR (Este toca el punto blanco del mapa)
+        Container(
+          padding: const EdgeInsets.all(5),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            border: Border.all(color: color, width: 3),
+            boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
+          ),
+          child: Icon(icon, color: color, size: 20),
+        ),
+        // NO AGREGAR SIZEDBOX AQUÍ. La base del icono debe ser el final del widget.
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    // 1. Verificación de carga inicial
     if (AuthService.currentUser == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final bool isCorporate = _currentUser.isCorporateMode;
-
-    // Color principal dinámico según el modo
-    final Color mainColor = isCorporate
-        ? const Color(0xFF1565C0) // Blue 800
-        : const Color(0xFF2E7D32); // Green
-
     return Scaffold(
       key: _scaffoldKey,
       drawer: SideMenu(onToggleMode: _toggleAppMode),
-      body: Stack(
-        children: [
-          // 1. CAPA DEL MAPA (Base de todo)
-          RepaintBoundary(
-            child: FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: _currentPosition ?? _defaultLocation,
-                initialZoom: 15.0,
-                onMapReady: () {
-                  _isMapReady = true;
-                  if (_currentPosition != null) {
-                    _mapController.move(_currentPosition!, 15.0);
+      // Usamos AnimatedSwitcher para que el cambio entre Dashboard y Mapa sea suave
+      body: AnimatedSwitcher(
+        duration: const Duration(
+          milliseconds: 200,
+        ), // Duración de la transición
+        switchInCurve: Curves.easeInOut,
+        switchOutCurve: Curves.easeInOut,
+        child: (_tripState == TripState.DASHBOARD && !_isPickingLocation)
+            ? Container(
+                key: const ValueKey(
+                  "uber_dashboard",
+                ), // Key única para el Dashboard
+                child: _buildUberDashboardFull(),
+              )
+            : _buildMapInterface(), // Si no es Dashboard, mostramos la interfaz del mapa
+      ),
+    );
+  }
+
+  // --- PEGA ESTO AL FINAL DE LA CLASE _HomeScreenState ---
+  Widget _buildMapInterface() {
+    return Stack(
+      key: const ValueKey("map_interface"),
+      children: [
+        Positioned.fill(
+          child: FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: _currentPosition ?? _defaultLocation,
+              initialZoom: 15.0,
+              minZoom: 6.0, // No permite alejarse más allá del nivel país
+              maxZoom:
+                  18.0, // No permite acercarse más allá del nivel puerta de edificio
+              onMapReady: () => setState(() => _isMapReady = true),
+              onPositionChanged: (camera, hasGesture) {
+                if (_isPickingLocation && hasGesture) {
+                  // BLOQUEO INSTANTÁNEO:
+                  if (_pickingAddress != "Buscando dirección...") {
+                    setState(() {
+                      _pickingAddress = "Buscando dirección...";
+                    });
                   }
-                },
-                onPositionChanged: (camera, hasGesture) {
-                  // Si estamos en modo de elegir ubicación, ponemos un texto de ayuda
-                  if (_isPickingLocation) {
-                    if (_pickingAddress != "Ubica el pin en el punto exacto") {
-                      setState(() {
-                        _pickingAddress = "Ubica el pin en el punto exacto";
-                      });
-                    }
-                  }
-                },
-                interactionOptions: const InteractionOptions(
-                  flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
-                ),
+                  _handleMapCameraMovement(camera);
+                }
+              },
+            ),
+            children: [
+              TileLayer(
+                urlTemplate:
+                    'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}{r}?access_token=$myMapboxToken',
+                tileProvider: CachedTileProvider(),
+                retinaMode: MediaQuery.of(context).devicePixelRatio > 1.0,
               ),
-              children: [
-                TileLayer(
-                  // Usamos {r} para que flutter_map decida si cargar @2x basado en la pantalla
-                  urlTemplate:
-                      'https://api.mapbox.com/styles/v1/${isDark ? "mapbox/dark-v11" : "mapbox/streets-v12"}/tiles/{z}/{x}/{y}{r}?access_token=$myMapboxToken',
-
-                  // Identificación de la app (Debe coincidir con el provider)
-                  userAgentPackageName: 'com.example.vamos_user',
-                  tileDisplay: const TileDisplay.fadeIn(
-                    duration: Duration(milliseconds: 300),
-                  ), // Hace que el mapa aparezca suave
-                  keepBuffer: 5,
-                  // IMPORTANTE: Pon esto en true para que use el {r} de la URL correctamente
-                  retinaMode: MediaQuery.of(context).devicePixelRatio > 1.0,
-
-                  tileProvider: CachedTileProvider(),
+              // Línea de precisión (Dotted Polyline)
+              if (_isPickingLocation && _currentPosition != null)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: [_currentPosition!, _mapCenter],
+                      strokeWidth: 3,
+                      color: Colors.grey.withValues(alpha: 0.5), // CORREGIDO
+                      pattern: const StrokePattern.dotted(),
+                    ),
+                  ],
+                ),
+              if (_animatedRoutePoints
+                  .isNotEmpty) // Quitamos la validación de TripState para evitar parpadeos
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _animatedRoutePoints,
+                      strokeWidth: 5,
+                      color: AppColors.primaryGreen,
+                      borderColor: AppColors.primaryGreen.withValues(
+                        alpha: 0.3,
+                      ), // Opcional: efecto de borde suave
+                      borderStrokeWidth: 2,
+                    ),
+                  ],
                 ),
 
-                // Capas de Ruta y Marcadores (Solo si no estamos eligiendo ubicación manualmente)
-                if (!_isPickingLocation) ...[
-                  // Solo dibuja la ruta si hay puntos Y NO estamos en estado IDLE
-                  if (_routePoints.isNotEmpty && _tripState != TripState.IDLE)
-                    PolylineLayer(
-                      polylines: [
-                        Polyline(
-                          points: _routePoints,
-                          strokeWidth: 5.0,
-                          color: mainColor,
-                        ),
-                      ],
+              MarkerLayer(markers: _buildMarkers()),
+            ],
+          ),
+        ),
+
+        if (!_isPickingLocation) _buildDraggablePanel(),
+
+        if (_isPickingLocation) _buildMapPickerUI(),
+
+        Positioned(
+          top: MediaQuery.of(context).padding.top + 10,
+          left: 20,
+          child: _buildRoundMenuButton(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildUberDashboardFull() {
+    return Container(
+      // 1. FONDO IGUAL AL WELCOME SCREEN
+      decoration: const BoxDecoration(
+        gradient: RadialGradient(
+          center: Alignment(0.0, -0.45),
+          radius: 1.8,
+          colors: [Color(0xFFFFFFFF), Color(0xFFF1F5F9)],
+        ),
+      ),
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // --- HEADER: Menú y Logo a la derecha ---
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _buildRoundMenuButton(),
+                  Hero(
+                    tag: 'logo',
+                    child: Image.asset(
+                      'assets/images/V.png',
+                      height: 40, // Logo pequeño premium
+                      fit: BoxFit.contain,
                     ),
-                  MarkerLayer(
-                    markers: [
-                      // 1. MARCADOR DE MI UBICACIÓN REAL (GPS)
-                      // Siempre lo mostramos para que el usuario sepa dónde está él físicamente
-                      if (_currentPosition != null)
-                        Marker(
-                          point: _currentPosition!,
-                          width: 25,
-                          height: 25,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: mainColor,
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 3),
-                              boxShadow: const [
-                                BoxShadow(blurRadius: 5, color: Colors.black26),
-                              ],
-                            ),
-                          ),
-                        ),
-
-                      // 2. NUEVO: MARCADOR DE ORIGEN MANUAL (Solo si el origen NO es mi ubicación actual)
-                      if (_originCoordinates != null &&
-                          _originCoordinates != _currentPosition &&
-                          _tripState != TripState.IDLE)
-                        Marker(
-                          point: _originCoordinates!,
-                          width: 40,
-                          height: 40,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              shape: BoxShape.circle,
-                              border: Border.all(color: mainColor, width: 2),
-                              boxShadow: const [
-                                BoxShadow(blurRadius: 4, color: Colors.black26),
-                              ],
-                            ),
-                            child: Icon(
-                              Icons.person_pin_circle,
-                              color: mainColor,
-                              size: 25,
-                            ),
-                          ),
-                        ),
-
-                      // 3. MARCADOR DE DESTINO
-                      if (_destinationCoordinates != null &&
-                          _tripState != TripState.IDLE)
-                        Marker(
-                          point: _destinationCoordinates!,
-                          width: 40,
-                          height: 40,
-                          child: const Icon(
-                            Icons.location_on,
-                            color: Colors.redAccent,
-                            size: 40,
-                          ),
-                        ),
-
-                      // 4. MARCADOR DEL CONDUCTOR (Cuando ya viene en camino)
-                      if (_driverPosition != null)
-                        Marker(
-                          point: _driverPosition!,
-                          width: 45,
-                          height: 45,
-                          child: const Icon(
-                            Icons.directions_car_filled,
-                            size: 40,
-                            color: Colors.black,
-                          ),
-                        ),
-                      // MODIFICACIÓN AQUÍ: DIBUJAR PEAJES DETECTADOS
-                      // =======================================================
-                      if (_tripDesglose != null &&
-                          _tripDesglose?['peajes_detalles'] != null)
-                        ...(_tripDesglose?['peajes_detalles'] as List).map((p) {
-                          return Marker(
-                            point: LatLng(
-                              (p['lat'] as num).toDouble(),
-                              (p['lng'] as num).toDouble(),
-                            ),
-                            width: 35,
-                            height: 35,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: Colors.amber[900]!,
-                                  width: 2,
-                                ),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Colors.black26,
-                                    blurRadius: 4,
-                                    offset: Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: Icon(
-                                Icons.toll, // Icono de peaje
-                                color: Colors.amber[900],
-                                size: 20,
-                              ),
-                            ),
-                          );
-                        }),
-                    ],
                   ),
                 ],
-              ],
-            ),
-          ),
-
-          // 2. BOTÓN DE MENÚ (Siempre arriba)
-          Positioned(
-            top: 50,
-            left: 20,
-            child: Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 8)],
-              ),
-              child: IconButton(
-                icon: const Icon(Icons.menu, color: Colors.black87),
-                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-              ),
-            ),
-          ),
-
-          // 3. BOTÓN MI UBICACIÓN (Solo si no hay viaje activo y no estamos en modo "fijar")
-          if (_tripState == TripState.IDLE && !_isPickingLocation)
-            Positioned(
-              bottom: 110,
-              right: 20,
-              child: _buildMapControlBtn(
-                Icons.my_location,
-                _moveToCurrentPosition,
               ),
             ),
 
-          // 4. BARRA DE BÚSQUEDA (Solo en estado inicial y no en modo "fijar")
-          if (_tripState == TripState.IDLE && !_isPickingLocation)
-            Positioned(
-              bottom: 30,
-              left: 20,
-              right: 20,
-              child: _buildSearchWidget(),
-            ),
-
-          // 5. PANEL DINÁMICO DE VIAJE (Solo si hay un proceso de viaje y NO estamos fijando en mapa)
-          if (_tripState != TripState.IDLE && !_isPickingLocation)
-            NotificationListener<DraggableScrollableNotification>(
-              onNotification: (notification) {
-                // Esto actualiza el valor internamente de forma ultra rápida
-                _sheetExtentNotifier.value = notification.extent;
-                return true;
-              },
-              child: DraggableScrollableSheet(
-                key: ValueKey(_tripState),
-                initialChildSize: _getInitialSheetSize(),
-                minChildSize: 0.12,
-                maxChildSize: _getMaxSheetSize(),
-                snap: false, // Fluidez total solicitada
-                builder: (context, scrollController) {
-                  return Container(
-                    decoration: const BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.vertical(
-                        top: Radius.circular(25),
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black12,
-                          blurRadius: 15,
-                          spreadRadius: 5,
-                        ),
-                      ],
-                    ),
-                    child: SingleChildScrollView(
-                      controller: scrollController,
-                      physics: const ClampingScrollPhysics(),
-                      child: Column(
-                        children: [
-                          Container(
-                            width: 40,
-                            height: 4,
-                            margin: const EdgeInsets.symmetric(vertical: 12),
-                            decoration: BoxDecoration(
-                              color: Colors.grey[300],
-                              borderRadius: BorderRadius.circular(2),
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // --- TÍTULO: "¿A dónde VAMOS hoy?" ---
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(25, 20, 25, 10),
+                      child: RichText(
+                        text: TextSpan(
+                          style: GoogleFonts.montserrat(
+                            fontSize: 26,
+                            fontWeight: FontWeight.w900,
+                            color: AppColors.darkBlue,
+                            letterSpacing: -0.5,
+                          ),
+                          children: [
+                            const TextSpan(text: "¿A dónde "),
+                            TextSpan(
+                              text: "VAMOS",
+                              style: TextStyle(color: AppColors.primaryGreen),
                             ),
-                          ),
-                          ValueListenableBuilder<double>(
-                            valueListenable: _sheetExtentNotifier,
-                            builder: (context, extent, child) {
-                              return _buildDynamicSheetContent(
-                                extent,
-                              ); // Pasamos el extent actual
-                            },
-                          ),
-                          const SizedBox(height: 20),
-                        ],
+                            const TextSpan(text: " hoy?"),
+                          ],
+                        ),
                       ),
                     ),
-                  );
-                },
+
+                    const SizedBox(height: 15),
+
+                    // --- BUSCADOR PREMIUM ---
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: _buildSearchWidgetPremium(),
+                    ),
+
+                    // --- DESTINOS RECIENTES (AHORA DEBAJO DEL BUSCADOR) ---
+                    if (_recentPlaces.isNotEmpty) ...[
+                      const SizedBox(height: 20),
+                      ..._recentPlaces
+                          .take(3)
+                          .map((place) => _buildRecentItemPremium(place)),
+                    ],
+
+                    const SizedBox(height: 35),
+
+                    // --- GRID DE SERVICIOS (FONDO AZUL) ---
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 25),
+                      child: Text(
+                        "NUESTROS SERVICIOS",
+                        style: GoogleFonts.montserrat(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: const Color(0xFF64748B),
+                          letterSpacing: 2,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 15),
+                    _buildServiceGrid(),
+
+                    const SizedBox(height: 30),
+
+                    // --- BANNER DE TUTORIAL ---
+                    _buildTutorialBanner(AppColors.primaryGreen),
+
+                    const SizedBox(height: 50),
+                  ],
+                ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
 
-          // 6. INTERFAZ DE SELECCIÓN MANUAL (PIN Y BOTONES)
-          if (_isPickingLocation) _buildMapPickerUI(),
+  // --- Botón de Menú con Alta Visibilidad ---
+  Widget _buildRoundMenuButton() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+        border: Border.all(color: Colors.grey.shade100),
+      ),
+      child: IconButton(
+        icon: const Icon(
+          Icons.menu_rounded,
+          color: AppColors.primaryGreen,
+          size: 28,
+        ),
+        onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+      ),
+    );
+  }
+
+  // --- Buscador Premium ---
+  Widget _buildSearchWidgetPremium() {
+    return GestureDetector(
+      onTap: () => _openSearchFromCurrentState(),
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 20,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.search_rounded,
+              color: AppColors.primaryGreen,
+              size: 28,
+            ),
+            const SizedBox(width: 15),
+            Text(
+              "Ingresa tu destino...",
+              style: GoogleFonts.montserrat(
+                fontSize: 16,
+                color: Colors.grey.shade500,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- Tarjetas de Servicios en AZUL OSCURO con iconos VERDES ---
+  Widget _buildServiceGrid() {
+    return SizedBox(
+      height: 125, // Un poco más alto para nombres de dos líneas
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        physics: const BouncingScrollPhysics(),
+        children: [
+          _serviceItem("Transporte\nCorporativo", Icons.business_rounded),
+          _serviceItem("Transporte\nEspecial", Icons.airport_shuttle_rounded),
+          _serviceItem("Turismo\ny Viajes", Icons.explore_rounded),
+          _serviceItem(
+            "Pacientes no\nMedicalizados",
+            Icons.health_and_safety_rounded,
+          ),
         ],
       ),
     );
   }
 
-  // --- PEGA ESTE MÉTODO FUERA DEL BUILD (Debajo de él) ---
-  Widget _buildMapPickerUI() {
-    final bool isCorporate = _currentUser.isCorporateMode;
-    final Color mainColor = isCorporate
-        ? const Color(0xFF1565C0)
-        : const Color(0xFF2E7D32);
+  Widget _serviceItem(String label, IconData icon) {
+    return Container(
+      width: 110, // Ancho ajustado para equilibrio visual
+      margin: const EdgeInsets.only(right: 15),
+      decoration: BoxDecoration(
+        color: AppColors.darkBlue, // FONDO AZUL OSCURO
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.darkBlue.withValues(alpha: 0.25),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
+          ),
+        ],
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.05),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              icon,
+              color: AppColors.primaryGreen,
+              size: 28,
+            ), // ICONO VERDE
+          ),
+          const SizedBox(height: 10),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.montserrat(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+                height: 1.2,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
+  // --- Recientes ajustados para fondo claro ---
+  Widget _buildRecentItemPremium(Map<String, dynamic> place) {
+    return ListTile(
+      visualDensity: VisualDensity.compact, // Más apretadito estilo Uber
+      contentPadding: const EdgeInsets.symmetric(horizontal: 25, vertical: 0),
+      leading: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: AppColors.primaryGreen.withValues(alpha: 0.1),
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(
+          Icons.history_rounded,
+          color: AppColors.primaryGreen,
+          size: 18,
+        ),
+      ),
+      title: Text(
+        place['name'] ?? "Ubicación",
+        style: GoogleFonts.montserrat(
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+          color: AppColors.darkBlue,
+        ),
+      ),
+      subtitle: Text(
+        place['address'] ?? "",
+        style: GoogleFonts.montserrat(
+          fontSize: 11,
+          color: Colors.grey.shade500,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      onTap: () => _handleSearchResult({
+        'destinationName': place['name'],
+        'destinationCoords': LatLng(place['lat'], place['lng']),
+        'originName': "Mi ubicación",
+        'originCoords': _currentPosition,
+        'isManualOrigin': false,
+      }),
+    );
+  }
+
+  // --- Banner de Tutorial ---
+  Widget _buildTutorialBanner(Color accentColor) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      // Eliminamos height: 160 para evitar el desbordamiento si el texto es grande
+      width: double.infinity,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(25),
+        gradient: LinearGradient(
+          colors: [accentColor, accentColor.withValues(alpha: 0.7)],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: accentColor.withValues(alpha: 0.3),
+            blurRadius: 15,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            right: -20,
+            bottom: -20,
+            child: Icon(
+              Icons.stars_rounded,
+              size: 140, // Un poco más pequeño para no empujar el layout
+              color: Colors.white.withValues(alpha: 0.1),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min, // Ocupa solo el espacio necesario
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  "¿Nuevo en VAMOS?",
+                  style: GoogleFonts.montserrat(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  "Mira nuestro tutorial de uso y\nsaca el máximo provecho.",
+                  style: GoogleFonts.montserrat(
+                    color: Colors.white.withValues(alpha: 0.9),
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 15),
+                // Usamos un ConstrainedBox para que el botón no sea excesivamente alto
+                SizedBox(
+                  height: 40, // Altura fija para el botón para ahorrar espacio
+                  child: ElevatedButton(
+                    onPressed: () {},
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: accentColor,
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text(
+                      "VER AHORA",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Modifica este método para usar _lastGeocodedPosition correctamente
+  void _handleMapCameraMovement(MapCamera camera) {
+    setState(() {
+      _mapCenter = camera.center;
+    });
+
+    // FILTRO: Si el movimiento es menor a 5 metros, no pidas dirección todavía
+    if (_lastGeocodedPosition != null) {
+      double distance = Geolocator.distanceBetween(
+        _lastGeocodedPosition!.latitude,
+        _lastGeocodedPosition!.longitude,
+        camera.center.latitude,
+        camera.center.longitude,
+      );
+      if (distance < 5) return;
+    }
+
+    _debounceGeocoding?.cancel();
+    _debounceGeocoding = Timer(const Duration(milliseconds: 500), () async {
+      // 1. Si el mapa se movió menos de 20 metros de la última geocodificación, no gastes ni un solo bit de datos.
+      if (_lastGeocodedPosition != null) {
+        double dist = Geolocator.distanceBetween(
+          _lastGeocodedPosition!.latitude,
+          _lastGeocodedPosition!.longitude,
+          camera.center.latitude,
+          camera.center.longitude,
+        );
+        if (dist < 20) return;
+      }
+
+      final data = await _searchService.getReverseGeocode(
+        camera.center.latitude,
+        camera.center.longitude,
+        persist: false, // <--- EXPLICITAMENTE FALSE PARA NO PAGAR API
+      );
+
+      if (data != null && mounted) {
+        setState(() {
+          _pickingAddress = data['name'] ?? "Ubicación seleccionada";
+
+          double sLat = (data['snapped_lat'] as num).toDouble();
+          double sLng = (data['snapped_lng'] as num).toDouble();
+          LatLng snappedPoint = LatLng(sLat, sLng);
+
+          // --- EL IMÁN PERFECTO ---
+          // Calculamos la distancia entre el toque del usuario y la calle
+          double distanceToRoad = Geolocator.distanceBetween(
+            camera.center.latitude,
+            camera.center.longitude,
+            sLat,
+            sLng,
+          );
+
+          // Si el usuario está a más de 15 metros (está en un edificio o parque),
+          // el imán lo atrae suavemente a la calle.
+          // Si está a menos de 15m, lo dejamos elegir su punto exacto en el andén.
+          if (distanceToRoad > 15 && camera.zoom > 16.5) {
+            _animatedMapMove(snappedPoint, camera.zoom);
+            _lastGeocodedPosition = snappedPoint;
+          } else {
+            _lastGeocodedPosition = camera.center;
+          }
+        });
+      }
+    });
+  }
+
+  Widget _buildMapPickerUI() {
+    final bool isSavingFavorite = _addressTypeToSave != null;
+
+    String mainLabel;
+    String buttonText;
+    Color activeColor;
+    IconData iconData;
+
+    if (isSavingFavorite) {
+      mainLabel = "CONFIGURAR FAVORITO";
+      buttonText = "GUARDAR FAVORITO"; // Simplificado
+      activeColor = AppColors.darkBlue;
+      iconData = Icons.bookmark_add_rounded;
+    } else if (_isPickingOrigin) {
+      mainLabel = "PUNTO DE RECOGIDA";
+      buttonText = "CONFIRMAR RECOGIDA";
+      activeColor = AppColors.primaryGreen;
+      iconData = Icons.person_pin_circle_rounded;
+    } else {
+      mainLabel = "DESTINO DEL VIAJE";
+      buttonText = "CONFIRMAR DESTINO";
+      activeColor = AppColors.darkBlue;
+      iconData = Icons.location_on_rounded;
+    }
+    if (_pickingAddress == "Buscando dirección...") {
+      buttonText = "BUSCANDO VÍA...";
+    }
     return Stack(
       children: [
-        // 1. PIN CENTRAL FIJO
         Center(
           child: Padding(
-            padding: const EdgeInsets.only(bottom: 35),
-            child: Icon(Icons.location_on, size: 50, color: mainColor),
-          ),
-        ),
-
-        // 2. 🔥 ETIQUETA FLOTANTE (Nivel Superior)
-        // Aparece justo encima del pin con la dirección que el backend va encontrando
-        Positioned(
-          top: MediaQuery.of(context).size.height * 0.40, // Ajuste de altura
-          left: 40,
-          right: 40,
-          child: Center(
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                // ignore: deprecated_member_use
-                color: Colors.black.withOpacity(0.85),
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: const [
-                  BoxShadow(color: Colors.black26, blurRadius: 10),
-                ],
-              ),
-              child: Text(
-                _pickingAddress, // <--- AQUÍ USAMOS LA VARIABLE
-                style: GoogleFonts.poppins(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+            padding: const EdgeInsets.only(bottom: 45),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.darkBlue,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.2),
+                        blurRadius: 15,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_pickingAddress == "Buscando dirección...")
+                        const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      else
+                        const Icon(
+                          Icons.gps_fixed,
+                          color: Colors.white,
+                          size: 14,
+                        ),
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 220),
+                          child: Text(
+                            _pickingAddress,
+                            style: GoogleFonts.montserrat(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
+                // El triángulo de la burbuja
+                SizedBox(
+                  width: 12,
+                  height: 8,
+                  child: CustomPaint(painter: _TrianglePainter()),
+                ),
+                const SizedBox(height: 5),
+                Container(
+                  height: 50,
+                  width: 50,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.15),
+                        blurRadius: 10,
+                      ),
+                    ],
+                    border: Border.all(color: activeColor, width: 3),
+                  ),
+                  child: Icon(iconData, color: activeColor, size: 28),
+                ),
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.2),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
 
-        // Controles de confirmación en la parte inferior
         Positioned(
-          bottom: 30,
-          left: 20,
-          right: 20,
-          child: SafeArea(
+          bottom: 0,
+          left: 0,
+          right: 0,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 30),
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                if (_isLoadingAddress)
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: const [
-                        BoxShadow(color: Colors.black12, blurRadius: 10),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          width: 15,
-                          height: 15,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: mainColor,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Text(
-                          "Obteniendo dirección...",
-                          style: GoogleFonts.poppins(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                SizedBox(
+                _buildMapControlBtn(Icons.my_location, _moveToCurrentPosition),
+                const SizedBox(height: 20),
+                Container(
                   width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: _isLoadingAddress ? null : _confirmMapSelection,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: mainColor,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(15),
+                  padding: const EdgeInsets.all(22),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(28),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.1),
+                        blurRadius: 30,
+                        offset: const Offset(0, -10),
                       ),
-                      elevation: 4,
-                    ),
-                    child: Text(
-                      "Confirmar Ubicación",
-                      style: GoogleFonts.poppins(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
+                    ],
                   ),
-                ),
-                const SizedBox(height: 10),
-                TextButton(
-                  onPressed: () {
-                    setState(() {
-                      // 1. Apagamos el modo selección de mapa
-                      _isPickingLocation = false;
-                      _isLoadingAddress = false;
-
-                      // 2. LÓGICA DE RETORNO INTELIGENTE:
-                      // Si ya teníamos una ruta calculada (puntos en el mapa),
-                      // restauramos el estado ROUTE_PREVIEW para que el modal vuelva a aparecer.
-                      if (_routePoints.isNotEmpty) {
-                        _tripState = TripState.ROUTE_PREVIEW;
-
-                        // Ajustamos la cámara para volver a ver la ruta completa
-                        _fitCameraToRoute();
-                      } else {
-                        // Si no había nada, ahí sí volvemos al estado inicial (Home)
-                        _tripState = TripState.IDLE;
-                      }
-                    });
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      // ignore: deprecated_member_use
-                      color: Colors.white.withOpacity(0.9),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      "Cancelar",
-                      style: GoogleFonts.poppins(
-                        color: Colors.red,
-                        fontWeight: FontWeight.bold,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: activeColor.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(15),
+                            ),
+                            child: Icon(iconData, color: activeColor, size: 24),
+                          ),
+                          const SizedBox(width: 15),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  mainLabel,
+                                  style: GoogleFonts.montserrat(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.grey.shade400,
+                                    letterSpacing: 1.2,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  _pickingAddress,
+                                  style: GoogleFonts.montserrat(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColors.darkBlue,
+                                    height: 1.1,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
+                      const SizedBox(height: 25),
+                      // Busca el GestureDetector del botón de confirmación y modifícalo así:
+                      GestureDetector(
+                        onTap:
+                            (_isLoadingAddress ||
+                                _pickingAddress == "Buscando dirección...")
+                            ? null // DESHABILITADO COMPLETAMENTE
+                            : _confirmMapSelection,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          width: double.infinity,
+                          height: 60,
+                          decoration: BoxDecoration(
+                            // Si está buscando o cargando, color gris. Si no, color activo.
+                            color:
+                                (_isLoadingAddress ||
+                                    _pickingAddress == "Buscando dirección...")
+                                ? Colors.grey.shade400
+                                : activeColor,
+                            borderRadius: BorderRadius.circular(18),
+                            boxShadow:
+                                (_isLoadingAddress ||
+                                    _pickingAddress == "Buscando dirección...")
+                                ? []
+                                : [
+                                    BoxShadow(
+                                      // ignore: deprecated_member_use
+                                      color: activeColor.withOpacity(0.3),
+                                      blurRadius: 12,
+                                      offset: const Offset(0, 6),
+                                    ),
+                                  ],
+                          ),
+                          child: Center(
+                            child: _isLoadingAddress
+                                ? const SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 3,
+                                    ),
+                                  )
+                                : Text(
+                                    buttonText, // Texto dinámico: "BUSCANDO VÍA..." o "CONFIRMAR..."
+                                    style: GoogleFonts.montserrat(
+                                      fontWeight: FontWeight.w800,
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                      letterSpacing: 0.8,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 15),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 55,
+                        child: TextButton(
+                          onPressed: () {
+                            setState(() {
+                              _isPickingLocation = false;
+                              _addressTypeToSave = null;
+                              _isPickingOrigin = false; // Reset esencial
+
+                              // Si ya existe una ruta (puntos guardados), volvemos al resumen
+                              if (_routePoints.isNotEmpty &&
+                                  _destinationCoordinates != null) {
+                                _tripState = TripState.ROUTE_PREVIEW;
+                                // Ajustamos la cámara para ver la ruta que ya teníamos
+                                _fitCameraToRoute();
+                              } else {
+                                // Si no hay nada, volvemos al inicio
+                                _tripState = TripState.DASHBOARD;
+                                _resetApp();
+                              }
+                            });
+                          },
+                          style: TextButton.styleFrom(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(18),
+                              side: BorderSide(
+                                color: AppColors.darkBlue.withValues(
+                                  alpha: 0.15,
+                                ),
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                          child: Text(
+                            "CANCELAR",
+                            style: GoogleFonts.montserrat(
+                              color: AppColors.darkBlue.withValues(alpha: 0.7),
+                              fontWeight: FontWeight.w800,
+                              fontSize: 12,
+                              letterSpacing: 1.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -1345,9 +2101,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       ],
     );
   }
-  // ===============================================================
-  // 4. WIDGETS Y LÓGICA DE INTERFAZ
-  // ===============================================================
 
   Widget _buildMinifiedHeader() {
     return Padding(
@@ -1550,38 +2303,38 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildRoutePreviewContent(StateSetter setModalState) {
     final isCorp = _currentUser.isCorporateMode;
-    final primaryColor = isCorp
-        ? const Color(0xFF1565C0)
-        : AppColors.primaryGreen;
+    final primaryColor = isCorp ? AppColors.darkBlue : AppColors.primaryGreen;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
-        crossAxisAlignment:
-            CrossAxisAlignment.start, // Alineación a la izquierda
+        // 1. Agregamos esto para que la columna no ocupe espacio infinito
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildTimeSelector(primaryColor, setModalState),
-          const SizedBox(height: 20),
+          const SizedBox(
+            height: 15,
+          ), // Reducimos un poco los espacios de 20 a 15
 
           _sectionLabel("VAMOS PARA"),
           _buildTripDetailsCard(primaryColor, setModalState),
 
-          const SizedBox(height: 20),
+          const SizedBox(height: 15),
           _sectionLabel("¿EN CUÁL CARRO NOS VAMOS?"),
           _buildVehicleSelector(setModalState),
 
-          const SizedBox(height: 5),
-          _buildPriceTicket(setModalState),
+          // 2. IMPORTANTE: Si el ticket de precio es muy grande, podría causar el error
+          Flexible(child: _buildPriceTicket(setModalState)),
 
-          const SizedBox(height: 15),
+          const SizedBox(height: 10),
           _sectionLabel("¿CÓMO VAS A PAGAR?"),
           _buildPaymentSelector(setModalState),
 
           const SizedBox(height: 20),
           _buildRequestButton(primaryColor),
+          const SizedBox(height: 10),
 
-          const SizedBox(height: 5),
           Center(
             child: TextButton(
               onPressed: () => _resetApp(),
@@ -1617,41 +2370,44 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   // Determina qué tan abierto empieza el panel según el estado
+  // 1. Determina el tamaño de apertura (Lo que ve el usuario apenas carga el estado)
   double _getInitialSheetSize() {
     switch (_tripState) {
       case TripState.CALCULATING:
-        return 0.22;
+        return 0.42; // Aumentamos para que se vea toda la animación Premium y el checklist
       case TripState.ROUTE_PREVIEW:
-        return 0.45;
+        return 0.48;
       case TripState.SEARCHING_DRIVER:
-        return 0.35;
+        return 0.38;
       case TripState.DRIVER_ON_WAY:
-        return 0.40;
-      case TripState.IN_TRIP:
-        return 0.30;
-      case TripState.PAYMENT:
         return 0.45;
+      case TripState.IN_TRIP:
+        return 0.35;
+      case TripState.PAYMENT:
+        return 0.50;
       default:
         return 0.40;
     }
   }
 
+  // 2. Determina el límite superior (El "techo" del modal)
   double _getMaxSheetSize() {
     switch (_tripState) {
       case TripState.CALCULATING:
-        return 0.22;
+        // Ahora el máximo (0.45) es mayor al inicial (0.42). Ya no habrá bloqueo.
+        return 0.45;
       case TripState.ROUTE_PREVIEW:
-        return 0.85; // El de la selección de vehículo sí es largo
+        return 0.50; // Permitimos que suba casi todo para elegir el carro cómodamente
       case TripState.SEARCHING_DRIVER:
-        return 0.40; // Buscando conductor es corto
+        return 0.50;
       case TripState.DRIVER_ON_WAY:
-        return 0.55; // Info del conductor es mediana
+        return 0.85; // Permitimos subir para ver bien la foto del conductor y placa
       case TripState.IN_TRIP:
-        return 0.40; // En viaje es corto
+        return 0.45;
       case TripState.PAYMENT:
-        return 0.50; // Pago es mediano
+        return 0.60;
       default:
-        return 0.85;
+        return 0.90;
     }
   }
 
@@ -1735,56 +2491,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildLoadingRouteContent() {
     final isCorp = _currentUser.isCorporateMode;
-    final color = isCorp ? const Color(0xFF1565C0) : AppColors.primaryGreen;
+    final color = isCorp ? AppColors.darkBlue : AppColors.primaryGreen;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 10),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Un indicador lineal animado
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: LinearProgressIndicator(
-              // ignore: deprecated_member_use
-              backgroundColor: color.withOpacity(0.1),
-              valueColor: AlwaysStoppedAnimation<Color>(color),
-              minHeight: 6,
-            ),
-          ),
-          const SizedBox(height: 25),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Icono con una pequeña animación (puedes usar un Spinner si prefieres)
-              SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(color),
-                ),
-              ),
-              const SizedBox(width: 15),
-              Text(
-                "Buscando la mejor ruta...",
-                style: GoogleFonts.poppins(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.grey[800],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            "Estamos cotizando servicios de ${isCorp ? 'Empresa' : 'VAMOS'}",
-            style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[500]),
-          ),
-          const SizedBox(height: 10),
-        ],
-      ),
-    );
+    return _AnimatedChecklist(color: color, isCorp: isCorp);
   }
 
   // Widget de la flecha que pides
@@ -1863,34 +2572,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildRequestButton(Color color) {
-    bool isScheduled = _scheduledAt != null;
-
     return SizedBox(
       width: double.infinity,
       height: 56,
       child: ElevatedButton(
-        onPressed: _totalPassengers > 0
-            ? () {
-                // 2. EJECUTAR LA LÓGICA DE SOLICITUD
-                _handleTripRequest();
-              }
-            : null,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: color,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(15),
-          ),
-          elevation: 2,
-        ),
+        onPressed: () {
+          // Si el origen ya fue confirmado (por buscador o por mapa), pedimos el viaje
+          if (_isOriginConfirmed) {
+            _handleTripRequest();
+          } else {
+            // Si no, lo mandamos a que mueva el pin de recogida primero
+            _startPickupConfirmation();
+          }
+        },
         child: Text(
-          isScheduled
-              ? "Programar para el ${DateFormat('dd/MM HH:mm').format(_scheduledAt!)}"
-              : "Solicitar Viaje Ahora",
-          style: GoogleFonts.poppins(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 16,
-          ),
+          "Confirmar este servicio",
+          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
         ),
       ),
     );
@@ -1901,127 +2598,160 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: Colors.grey.shade100),
       ),
       child: Column(
         children: [
-          // --- SECCIÓN DESTINO ---
+          // --- FILA 1: ORIGEN (RECOGIDA) ---
+          _buildLocationRow(
+            icon: Icons.radio_button_checked,
+            iconColor: AppColors.primaryGreen,
+            label: "PUNTO DE RECOGIDA",
+            address: _originName ?? "Mi ubicación",
+            onEdit: () {
+              // NO usar Navigator.pop aquí
+              _startPickupConfirmation(); // Esto activará el modo mapa automáticamente
+            },
+          ),
+
+          // Línea conectora visual entre puntos
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 25),
+            child: Row(
+              children: [
+                Container(width: 2, height: 15, color: Colors.grey.shade200),
+                const Expanded(child: Divider(height: 1, indent: 20)),
+              ],
+            ),
+          ),
+
+          // --- FILA 2: DESTINO ---
+          _buildLocationRow(
+            icon: Icons.location_on,
+            iconColor: AppColors.darkBlue,
+            label: "INFORMACIÓN DEL VIAJE",
+            address: _destinationName ?? "Seleccionar destino",
+            info: "$_tripDistance • $_tripDuration aprox.",
+            onEdit: () {
+              // NO usar Navigator.pop aquí
+              _openSearchFromCurrentState(); // Abre el buscador directamente
+            },
+          ),
+
+          const Divider(height: 1),
+
+          // --- SECCIÓN PASAJEROS (Mantenemos tu lógica pero con estilo limpio) ---
           InkWell(
             onTap: () async {
-              final result = await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => SearchDestinationScreen(
-                    currentPosition: _currentPosition,
-                    initialOriginName: _originName,
-                    initialOriginCoords: _originCoordinates,
-                  ),
-                ),
-              );
-              if (result != null) _handleSearchResult(result);
+              await _showBeneficiarySelector();
+              setModalState(() {});
             },
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  const Icon(
-                    Icons.location_on,
-                    color: Colors.redAccent,
-                    size: 20,
-                  ),
+                  Icon(Icons.person_add_alt_1_rounded, color: color, size: 20),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _destinationName ?? "Seleccionar destino",
+                          "Pasajeros",
                           style: GoogleFonts.poppins(
-                            fontSize: 14,
+                            fontSize: 11,
+                            color: Colors.grey[500],
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          _getPassengerSummary(),
+                          style: GoogleFonts.poppins(
+                            fontSize: 13,
                             fontWeight: FontWeight.w600,
+                            color: AppColors.darkBlue,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        // USAMOS LAS VARIABLES AQUÍ (Esto quita los warnings)
-                        Text(
-                          "$_tripDistance • $_tripDuration aprox.",
-                          style: GoogleFonts.poppins(
-                            fontSize: 11,
-                            color: Colors.grey[500],
-                            fontWeight: FontWeight.w400,
-                          ),
-                        ),
                       ],
                     ),
                   ),
-                  Icon(
-                    Icons.edit_location_alt_outlined,
-                    color: color.withValues(alpha: 0.4),
-                    size: 18,
-                  ),
+                  Icon(Icons.chevron_right, color: Colors.grey[400]),
                 ],
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
 
-          const Divider(height: 1, indent: 50, endIndent: 20),
-
-          // --- SECCIÓN PASAJEROS ---
-          InkWell(
-            onTap: () async {
-              await _showBeneficiarySelector();
-              setModalState(() {});
-            },
-            borderRadius: const BorderRadius.vertical(
-              bottom: Radius.circular(20),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.person_add_alt_1_rounded,
-                        color: color,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          "Añade un pasajero a tu viaje",
-                          style: GoogleFonts.poppins(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                      ),
-                      const Icon(
-                        Icons.chevron_right,
-                        color: Colors.grey,
-                        size: 20,
-                      ),
-                    ],
+  Widget _buildLocationRow({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required String address,
+    required VoidCallback onEdit,
+    String? info, // <--- Nuevo parámetro para la distancia/tiempo
+  }) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+      child: Row(
+        children: [
+          Icon(icon, color: iconColor, size: 18),
+          const SizedBox(width: 15),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: GoogleFonts.poppins(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.grey[400],
+                    letterSpacing: 0.5,
                   ),
-                  if (_selectedPassengerIds.isNotEmpty || _includeMyself)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 32, top: 4),
-                      child: Text(
-                        _getPassengerSummary(),
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: color,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                ),
+                Text(
+                  address,
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.darkBlue,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                // --- MOSTRAR DISTANCIA Y TIEMPO SI EXISTE ---
+                if (info != null)
+                  Text(
+                    info,
+                    style: GoogleFonts.poppins(
+                      fontSize: 11,
+                      color: Colors.grey[500],
+                      fontWeight: FontWeight.w400,
                     ),
-                ],
+                  ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: onEdit,
+            style: TextButton.styleFrom(
+              backgroundColor: Colors.grey[50],
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: Text(
+              "Cambiar",
+              style: GoogleFonts.poppins(
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                color: AppColors.primaryGreen,
               ),
             ),
           ),
@@ -2058,7 +2788,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         date.day,
         time.hour,
         time.minute,
-      );
+      ).toLocal();
     });
 
     // Paso 2: Forzar actualización instantánea del Modal
@@ -2266,31 +2996,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // NUEVA VALIDACIÓN:
     if (_currentUser.documentNumber.isEmpty ||
         _currentUser.documentNumber == "0") {
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text("Perfil Incompleto"),
-          content: const Text(
-            "Para generar el seguro de viaje (FUEC), necesitamos tu número de cédula en el perfil.",
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text("Entendido"),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(ctx);
-                Navigator.pushNamed(
-                  context,
-                  '/profile_edit',
-                ); // Ajusta a tu ruta de perfil
-              },
-              child: const Text("Ir a Perfil"),
-            ),
-          ],
-        ),
-      );
+      _showIncompleteProfileDialog();
       return;
     }
 
@@ -2396,6 +3102,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _processTripCreation() async {
+    if (!_isOriginConfirmed && _tripState == TripState.CONFIRMING_PICKUP) {
+      _showAppSnackBar(
+        "Por favor confirma tu punto de partida en el mapa",
+        isError: true,
+      );
+      return;
+    }
     if (_currentPosition == null || _destinationCoordinates == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Error: Ubicación no disponible.")),
@@ -2440,17 +3153,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       // 3. DEFINICIÓN DE MÉTODO DE PAGO PARA EL BACKEND
 
       String backendPaymentId = 'EFECTIVO';
-      if (_selectedMethod?.id == 'cash') backendPaymentId = 'EFECTIVO';
-      if (_selectedMethod?.id == 'corp') backendPaymentId = 'CORPORATIVO';
-      if (_selectedMethod?.type == PaymentMethodType.card)
-        // ignore: curly_braces_in_flow_control_structures
-        backendPaymentId = 'TARJETA';
 
+      // Si el usuario tiene el switch de Modo Corporativo encendido,
+      // forzamos que el método de pago sea CORPORATIVO para el FUEC.
+      if (_currentUser.isCorporateMode) {
+        backendPaymentId = 'CORPORATIVO';
+      } else {
+        // Si es modo personal, mapeamos según lo seleccionado
+        if (_selectedMethod?.id == 'cash') backendPaymentId = 'EFECTIVO';
+        if (_selectedMethod?.type == PaymentMethodType.card)
+          // ignore: curly_braces_in_flow_control_structures
+          backendPaymentId = 'TARJETA';
+      }
+
+      print("💳 MÉTODO DE PAGO ENVIADO: $backendPaymentId");
       // 4. LLAMADA AL SERVICIO CON LA DIRECCIÓN REAL
       String? tripId = await tripService
           .createTripRequest(
             currentUser: _currentUser,
-            origin: _currentPosition!,
+            origin: _originCoordinates ?? _currentPosition!,
             destination: _destinationCoordinates!,
             originAddress:
                 realOriginAddress, // <--- AQUÍ PASAMOS LA DIRECCIÓN REAL
@@ -2484,44 +3205,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         );
       }
     } catch (e) {
-      _resetApp(); // Volvemos al mapa
+      debugPrint("🚨 Error creando viaje: $e");
+
       if (mounted) {
-        showDialog(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(15),
-            ),
-            title: const Text("Lo sentimos"),
-            content: Text(
-              e.toString(),
-            ), // Aquí aparecerá "No hay conductores disponibles"
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text(
-                  "Entendido",
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
-        );
+        // 1. PRIMERO: Limpiamos la app (esto quita el modal de "Buscando")
+        _resetApp();
+
+        // 2. SEGUNDO: Procesamos el mensaje de error
+        String errorMsg = e.toString();
+        if (e is DioException) {
+          errorMsg = e.response?.data['message'] ?? e.message;
+        }
+
+        // 3. TERCERO: Mostramos la alerta sobre la pantalla ya limpia (DASHBOARD)
+        if (errorMsg.contains("conductor") || errorMsg.contains("disponible")) {
+          _showNoDriversDialog(errorMsg);
+        } else {
+          _showAppSnackBar(errorMsg, isError: true);
+        }
       }
     }
-  }
-
-  void _showErrorSnackBar(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message, style: GoogleFonts.poppins(color: Colors.white)),
-        backgroundColor: Colors.redAccent,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        duration: const Duration(seconds: 4),
-      ),
-    );
   }
 
   // NUEVO: Diálogo de éxito para viajes programados
@@ -3134,27 +3837,44 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _resetApp() {
+    FocusScope.of(context).unfocus(); // <--- CIERRA EL TECLADO SI ESTÁ ABIERTO
+    _routeDrawingController
+        ?.stop(); // <--- Detenemos la animación si está corriendo
+    _routeDrawingController?.reset();
     _simulationTimer?.cancel();
     _waitTimer?.cancel();
     _waitTimer = null;
 
     if (mounted) {
       setState(() {
-        _tripState = TripState.IDLE;
+        _tripState = TripState.DASHBOARD;
+        _fitCameraToRoute(); // Esto centrará al usuario automáticamente
+
+        AuthService.isTripActive = false;
+        _isCalculatingRoute =
+            false; // <--- IMPORTANTE: Detener animaciones de carga
+        _isPickingLocation = false;
+        _isPickingOrigin = false;
+        _isOriginConfirmed = false;
+        _animatedRoutePoints = []; // <--- AÑADE ESTA LÍNEA
+
         _routePoints = [];
         _destinationCoordinates = null;
         _destinationName = null;
-        _originCoordinates = null; // Sugerencia: Limpiar origen también
-        _sheetExtentNotifier.value = 0.45; // Resetear posición del panel
+        _originCoordinates = null;
+        _sheetExtentNotifier.value = 0.45;
         _driverPosition = null;
         _scheduledAt = null;
-        _currentTripId = null; // IMPORTANTE: Limpiar ID del viaje
-        _driverData = null; // IMPORTANTE: Limpiar datos del conductor (Vacío 2)
+        _currentTripId = null;
+        _driverData = null;
         _selectedPassengerIds.clear();
         _includeMyself = true;
         _driverEta = "Calculando...";
         _tripDesglose = null;
+        // En tu función _resetApp() añade:
+        _isOriginConfirmed = false;
       });
+      // Volvemos a la vista general
       _moveToCurrentPosition();
     }
   }
@@ -3164,7 +3884,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget _buildMapControlBtn(IconData icon, VoidCallback tap) {
     // Detectamos el color según el modo actual
     final Color iconColor = _currentUser.isCorporateMode
-        ? const Color(0xFF1565C0)
+        ? AppColors.darkBlue
         : AppColors.primaryGreen;
 
     return Container(
@@ -3190,55 +3910,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   // --- WIDGET BUSCADOR ESTILO INPUT ---
-  Widget _buildSearchWidget() => GestureDetector(
-    // --- DENTRO DE _buildSearchWidget EN HOME_SCREEN ---
-    onTap: () async {
-      if (_originCoordinates == null) {
-        _originCoordinates = _currentPosition;
-        _originName = "Mi ubicación";
-      }
-      final result = await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => SearchDestinationScreen(
-            currentPosition: _currentPosition,
-            initialOriginName: _originName,
-            initialOriginCoords: _originCoordinates,
-          ),
-        ),
-      );
-      if (result != null) _handleSearchResult(result);
-    },
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.circle,
-            size: 12,
-            color: _currentUser.isCorporateMode
-                ? Colors.blue[800]
-                : AppColors.primaryGreen,
-          ),
-          const SizedBox(width: 15),
-          Text(
-            "¿A dónde vamos?",
-            style: GoogleFonts.poppins(
-              fontSize: 14,
-              color: Colors.grey.shade600,
-            ),
-          ),
-          const Spacer(),
-          const Icon(Icons.search, color: Colors.grey),
-        ],
-      ),
-    ),
-  );
 
   Widget _buildSearchingDriverContent() => Column(
     mainAxisSize: MainAxisSize.min,
@@ -3376,7 +4047,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.star, size: 14, color: Colors.orange),
+                    const Icon(
+                      Icons.star,
+                      size: 14,
+                      color: AppColors.primaryGreen,
+                    ),
                     Text(
                       " 4.8",
                       style: GoogleFonts.poppins(
@@ -3957,7 +4632,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  // Función auxiliar para no repetir el código del Navigator.push
   void _openSearchFromCurrentState() async {
     final result = await Navigator.push(
       context,
@@ -3970,47 +4644,121 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       ),
     );
 
-    // Aquí procesas el resultado igual que en el _buildSearchWidget
-    if (result != null) _handleSearchResult(result);
+    // 🔥 CLAVE: Al volver de la pantalla de búsqueda, SIEMPRE recargamos
+    if (mounted) {
+      await _loadRecentPlaces(); // Llama al API que acabamos de limpiar arriba
+    }
+
+    if (result != null) {
+      _handleSearchResult(result);
+    }
   }
 
   void _handleSearchResult(dynamic result) {
     if (result == null) return;
 
-    try {
-      setState(() {
-        // Si el usuario elige fijar en mapa
-        if (result is Map && result['isMapPick'] == true) {
-          _tripState = TripState.IDLE; // Ocultamos el modal Draggable
-          _isPickingLocation = true; // Activamos el PIN central
+    setState(() {
+      // Si el usuario toca "Fijar en el mapa" desde el buscador
+      if (result is Map && result['isMapPick'] == true) {
+        _isPickingLocation = true;
+        _isPickingOrigin = result['isPickingOrigin'] ?? false;
+        _referenceOriginCoords =
+            null; // MODO MANUAL: Matamos la restricción de 100m
 
-          _isPickingOrigin = result['isPickingOrigin'] ?? false;
-          return; // Detenemos aquí, el build se encarga del resto
-        }
+        LatLng initialPoint = _isPickingOrigin
+            ? (_currentPosition ?? _defaultLocation)
+            : (_destinationCoordinates ?? _currentPosition ?? _defaultLocation);
 
-        // Si el usuario seleccionó una dirección de la lista
-        if (result is Map && result.containsKey('destinationCoords')) {
-          _originName = result['originName'] ?? "Mi ubicación";
-          _originCoordinates = result['originCoords'];
-          _destinationName = result['destinationName'];
-          _destinationCoordinates = result['destinationCoords'];
-
-          _tripState = TripState.CALCULATING;
-          _sheetExtentNotifier.value = 0.22;
-        }
-      });
-
-      // Solo si tenemos coordenadas de destino calculamos ruta
-      if (_tripState == TripState.CALCULATING &&
-          _destinationCoordinates != null) {
-        Future.delayed(const Duration(milliseconds: 350), () {
-          if (mounted) _calculateRouteAndPrice(_destinationCoordinates!);
-        });
+        _animatedMapMove(initialPoint, _isPickingOrigin ? 17.0 : 18.5);
+        return;
       }
-    } catch (e) {
-      debugPrint("Error procesando búsqueda: $e");
-      _resetApp();
+
+      // Si el usuario selecciona una dirección de la lista
+      // Caso C: El usuario seleccionó una dirección de la lista
+      if (result is Map && result.containsKey('destinationCoords')) {
+        _destinationName = result['destinationName'];
+        _destinationCoordinates =
+            result['destinationCoords']; // Ya viene snapped desde la Search Screen
+        _originName = result['originName'];
+        _originCoordinates = result['originCoords'];
+
+        _referenceOriginCoords = result['originCoords'];
+
+        // SI ES BUSCADOR: Uber deja el origen confirmado pero te permite ajustar el pin si quieres
+        _isOriginConfirmed = true;
+        _calculateRouteAndPrice(_destinationCoordinates!);
+      }
+    });
+  }
+
+  void _fitCameraToRoute({double? extent}) {
+    if (!_isMapReady || !mounted) return;
+
+    // CASO A: DASHBOARD (Sin ruta activa)
+    // Siempre hace zoom a tu ubicación actual
+    if (_tripState == TripState.DASHBOARD) {
+      if (_currentPosition != null) {
+        _animatedMapMove(_currentPosition!, 15.5);
+      }
+      return;
     }
+
+    // CASO B: VIAJE ACTIVO (Calculando o Preview)
+    if (_routePoints.isNotEmpty) {
+      try {
+        double currentExtent = extent ?? _sheetExtentNotifier.value;
+        final bounds = LatLngBounds.fromPoints(_routePoints);
+
+        // Calculamos cuánto espacio ocupa el modal en píxeles
+        double screenHeight = MediaQuery.of(context).size.height;
+        double modalPixels = screenHeight * currentExtent;
+
+        // Ajustamos la cámara con un padding inferior dinámico
+        _mapController.fitCamera(
+          CameraFit.bounds(
+            bounds: bounds,
+            padding: EdgeInsets.only(
+              top: 100,
+              bottom:
+                  modalPixels + 60, // Deja la ruta siempre por encima del modal
+              left: 70,
+              right: 70,
+            ),
+          ),
+        );
+      } catch (e) {
+        debugPrint("Error en auto-zoom: $e");
+      }
+    }
+  }
+
+  // Nuevo método para cuando el usuario elige el vehículo (Captura 3 -> 4)
+  void _startPickupConfirmation() {
+    LatLng initialPoint =
+        _originCoordinates ?? _currentPosition ?? _defaultLocation;
+
+    setState(() {
+      _tripState = TripState.CONFIRMING_PICKUP;
+      _isPickingLocation = true;
+      _isPickingOrigin = true;
+      _isOriginConfirmed = false;
+      _mapCenter = initialPoint;
+    });
+
+    _animatedMapMove(initialPoint, 17.0);
+
+    // Pedir dirección inmediata al entrar
+    _searchService
+        .getReverseGeocode(initialPoint.latitude, initialPoint.longitude)
+        .then((data) {
+          if (data != null && mounted) {
+            setState(() {
+              _pickingAddress = data['name'] ?? "Ubicación en mapa";
+              _pickingSubAddress = data['address'] ?? "";
+              _lastGeocodedPosition = initialPoint;
+            });
+          }
+        });
   }
 
   void _startTrackingListener(String tripId) async {
@@ -4047,27 +4795,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             _checkActiveTrip(); // Esto disparará la UI de "Conductor en camino"
           }
           // 🔥 NUEVO: Manejo de la cancelación automática
+          // Busca esta parte y reemplázala:
+          // 🔥 EVENTO: El motor de búsqueda no encontró a nadie
           else if (event == 'ViajeCancelado') {
             if (mounted) {
-              _resetApp(); // Limpia el mapa y quita la pantalla de carga
-
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    data['mensaje'] ?? "No hay conductores disponibles cerca.",
-                    style: GoogleFonts.poppins(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  backgroundColor: Colors.orange[800],
-                  behavior: SnackBarBehavior.floating,
-                  duration: const Duration(seconds: 4),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  margin: const EdgeInsets.all(20),
-                ),
+              // Igual que arriba: Primero resetear, luego avisar.
+              _resetApp();
+              _showNoDriversDialog(
+                data['mensaje'] ?? "No se encontraron conductores cerca.",
               );
             }
           }
@@ -4213,16 +4948,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (_currentPosition == null) return;
 
     try {
-      final result = await _routeService.getRoute(
-        driverPos, // Origen: El carro del conductor
-        _currentPosition!, // Destino: Tú (el pasajero)
-        tipoVehiculo: _getDbCategory(_selectedServiceCategory),
-      );
+      final result = await _routeService
+          .getRoute(
+            driverPos, // <--- CAMBIADO (Origen: El carro)
+            _currentPosition!, // <--- CAMBIADO (Destino: Tú)
+            idContrato: _currentUser.isCorporateMode
+                ? int.tryParse(_currentUser.companyUuid ?? '1')
+                : null,
+            tipoVehiculo: _getDbCategory(_selectedServiceCategory),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (mounted) {
         setState(() {
-          _routePoints = result.points; // Dibujamos la ruta hacia el pasajero
-          // Actualizamos el ETA con el tiempo real de la ruta
+          _routePoints = result.points;
           _driverEta = "${(result.durationSeconds / 60).round()} min";
         });
         _mapController.fitCamera(
@@ -4303,6 +5042,68 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  // GESTOR DEL DRAGGABLE SHEET
+  Widget _buildDraggablePanel() {
+    return NotificationListener<DraggableScrollableNotification>(
+      onNotification: (notification) {
+        // 1. Actualizamos el valor del extent (altura del modal)
+        _sheetExtentNotifier.value = notification.extent;
+
+        // 2. 🔥 AUTO-ZOOM DINÁMICO:
+        // Cada vez que el dedo mueve el modal, le pedimos al mapa que se re-ajuste
+        _fitCameraToRoute(extent: notification.extent);
+
+        return true;
+      },
+      child: DraggableScrollableSheet(
+        key: ValueKey(_tripState),
+        initialChildSize: _getInitialSheetSize(),
+        minChildSize: 0.15,
+        maxChildSize: _getMaxSheetSize(),
+        snap: true,
+        snapSizes: [
+          if (_getInitialSheetSize() != _getMaxSheetSize())
+            _getInitialSheetSize(),
+          _getMaxSheetSize(),
+        ]..sort(),
+        builder: (context, scrollController) {
+          return Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+              boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 15)],
+            ),
+            child: SingleChildScrollView(
+              controller: scrollController,
+              physics: const BouncingScrollPhysics(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[300],
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  ValueListenableBuilder<double>(
+                    valueListenable: _sheetExtentNotifier,
+                    builder: (context, extent, child) {
+                      return _buildDynamicSheetContent(extent);
+                    },
+                  ),
+                  const SizedBox(height: 20),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   // Helper para iconos basado en tu Enum PaymentMethodType
   IconData _getPaymentIcon(PaymentMethodType type) {
     switch (type) {
@@ -4316,4 +5117,241 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         return Icons.account_balance;
     }
   }
+}
+
+class _PulseLoadingIcon extends StatefulWidget {
+  final Color color;
+  const _PulseLoadingIcon({required this.color});
+
+  @override
+  State<_PulseLoadingIcon> createState() => _PulseLoadingIconState();
+}
+
+class _PulseLoadingIconState extends State<_PulseLoadingIcon>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            // Círculos de pulso
+            ...List.generate(2, (index) {
+              final progress = (_controller.value + (index * 0.5)) % 1.0;
+              return Container(
+                width: 40 + (progress * 60),
+                height: 40 + (progress * 60),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: widget.color.withValues(alpha: 1.0 - progress),
+                    width: 2,
+                  ),
+                ),
+              );
+            }),
+            // Ícono Central con sombra
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: widget.color,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: widget.color.withValues(alpha: 0.4),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.map_rounded,
+                color: Colors.white,
+                size: 32,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _AnimatedChecklist extends StatefulWidget {
+  final Color color;
+  final bool isCorp;
+  const _AnimatedChecklist({required this.color, required this.isCorp});
+
+  @override
+  State<_AnimatedChecklist> createState() => _AnimatedChecklistState();
+}
+
+class _AnimatedChecklistState extends State<_AnimatedChecklist> {
+  int _currentStep = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Simulamos el progreso de los checks cada 800ms
+    _timer = Timer.periodic(const Duration(milliseconds: 800), (timer) {
+      if (mounted && _currentStep < 2) {
+        setState(() => _currentStep++);
+      } else {
+        _timer?.cancel();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 25),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // --- REEMPLAZAMOS EL PULSE POR UN ICONO ESTÁTICO PREMIUM ---
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: widget.color,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: widget.color.withValues(alpha: 0.2),
+                  blurRadius: 15,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: const Icon(Icons.map_rounded, color: Colors.white, size: 32),
+          ),
+
+          const SizedBox(height: 30),
+          Text(
+            "PREPARANDO TU VIAJE",
+            style: GoogleFonts.montserrat(
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+              color: AppColors.darkBlue,
+              letterSpacing: 1.5,
+            ),
+          ),
+          const SizedBox(height: 35),
+          Container(
+            padding: const EdgeInsets.all(15),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.grey.shade100),
+            ),
+            child: Column(
+              children: [
+                _buildStep("Optimizando trayecto vial", _currentStep >= 0),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Divider(height: 1, indent: 30),
+                ),
+                _buildStep("Verificando peajes y tarifas", _currentStep >= 1),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Divider(height: 1, indent: 30),
+                ),
+                _buildStep(
+                  widget.isCorp
+                      ? "Validando contrato empresarial"
+                      : "Buscando conductores VAMOS",
+                  _currentStep >= 2,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 25),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: LinearProgressIndicator(
+              backgroundColor: widget.color.withValues(alpha: 0.1),
+              valueColor: AlwaysStoppedAnimation<Color>(widget.color),
+              minHeight: 4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStep(String title, bool isDone) {
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 500),
+      opacity: isDone ? 1.0 : 0.4,
+      child: Row(
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 500),
+            child: Icon(
+              isDone ? Icons.check_circle : Icons.radio_button_unchecked,
+              color: isDone ? widget.color : Colors.grey.shade300,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            title,
+            style: GoogleFonts.poppins(
+              fontSize: 12,
+              fontWeight: isDone ? FontWeight.w600 : FontWeight.w400,
+              color: isDone ? AppColors.darkBlue : Colors.grey.shade400,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Esta clase va al final de todo el archivo lib/features/home/screens/home_screen.dart
+class _TrianglePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = AppColors.darkBlue
+      ..style = PaintingStyle.fill;
+
+    // Usamos el dibujo manual para evitar conflictos con clases "Path" de mapas
+    final path = ui.Path();
+    path.moveTo(0, 0);
+    path.lineTo(size.width, 0);
+    path.lineTo(size.width / 2, size.height);
+    path.close();
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) => false;
 }

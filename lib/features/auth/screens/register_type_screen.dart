@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
-import 'register_screen.dart';
-import 'register_natural_screen.dart';
+
 import 'dart:ui';
+import 'splash_screen.dart';
 
 class RegisterTypeScreen extends StatelessWidget {
   final String? emailPreIngresado;
@@ -78,39 +78,45 @@ class RegisterTypeScreen extends StatelessWidget {
                     icon: Icons.business_center_rounded,
                     title: "Empleado Corporativo",
                     subtitle: "Viaja con el respaldo de tu empresa.",
-                    accentColor: AppColors.darkBlue, // AZUL OSCURO
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => RegisterScreen(
-                          emailPreIngresado: emailPreIngresado,
-                        ),
-                      ),
-                    ),
+                    accentColor: AppColors.darkBlue,
+                    onTap: () =>
+                        _navigateToSplash(context, '/register_corporate'),
                   ),
 
                   const SizedBox(height: 25),
 
-                  // TARJETA NATURAL (VERDE)
+                  // TARJETA NATURAL
                   _OptionCard(
                     icon: Icons.person_rounded,
                     title: "Usuario Natural",
                     subtitle: "Viajes personales con pago inmediato.",
-                    accentColor: AppColors.primaryGreen, // VERDE
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => RegisterNaturalScreen(
-                          emailPreIngresado: emailPreIngresado,
-                        ),
-                      ),
-                    ),
+                    accentColor: AppColors.primaryGreen,
+                    onTap: () =>
+                        _navigateToSplash(context, '/register_natural'),
                   ),
                 ],
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  void _navigateToSplash(BuildContext context, String route) {
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 600),
+        pageBuilder: (context, animation, secondaryAnimation) => SplashScreen(
+          logoPath: 'assets/images/logo.png',
+          nextRoute: route,
+          email: emailPreIngresado, // Pasamos el correo que recibimos
+          isDark: false, // Estilo Light de usuario
+        ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
       ),
     );
   }

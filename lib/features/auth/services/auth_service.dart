@@ -1,13 +1,15 @@
 import 'dart:async';
 import 'dart:io';
-import '../../../core/network/api_client.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import '../../../core/models/user_model.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-// Para jsonEncode
-// Para http.post
-import 'package:flutter_dotenv/flutter_dotenv.dart'; // Para el baseUrl
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart'; // <--- 1. AGREGAR IMPORT
+
+import '../../../core/network/api_client.dart';
+import '../../../core/models/user_model.dart';
+import '../../../core/di/injection_container.dart';
+import '../../../core/services/storage_service.dart';
+import '../../../core/navigation/navigation_service.dart';
 
 // Busca esta línea y cámbiala:
 final String baseUrl =
@@ -28,29 +30,53 @@ enum AuthResponseStatus {
 
 class AuthService {
   static final ApiClient _api = ApiClient();
+  static bool isTripActive = false; // <--- AGREGAR ESTA LÍNEA
 
-  static const _storage = FlutterSecureStorage();
   static User? _currentUser;
   static User? get currentUser => _currentUser;
 
   // ===========================================================================
   // 1. SESIÓN Y ESTADO
   // ===========================================================================
+  static Future<Map<String, dynamic>> checkAccount(
+    String email,
+    String deviceId,
+  ) async {
+    try {
+      final response = await ApiClient().dio.post(
+        '/check-account',
+        data: {'email': email, 'device_id': deviceId},
+      );
+      return response.data['data'];
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        throw Exception('El correo no está registrado en VAMOS.');
+      }
+      throw Exception(
+        e.response?.data['message'] ?? 'Error al verificar cuenta',
+      );
+    }
+  }
 
   static Future<bool> checkAuthStatus() async {
     try {
-      final token = await _storage.read(key: 'auth_token');
-      if (token == null) {
-        return false;
-      }
+      final token = await sl<StorageService>().getToken();
+      if (token == null) return false;
 
-      final response = await ApiClient().dio.get('/me');
+      // Configurar el token en el header de Dio si no está
+      _api.dio.options.headers['Authorization'] = 'Bearer $token';
+
+      final response = await _api.dio.get('/me');
       if (response.statusCode == 200) {
         _currentUser = User.fromMap(response.data['data']);
         return true;
       }
       return false;
     } catch (e) {
+      // Si el token expiró o es inválido (401), borrarlo
+      if (e is DioException && e.response?.statusCode == 401) {
+        logout();
+      }
       return false;
     }
   }
@@ -61,23 +87,40 @@ class AuthService {
 
   static Future<void> logout() async {
     try {
+      // Avisar al servidor para invalidar el token
       await ApiClient().dio.post('/logout');
-    } catch (_) {}
-    _currentUser = null;
-    await _storage.delete(key: 'auth_token');
+    } catch (e) {
+      debugPrint("Error avisando al server: $e");
+    } finally {
+      // 2. CORRECCIÓN: Usar 'final' en lugar de 'const'
+      final storage = FlutterSecureStorage();
+      await storage.delete(key: 'auth_token');
+
+      _currentUser = null;
+      isTripActive = false;
+
+      // 3. PATEAR AL USUARIO: Si el contexto no está disponible, usamos el NavigatorService
+      NavigationService.navigatorKey.currentState?.pushNamedAndRemoveUntil(
+        '/',
+        (route) => false,
+      );
+    }
   }
 
-  static Future<Map<String, dynamic>> login(
-    String email,
-    String password,
-  ) async {
+  static Future<Map<String, dynamic>> login({
+    required String email,
+    required String password,
+    required String deviceId,
+    required String deviceName,
+  }) async {
     try {
       final response = await ApiClient().dio.post(
         '/login',
         data: {
           'email': email,
           'password': password,
-          'device_name': 'user_app_flutter',
+          'device_id': deviceId,
+          'device_name': deviceName,
         },
       );
 
@@ -85,21 +128,35 @@ class AuthService {
         final userData = response.data['data']['user'];
         final token = response.data['data']['token'];
         _currentUser = User.fromMap(userData);
-        await _storage.write(key: 'auth_token', value: token);
+
+        // --- ENROLAMIENTO DE SEGURIDAD (IGUAL A DRIVER) ---
+        // --- ENROLAMIENTO DE SEGURIDAD ACTUALIZADO ---
+        final storage = sl<StorageService>();
+        await storage.saveToken(token);
+
+        // Guardamos la contraseña asociada a este correo específico
+        await storage.saveAccountPassword(email, password);
+        // Guardamos que este es el último correo usado para el pre-fill
+        await storage.saveLastEmail(email);
+
+        await storage.setBiometricEnabled(true);
+
         return {'status': AuthResponseStatus.active, 'user': _currentUser};
       }
       return {'status': AuthResponseStatus.error};
     } on DioException catch (e) {
-      if (e.response?.statusCode == 422) {
-        throw Exception(e.response?.data['message'] ?? "Error de datos");
+      // Manejo de errores real del servidor
+      if (e.response != null && e.response?.data != null) {
+        final data = e.response!.data;
+        if (e.response!.statusCode == 403 || e.response!.statusCode == 422) {
+          // Si el servidor rechaza, limpiamos seguridad local por si acaso
+          await sl<StorageService>().deleteAll();
+        }
+        throw Exception(data['message'] ?? "Error de acceso");
       }
-      if (e.response?.statusCode == 403) {
-        throw Exception(e.response?.data['message'] ?? "Cuenta inactiva");
-      }
-      throw Exception("Error de conexión");
+      throw Exception("No hay conexión con el servidor");
     }
   }
-
   // ===========================================================================
   // 2. REGISTRO REAL (CONEXIÓN BACKEND)
   // ===========================================================================
@@ -215,13 +272,9 @@ class AuthService {
   static Future<bool> toggleAppMode(bool isTargetCorporate) async {
     if (_currentUser == null) return false;
 
-    // 1. Verificación local rápida
-    if (isTargetCorporate && !_currentUser!.canUseCorporateMode) {
-      return false;
-    }
+    if (isTargetCorporate && !_currentUser!.canUseCorporateMode) return false;
 
     try {
-      // 2. Avisar al Backend
       final String perfilParaBackend = isTargetCorporate
           ? 'CORPORATIVO'
           : 'NATURAL';
@@ -232,21 +285,14 @@ class AuthService {
       );
 
       if (response.data['success'] == true) {
-        // 3. Actualizar el modelo local si el servidor confirmó
         _currentUser!.appMode = isTargetCorporate
             ? AppMode.CORPORATE
             : AppMode.PERSONAL;
-
-        // Guardar preferencia localmente
-        await _storage.write(
-          key: 'preferred_mode',
-          value: _currentUser!.appMode.name,
-        );
+        // No necesitamos guardar nada en storage aquí porque el token manda
         return true;
       }
       return false;
     } catch (e) {
-      debugPrint("Error al cambiar de modo: $e");
       return false;
     }
   }
@@ -257,6 +303,41 @@ class AuthService {
     }
     _currentUser!.appMode = AppMode.PERSONAL;
     return true;
+  }
+
+  static Future<bool> updateUserAddress({
+    required String type,
+    required String address,
+    required double lat,
+    required double lng,
+    double? snappedLat, // Agregados
+    double? snappedLng,
+  }) async {
+    if (_currentUser == null) return false;
+    try {
+      final response = await ApiClient().dio.post(
+        '/user/favoritos', // Asegúrate que este sea el endpoint en api.php
+        data: {
+          'tipo': type,
+          'address': address,
+          'lat': lat,
+          'lng': lng,
+          'snapped_lat': snappedLat ?? lat,
+          'snapped_lng': snappedLng ?? lng,
+        },
+      );
+
+      if (response.data['user'] != null) {
+        // MAGIA: Reemplazamos el usuario local con el que devuelve el servidor
+        // Esto hace que la App sepa que el Home ya está guardado
+        _currentUser = User.fromMap(response.data['user']);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint("Error guardando dirección: $e");
+      return false;
+    }
   }
 
   static Future<bool> removeBeneficiary(String id) async {

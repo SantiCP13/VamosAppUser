@@ -6,7 +6,6 @@ import '../../menu/screens/profile_screen.dart';
 import '../../menu/screens/history_screen.dart';
 import '../../menu/screens/support_screen.dart';
 import '../../auth/screens/welcome_screen.dart';
-/*import '../../payment/screens/payment_methods_screen.dart';*/
 
 class SideMenu extends StatelessWidget {
   final Function(bool) onToggleMode;
@@ -14,11 +13,28 @@ class SideMenu extends StatelessWidget {
   const SideMenu({super.key, required this.onToggleMode});
 
   Future<void> _handleLogout(BuildContext context) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(
+        child: CircularProgressIndicator(color: AppColors.primaryGreen),
+      ),
+    );
+
     await AuthService.logout();
     if (!context.mounted) return;
+    Navigator.pop(context);
+
     Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(builder: (context) => const WelcomeScreen()),
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            const WelcomeScreen(),
+        transitionDuration: const Duration(milliseconds: 600),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
       (route) => false,
     );
   }
@@ -26,13 +42,16 @@ class SideMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final user = AuthService.currentUser;
+    final bool isCorp = user?.isCorporateMode ?? false;
     final String nombreMostrar = user?.name ?? "Usuario";
     final String inicial = nombreMostrar.isNotEmpty
         ? nombreMostrar[0].toUpperCase()
         : "U";
 
     return Drawer(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(
+        0xFFF8FAFC,
+      ), // Fondo ligeramente grisáceo premium
       elevation: 0,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.only(
@@ -42,86 +61,88 @@ class SideMenu extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // 1. CABECERA CENTRALIZADA (Header con Logo y Foto)
+          // 1. CABECERA CON DEGRADADO SUTIL
           Container(
-            padding: const EdgeInsets.fromLTRB(24, 50, 24, 25),
-            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(25, 60, 25, 30),
             decoration: BoxDecoration(
               color: Colors.white,
-              border: Border(
-                bottom: BorderSide(color: Colors.grey.shade50, width: 1),
+              borderRadius: const BorderRadius.only(
+                bottomRight: Radius.circular(35),
               ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.03),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                ),
+              ],
             ),
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // LOGO ESTRATÉGICO (Superior Central)
-
-                // FOTO DE PERFIL CENTRADA Y MÁS GRANDE (100x100)
+                // Avatar con anillo de estado
                 Container(
-                  width: 100,
-                  height: 100,
+                  padding: const EdgeInsets.all(4),
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: AppColors.primaryGreen.withValues(alpha: 0.08),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.04),
-                        blurRadius: 15,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                    image:
-                        (user?.photoUrl != null && user!.photoUrl!.isNotEmpty)
-                        ? DecorationImage(
-                            image: NetworkImage(user.photoUrl!),
-                            fit: BoxFit.cover,
-                          )
-                        : null,
+                    border: Border.all(
+                      color: isCorp
+                          ? const Color(0xFF0D47A1)
+                          : AppColors.primaryGreen,
+                      width: 2,
+                    ),
                   ),
-                  child: (user?.photoUrl == null || user!.photoUrl!.isEmpty)
-                      ? Center(
-                          child: Text(
+                  child: CircleAvatar(
+                    radius: 45,
+                    backgroundColor: AppColors.primaryGreen.withValues(
+                      alpha: 0.1,
+                    ),
+                    backgroundImage:
+                        (user?.photoUrl != null && user!.photoUrl!.isNotEmpty)
+                        ? NetworkImage(user.photoUrl!)
+                        : null,
+                    child: (user?.photoUrl == null || user!.photoUrl!.isEmpty)
+                        ? Text(
                             inicial,
                             style: GoogleFonts.poppins(
-                              fontSize: 40, // Más grande para balancear
+                              fontSize: 32,
                               fontWeight: FontWeight.bold,
                               color: AppColors.primaryGreen,
                             ),
-                          ),
-                        )
-                      : null,
-                ),
-
-                const SizedBox(height: 16),
-
-                // NOMBRE DEBAJO DE LA FOTO
-                Text(
-                  nombreMostrar,
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.poppins(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 22,
-                    color: Colors.black87,
-                    letterSpacing: -0.5,
+                          )
+                        : null,
                   ),
                 ),
-
+                const SizedBox(height: 15),
+                Text(
+                  nombreMostrar,
+                  style: GoogleFonts.montserrat(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 20,
+                    color: AppColors.darkBlue,
+                  ),
+                ),
+                Text(
+                  user?.email ?? "",
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: Colors.grey.shade500,
+                  ),
+                ),
                 const SizedBox(height: 25),
 
-                // SWITCHER DE PERFIL (Pill Style mejorado)
+                // SWITCHER ESTILO SEGMENTED CONTROL
                 Container(
-                  padding: const EdgeInsets.all(5),
+                  padding: const EdgeInsets.all(4),
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(20),
+                    color: const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(16),
                   ),
                   child: Row(
                     children: [
                       _buildQuickProfileOption(
                         context,
                         label: "Personal",
-                        isActive: user?.isCorporateMode == false,
+                        isActive: !isCorp,
                         activeColor: AppColors.primaryGreen,
                         icon: Icons.person_rounded,
                         onTap: () {
@@ -129,23 +150,24 @@ class SideMenu extends StatelessWidget {
                           onToggleMode(false);
                         },
                       ),
-                      const SizedBox(width: 4),
-                      if (user?.canUseCorporateMode == true)
-                        _buildQuickProfileOption(
-                          context,
-                          label: "Corporativo",
-                          isActive: user?.isCorporateMode == true,
-                          activeColor: const Color(
-                            0xFF0D47A1,
-                          ), // Azul más profundo
-                          icon: Icons.business_center_rounded,
-                          onTap: () {
-                            Navigator.pop(context);
+                      _buildQuickProfileOption(
+                        context,
+                        label: "Empresa",
+                        isActive: isCorp,
+                        activeColor: const Color(0xFF0D47A1),
+                        icon: Icons.business_rounded,
+                        onTap: () {
+                          Navigator.pop(context);
+                          if (user?.canUseCorporateMode == true) {
                             onToggleMode(true);
-                          },
-                        )
-                      else
-                        _buildLinkAction(context),
+                          } else {
+                            onToggleMode(
+                              true,
+                            ); // Esto abrirá el modal de vinculación
+                          }
+                        },
+                        isLocked: user?.canUseCorporateMode == false,
+                      ),
                     ],
                   ),
                 ),
@@ -153,107 +175,79 @@ class SideMenu extends StatelessWidget {
             ),
           ),
 
-          // 2. LISTADO DE OPCIONES
+          // 2. LISTADO DE OPCIONES CON ICONOS EN CAJAS
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 25),
               children: [
                 _buildMenuItem(
                   context,
-                  icon: Icons.account_circle_outlined,
+                  icon: Icons.person_outline_rounded,
                   text: "Mi Perfil",
                   destinationScreen: const ProfileScreen(),
                 ),
                 _buildMenuItem(
                   context,
-                  icon: Icons.local_activity_outlined,
-                  text: "Historial de Viajes",
+                  icon: Icons.history_rounded,
+                  text: "Mis Viajes",
                   destinationScreen: const HistoryScreen(),
                 ),
-                /*_buildMenuItem(
-                  context,
-                  icon: Icons.payment_rounded,
-                  text: "Métodos de Pago",
-                  destinationScreen:
-                      const PaymentMethodsScreen(), // Importa la pantalla creada
-                ),*/
                 _buildMenuItem(
                   context,
-                  icon: Icons.help_outline_rounded,
-                  text: "Soporte y Ayuda",
+                  icon: Icons.headset_mic_outlined,
+                  text: "Soporte",
                   destinationScreen: const SupportScreen(),
                 ),
               ],
             ),
           ),
 
-          // 3. PIE DE PÁGINA (Branding & Logout)
+          // 3. FOOTER LIMPIO
           Padding(
-            padding: const EdgeInsets.fromLTRB(30, 0, 30, 40),
+            padding: const EdgeInsets.all(25),
             child: Column(
               children: [
-                SizedBox(
-                  width: double.infinity,
-                  height: 54,
-                  child: ElevatedButton(
-                    onPressed: () => _handleLogout(context),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color.fromARGB(
-                        255,
-                        33,
-                        1,
-                        97,
-                      ), // Fondo suave
-                      foregroundColor: const Color.fromARGB(
-                        255,
-                        255,
-                        255,
-                        255,
-                      ), // Texto e Icono
-                      elevation: 0,
-                      shadowColor: Colors.transparent,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                        side: BorderSide(
-                          color: const Color.fromARGB(255, 1, 169, 23),
-                          width: 1,
-                        ),
+                // BOTÓN CERRAR SESIÓN ESTILO "SOFT"
+                InkWell(
+                  onTap: () => _handleLogout(context),
+                  borderRadius: BorderRadius.circular(15),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(15),
+                      border: Border.all(
+                        color: Colors.red.withValues(alpha: 0.1),
                       ),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(Icons.logout_rounded, size: 20),
-                        const SizedBox(width: 12),
+                        const Icon(
+                          Icons.power_settings_new_rounded,
+                          color: Colors.redAccent,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 10),
                         Text(
                           "Cerrar Sesión",
                           style: GoogleFonts.poppins(
                             fontWeight: FontWeight.bold,
-                            fontSize: 15,
+                            color: Colors.redAccent,
+                            fontSize: 14,
                           ),
                         ),
                       ],
                     ),
                   ),
                 ),
-                const SizedBox(height: 15),
+                const SizedBox(height: 20),
                 Image.asset(
                   'assets/images/logo.png',
-                  height: 75,
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) =>
-                      const SizedBox(height: 35),
+                  height: 80,
+                  opacity: const AlwaysStoppedAnimation(0.3),
                 ),
-
                 const SizedBox(height: 10),
-                Text(
-                  "VAMOS APP © 2026",
-                  style: GoogleFonts.poppins(
-                    fontSize: 10,
-                    color: Colors.grey.shade400,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
               ],
             ),
           ),
@@ -262,7 +256,6 @@ class SideMenu extends StatelessWidget {
     );
   }
 
-  // Widget de Opción de Switcher (Diseño Horizontal Centrado)
   Widget _buildQuickProfileOption(
     BuildContext context, {
     required String label,
@@ -270,16 +263,17 @@ class SideMenu extends StatelessWidget {
     required Color activeColor,
     required IconData icon,
     required VoidCallback onTap,
+    bool isLocked = false,
   }) {
     return Expanded(
       child: GestureDetector(
         onTap: onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
+          duration: const Duration(milliseconds: 250),
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
             color: isActive ? Colors.white : Colors.transparent,
-            borderRadius: BorderRadius.circular(15),
+            borderRadius: BorderRadius.circular(12),
             boxShadow: isActive
                 ? [
                     BoxShadow(
@@ -294,17 +288,17 @@ class SideMenu extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                icon,
+                isLocked ? Icons.lock_outline_rounded : icon,
                 size: 16,
-                color: isActive ? activeColor : Colors.grey.shade500,
+                color: isActive ? activeColor : Colors.grey.shade400,
               ),
               const SizedBox(width: 8),
               Text(
                 label,
                 style: GoogleFonts.poppins(
                   fontSize: 12,
-                  fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
-                  color: isActive ? Colors.black87 : Colors.grey.shade500,
+                  fontWeight: isActive ? FontWeight.bold : FontWeight.w600,
+                  color: isActive ? AppColors.darkBlue : Colors.grey.shade400,
                 ),
               ),
             ],
@@ -314,67 +308,51 @@ class SideMenu extends StatelessWidget {
     );
   }
 
-  // Widget del Listado con Hover sutil
   Widget _buildMenuItem(
     BuildContext context, {
     required IconData icon,
     required String text,
     required Widget destinationScreen,
   }) {
-    return ListTile(
-      onTap: () {
-        Navigator.pop(context);
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (context) => destinationScreen),
-        );
-      },
-      leading: Icon(icon, color: Colors.black45, size: 22),
-      title: Text(
-        text,
-        style: GoogleFonts.poppins(
-          fontSize: 15,
-          fontWeight: FontWeight.w500,
-          color: Colors.black87,
-        ),
-      ),
-      trailing: Icon(
-        Icons.chevron_right_rounded,
-        size: 20,
-        color: Colors.grey.shade300,
-      ),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-    );
-  }
-
-  // Widget para Vincular Empresa (Action Style)
-  Widget _buildLinkAction(BuildContext context) {
-    return Expanded(
-      child: GestureDetector(
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
         onTap: () {
           Navigator.pop(context);
-          onToggleMode(true); // Abrirá el modal en el Home
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => destinationScreen),
+          );
         },
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.add_circle_outline_rounded,
-              size: 16,
-              color: Colors.blue.shade800,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              "Vincular",
-              style: GoogleFonts.poppins(
-                fontSize: 12,
-                color: Colors.blue.shade800,
-                fontWeight: FontWeight.bold,
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.02),
+                blurRadius: 10,
               ),
-            ),
-          ],
+            ],
+          ),
+          child: Icon(icon, color: AppColors.darkBlue, size: 20),
         ),
+        title: Text(
+          text,
+          style: GoogleFonts.montserrat(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: AppColors.darkBlue,
+          ),
+        ),
+        trailing: const Icon(
+          Icons.arrow_forward_ios_rounded,
+          size: 14,
+          color: Color(0xFFCBD5E1),
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
       ),
     );
   }

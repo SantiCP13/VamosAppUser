@@ -52,21 +52,35 @@ class TripService {
     // 4. LÓGICA DE CONTRATO (CLAVE PARA EL FUEC)
     // En modo corporativo, enviamos el id_empresa que Laravel espera para buscar el contrato.
     // En modo natural, enviamos 1 (Contrato de servicios ocasionales).
+    // 4. LÓGICA DE CONTRATO (CLAVE PARA EL FUEC)
     int contratoId = 1;
+
     if (currentUser.isCorporateMode) {
-      // Si el companyUuid es un ID numérico en la DB, lo usamos.
-      // De lo contrario, el backend debe manejar la asociación por empresa.
-      contratoId = int.tryParse(currentUser.companyUuid ?? '1') ?? 1;
+      // Buscamos el ID de la empresa vinculada (en tu caso '2' para santi sas)
+      // Usamos el campo que contiene ese ID (companyUuid)
+      final enterpriseId = int.tryParse(currentUser.companyUuid ?? '');
+
+      if (enterpriseId != null) {
+        contratoId = enterpriseId;
+        // ignore: avoid_print
+        print("🏢 ENVIANDO SOLICITUD PARA EMPRESA ID: $contratoId");
+      } else {
+        // ignore: avoid_print
+        print(
+          "⚠️ ADVERTENCIA: Modo corporativo activo pero no se encontró ID de empresa.",
+        );
+      }
     }
 
     final Map<String, dynamic> body = {
       'id_contrato': contratoId,
       'origen': originAddress,
       'destino': destinationAddress,
-      'lat_origen': origin.latitude,
-      'lng_origen': origin.longitude,
-      'lat_destino': destination.latitude,
-      'lng_destino': destination.longitude,
+      // Usamos toStringAsFixed(6) y luego parse para asegurar 6 decimales exactos
+      'lat_origen': double.parse(origin.latitude.toStringAsFixed(6)),
+      'lng_origen': double.parse(origin.longitude.toStringAsFixed(6)),
+      'lat_destino': double.parse(destination.latitude.toStringAsFixed(6)),
+      'lng_destino': double.parse(destination.longitude.toStringAsFixed(6)),
       'tipo_viaje': dbCategory,
       'precio_estimado': estimatedPrice,
       'programado_para': scheduledAt?.toIso8601String(),

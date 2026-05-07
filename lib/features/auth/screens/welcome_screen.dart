@@ -4,8 +4,8 @@ import '../../../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
 import '../../home/screens/home_screen.dart';
 import 'login_screen.dart';
-import 'company_register_screen.dart';
 import 'dart:ui'; // Vital para el blur
+import 'splash_screen.dart';
 
 class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({super.key});
@@ -14,34 +14,17 @@ class WelcomeScreen extends StatefulWidget {
   State<WelcomeScreen> createState() => _WelcomeScreenState();
 }
 
-class _WelcomeScreenState extends State<WelcomeScreen>
-    with SingleTickerProviderStateMixin {
+class _WelcomeScreenState extends State<WelcomeScreen> {
+  // Quitamos el Mixin Ticker
   bool _isLoading = true;
-  late AnimationController _expansionController;
-  late Animation<double> _expansionAnimation;
-  bool _isNavigating = false;
 
   @override
   void initState() {
     super.initState();
-    _expansionController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    );
-
-    _expansionAnimation = CurvedAnimation(
-      parent: _expansionController,
-      curve: Curves.easeInOutCubic,
-    );
-
     _checkSession();
   }
 
-  @override
-  void dispose() {
-    _expansionController.dispose();
-    super.dispose();
-  }
+  // Ya no necesitamos dispose() ni variables de animación aquí
 
   Future<void> _checkSession() async {
     final hasSession = await AuthService.tryAutoLogin();
@@ -56,27 +39,21 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
   }
 
-  void _navigateTo(Widget screen) async {
-    setState(() => _isNavigating = true);
-    await _expansionController.forward();
-    if (mounted) {
-      Navigator.push(
-        context,
-        PageRouteBuilder(
-          pageBuilder: (context, animation, secondaryAnimation) => screen,
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(
-              opacity: CurvedAnimation(parent: animation, curve: Curves.easeIn),
-              child: child,
-            );
-          },
-          transitionDuration: const Duration(milliseconds: 700),
-        ),
-      ).then((_) {
-        _expansionController.reverse();
-        setState(() => _isNavigating = false);
-      });
-    }
+  void _navigateTo(Widget screen) {
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) => screen,
+        transitionDuration: const Duration(milliseconds: 600), // Tiempo ideal
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          // Usamos solo Fade para que no choque con la animación interna de la Splash
+          return FadeTransition(
+            opacity: CurvedAnimation(parent: animation, curve: Curves.easeIn),
+            child: child,
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -89,10 +66,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
 
     return Scaffold(
-      backgroundColor: Colors.white,
       body: Stack(
         children: [
-          // Fondo con Gradiente para dar textura al vidrio
+          // 1. FONDO CON GRADIENTE LIGHT PREMIUM
           Container(
             width: double.infinity,
             height: double.infinity,
@@ -100,108 +76,118 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               gradient: RadialGradient(
                 center: Alignment(0.0, -0.45),
                 radius: 1.8,
-                colors: [Color(0xFFFFFFFF), Color.fromARGB(143, 125, 126, 125)],
-              ),
-            ),
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 32),
-                child: Column(
-                  children: [
-                    const Spacer(flex: 2),
-                    _buildFadeIn(
-                      delay: 0,
-                      child: Hero(
-                        tag: 'logo',
-                        child: Image.asset(
-                          'assets/images/logo.png',
-                          height: 250,
-                          fit: BoxFit.contain,
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 10),
-                    _buildFadeIn(
-                      delay: 150,
-                      child: Text(
-                        "Viaja seguro, puntual y con el mejor servicio de movilidad del país.",
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.montserrat(
-                          fontSize: 15,
-                          color: Colors.grey.shade600,
-                          height: 1.6,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 80),
-                    Text(
-                      "PANEL DE ACCESO",
-                      style: GoogleFonts.montserrat(
-                        fontSize: 15,
-                        color: const Color.fromARGB(255, 87, 87, 87),
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 3,
-                      ),
-                    ),
-                    const SizedBox(height: 25),
-                    _buildFadeIn(
-                      delay: 400,
-                      child: _buildRoleButton(
-                        label: "Registrar Empresa",
-                        subLabel: "Servicios para mi personal",
-                        icon: Icons.domain_rounded,
-                        isPrimary: false,
-                        destination: const CompanyRegisterScreen(),
-                      ),
-                    ),
-                    _buildFadeIn(
-                      delay: 600,
-                      child: _buildRoleButton(
-                        label: "Soy Pasajero",
-                        subLabel: "Viaja con Nosotros",
-                        icon: Icons.person_rounded,
-                        isPrimary: true,
-                        destination: const LoginScreen(),
-                      ),
-                    ),
-                    const Spacer(),
-                  ],
-                ),
+                colors: [Color(0xFFFFFFFF), Color(0xFFF1F5F9)],
               ),
             ),
           ),
 
-          // Expansión fluida
-          if (_isNavigating)
-            Positioned.fill(
-              child: AnimatedBuilder(
-                animation: _expansionAnimation,
-                builder: (context, child) {
-                  return Container(
-                    color: Colors.white.withValues(
-                      alpha: _expansionAnimation.value,
+          // 2. CONTENIDO CENTRADO DINÁMICO (ESTILO DRIVER)
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight,
                     ),
-                    child: Center(
-                      child: Transform.scale(
-                        scale: 1.0 + (_expansionAnimation.value * 12),
-                        child: Opacity(
-                          opacity: (1.0 - _expansionAnimation.value).clamp(
-                            0.0,
-                            1.0,
-                          ),
-                          child: Image.asset(
-                            'assets/images/logo.png',
-                            width: 150,
-                          ),
+                    child: IntrinsicHeight(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 32),
+                        child: Column(
+                          children: [
+                            const Spacer(flex: 2), // Empuja hacia abajo
+
+                            _buildFadeIn(
+                              delay: 0,
+                              child: Hero(
+                                tag: 'logo',
+                                // ESTO ACTIVA EL MOVIMIENTO EN CURVA:
+                                createRectTween: (begin, end) {
+                                  return MaterialRectArcTween(
+                                    begin: begin,
+                                    end: end,
+                                  );
+                                },
+                                child: Image.asset(
+                                  'assets/images/logo.png',
+                                  height: 220,
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
+                            ),
+
+                            const SizedBox(height: 10),
+
+                            _buildFadeIn(
+                              delay: 200,
+                              child: Text(
+                                "Viaja seguro, puntual y con el mejor servicio de movilidad del país.",
+                                textAlign: TextAlign.center,
+                                style: GoogleFonts.montserrat(
+                                  fontSize: 15,
+                                  color: Colors.grey.shade600,
+                                  height: 1.6,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+
+                            const SizedBox(
+                              height: 80,
+                            ), // Distancia idéntica a Driver
+
+                            Text(
+                              "PANEL DE ACCESO",
+                              style: GoogleFonts.montserrat(
+                                fontSize: 13,
+                                color: const Color(
+                                  0xFF64748B,
+                                ), // Gris azulado corporativo
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 3,
+                              ),
+                            ),
+
+                            const SizedBox(height: 25),
+                            _buildFadeIn(
+                              delay: 400,
+                              child: _buildRoleButton(
+                                label: "Registrar Empresa",
+                                subLabel: "Servicios para mi personal",
+                                icon: Icons.domain_rounded,
+                                isPrimary: false,
+                                destination: const SplashScreen(
+                                  logoPath: 'assets/images/logo.png',
+                                  nextRoute:
+                                      '/register', // Esta es la ruta que configuramos en el paso 2
+                                  isDark: false,
+                                ),
+                              ),
+                            ),
+
+                            _buildFadeIn(
+                              delay: 600,
+                              child: _buildRoleButton(
+                                label: "Soy Pasajero",
+                                subLabel: "Viaja con Nosotros",
+                                icon: Icons.person_rounded,
+                                isPrimary: true,
+                                destination: const LoginScreen(),
+                              ),
+                            ),
+
+                            const Spacer(
+                              flex: 2,
+                            ), // Empuja hacia arriba para equilibrar
+                          ],
                         ),
                       ),
                     ),
-                  );
-                },
-              ),
+                  ),
+                );
+              },
             ),
+          ),
         ],
       ),
     );
@@ -220,7 +206,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         borderRadius: BorderRadius.circular(22),
         boxShadow: [
           BoxShadow(
-            // Sombra muy suave para dar profundidad al vidrio
             color: isPrimary
                 ? AppColors.primaryGreen.withValues(alpha: 0.25)
                 : Colors.black.withValues(alpha: 0.05),
@@ -232,12 +217,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       child: ClipRRect(
         borderRadius: BorderRadius.circular(22),
         child: BackdropFilter(
-          // SUBIMOS EL BLUR: En fondos blancos se necesita más (25) para que se note
           filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
           child: Container(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(22),
-              // BORDE DEFINIDO: Es lo que hace que el vidrio blanco se vea real
               border: Border.all(
                 color: isPrimary
                     ? AppColors.primaryGreen.withValues(alpha: 0.3)
@@ -252,15 +235,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         AppColors.primaryGreen.withValues(alpha: 0.9),
                         AppColors.primaryGreen.withValues(alpha: 0.7),
                       ]
-                    : [
-                        // BLANCO TRASLÚCIDO: Ajustado para que el blur "traspase"
-                        Colors.white.withValues(alpha: 0.5),
-                        Colors.white.withValues(alpha: 0.2),
-                      ],
+                    : [Colors.white, const Color(0xFFF8FAFC)],
               ),
             ),
             child: ElevatedButton(
-              onPressed: () => _navigateTo(destination),
+              onPressed: () => _navigateTo(destination), // Navegación directa
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.transparent,
                 foregroundColor: isPrimary ? Colors.white : AppColors.darkBlue,
@@ -302,8 +281,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                             fontWeight: FontWeight.w800,
                             color: isPrimary
                                 ? Colors.white
-                                : AppColors
-                                      .primaryGreen, // Puedes poner Colors.black o el que quieras
+                                : AppColors.primaryGreen,
                           ),
                         ),
                         Text(
@@ -312,12 +290,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                             fontSize: 11,
                             color: isPrimary
                                 ? Colors.white.withValues(alpha: 0.8)
-                                : const Color.fromARGB(
-                                    255,
-                                    87,
-                                    87,
-                                    87,
-                                  ), // Gris oscuro para lectura en vidrio blanco
+                                : const Color.fromARGB(255, 87, 87, 87),
                           ),
                         ),
                       ],
@@ -327,8 +300,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                     Icons.chevron_right_rounded,
                     color: isPrimary
                         ? Colors.white.withValues(alpha: 0.6)
-                        : AppColors
-                              .darkBlue, // Puedes poner Colors.grey.shade400 o el que quieras
+                        : AppColors.darkBlue,
                   ),
                 ],
               ),
@@ -366,7 +338,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             width: 160,
             child: LinearProgressIndicator(
               color: AppColors.primaryGreen,
-              backgroundColor: const Color(0xFFF5F5F5),
+              backgroundColor: Colors.grey.withValues(
+                alpha: 0.1,
+              ), // Corrección sin 'const'
               minHeight: 2,
             ),
           ),

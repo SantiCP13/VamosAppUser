@@ -60,31 +60,67 @@ class SearchService {
     return null;
   }
 
-  Future<Map<String, dynamic>?> getReverseGeocode(
-    double lat,
-    double lng,
-  ) async {
+  // Añade esto a SearchService.dart
+  Future<void> saveManualRecent({
+    required String name,
+    required String address,
+    required double lat,
+    required double lng,
+  }) async {
     try {
-      // 🔥 Eliminamos la llamada duplicada y dejamos solo la ruta oficial del backend
-      final response = await _apiClient.dio.get(
-        '/maps/reverse',
-        queryParameters: {'lat': lat, 'lng': lng},
+      // Reutilizamos el endpoint de recientes o creamos uno para 'guardar'
+      await _apiClient.dio.post(
+        '/lugares/guardar-reciente',
+        data: {'name': name, 'address': address, 'lat': lat, 'lng': lng},
       );
-
-      if (response.statusCode == 200) {
-        return response.data['data'];
-      }
     } catch (e) {
-      print("Error en Reverse Geocode: $e");
+      print("Error guardando reciente manual: $e");
     }
-    return null;
   }
 
-  // NUEVO: Pedir los destinos recientes del usuario al Backend
+  Future<Map<String, dynamic>?> getReverseGeocode(
+    double lat,
+    double lng, {
+    bool persist = false,
+  }) async {
+    try {
+      final response = await _apiClient.dio
+          .get(
+            '/maps/reverse',
+            queryParameters: {
+              'lat': lat,
+              'lng': lng,
+              'persist': persist ? 1 : 0,
+            },
+          )
+          .timeout(const Duration(seconds: 7));
+
+      if (response.statusCode == 200 && response.data['status'] == 'success') {
+        // Retornamos el mapa de datos que viene del server
+        return Map<String, dynamic>.from(response.data['data']);
+      }
+    } catch (e) {
+      print("❌ Error en SearchService.getReverseGeocode: $e");
+    }
+
+    // Fallback de seguridad si falla el internet o el server
+    return {
+      'name': 'Ubicación seleccionada',
+      'address': 'Dirección no disponible',
+      'lat': lat,
+      'lng': lng,
+      'snapped_lat': lat,
+      'snapped_lng': lng,
+      'municipality_id': null,
+      'city': 'Desconocido',
+    };
+  }
+
   Future<List<Map<String, dynamic>>> getRecentPlaces() async {
     try {
       final response = await _apiClient.dio.get('/lugares/recientes');
       if (response.statusCode == 200) {
+        // Si el servidor ya devuelve la lista limpia, no necesitamos deduplicar tan agresivo
         return List<Map<String, dynamic>>.from(response.data);
       }
     } catch (e) {
@@ -92,19 +128,35 @@ class SearchService {
     }
     return [];
   }
+
   // lib/features/home/services/search_service.dart
+  Future<bool> clearRecentHistory() async {
+    try {
+      final response = await _apiClient.dio.post('/lugares/limpiar-historial');
+      return response.statusCode == 200;
+    } catch (e) {
+      print("Error limpiando historial: $e");
+      return false;
+    }
+  }
 
   Future<Map<String, dynamic>?> saveQuickAddress({
-    // Cambia bool por Map?
     required String type,
     required String address,
     required double lat,
     required double lng,
+    required String name, // Asegúrate de recibir el nombre
   }) async {
     try {
       final response = await _apiClient.dio.post(
-        '/user/favoritos',
-        data: {'tipo': type, 'address': address, 'lat': lat, 'lng': lng},
+        '/lugares/favoritos', // <--- CAMBIADO: De '/user/favoritos' a '/lugares/favoritos'
+        data: {
+          'tipo': type,
+          'address': address,
+          'lat': lat,
+          'lng': lng,
+          'name': name, // El backend espera 'name' según el validador
+        },
       );
       if (response.statusCode == 200) {
         return response

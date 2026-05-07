@@ -32,32 +32,50 @@ class ApiClient {
           if (token != null) {
             options.headers['Authorization'] = 'Bearer $token';
           }
+          if (options.path != '/login' &&
+              options.path != '/register' &&
+              options.path != '/check-account') {
+            // Bloquea si no hay token y no es una ruta pública
+          }
           return handler.next(options);
         },
 
-        // lib/core/network/api_client.dart (InterceptorsWrapper -> onError)
+        // Busca el bloque onError dentro de ApiClient y reemplázalo por este:
         onError: (DioException e, handler) async {
           if (e.response?.statusCode == 403) {
-            // 403 es el que envía tu middleware CheckActive
+            // 1. Extraemos el mensaje real sin poner valores por defecto peligrosos
+            final serverData = e.response?.data;
+            String serverMsg = '';
 
-            // 1. Extraemos el mensaje que configuraste en Laravel:
-            // "Tu cuenta ha sido desactivada. Contacta al administrador."
-            String serverMsg =
-                e.response?.data['message'] ??
-                'Cuenta inactiva. Contacte a soporte.';
+            if (serverData is Map) {
+              serverMsg = serverData['message']?.toString() ?? '';
+            }
 
-            // 2. Limpiamos la sesión local
-            await AuthService.logout();
+            // 2. Filtro estricto: Solo cerrar sesión si el mensaje es de cuenta inactiva
+            // Agregamos comprobación de que el mensaje NO esté vacío para evitar falsos positivos
+            bool isAccountError =
+                serverMsg.isNotEmpty &&
+                (serverMsg.toLowerCase().contains('desactivada') ||
+                    serverMsg.toLowerCase().contains('inactiva') ||
+                    serverMsg.toLowerCase().contains('administrador') ||
+                    serverMsg.toLowerCase().contains('bloqueada'));
 
-            // 3. Redirigimos al inicio pasando el mensaje como argumento
-            Future.microtask(() {
-              NavigationService.navigatorKey.currentState
-                  ?.pushNamedAndRemoveUntil(
-                    '/', // O la ruta de tu Login/Welcome
-                    (route) => false,
-                    arguments: serverMsg, // <--- Pasamos el mensaje aquí
-                  );
-            });
+            if (isAccountError) {
+              await AuthService.logout();
+              Future.microtask(() {
+                NavigationService.navigatorKey.currentState
+                    ?.pushNamedAndRemoveUntil(
+                      '/',
+                      (route) => false,
+                      arguments: serverMsg,
+                    );
+              });
+              return handler.next(e);
+            } else {
+              // 3. Si es un error de viaje (403 de negocio), dejamos que pase al HomeScreen
+              // NO usamos resolve, usamos next para que el catch del servicio lo atrape.
+              return handler.next(e);
+            }
           }
           return handler.next(e);
         },

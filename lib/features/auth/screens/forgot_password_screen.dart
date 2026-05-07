@@ -15,7 +15,6 @@ class ForgotPasswordScreen extends StatefulWidget {
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final PageController _pageController = PageController();
 
-  // Controladores
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _otpController = TextEditingController();
   final TextEditingController _passController = TextEditingController();
@@ -23,8 +22,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   bool _isLoading = false;
   bool _obscurePass = true;
-  int _currentStep = 0; // 0: Email, 1: OTP, 2: New Password
+  int _currentStep = 0;
   int _cooldownSeconds = 0;
+
   @override
   void initState() {
     super.initState();
@@ -54,32 +54,22 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   }
 
   void _showSnack(String msg, {bool isError = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Row(
-          children: [
-            Icon(
-              isError ? Icons.cancel_outlined : Icons.check_circle_outline,
-              color: Colors.white,
-            ),
-            const SizedBox(width: 10),
-            Expanded(child: Text(msg, style: GoogleFonts.poppins())),
-          ],
+        content: Text(
+          msg,
+          style: GoogleFonts.montserrat(color: Colors.white, fontSize: 13),
         ),
-        backgroundColor: isError
-            ? const Color(0xFFE53935)
-            : AppColors.primaryGreen,
+        backgroundColor: isError ? Colors.redAccent : AppColors.primaryGreen,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(20),
       ),
     );
   }
 
-  // --- LOGICA DE PASOS (INTACTA) ---
-
-  // --- REEMPLAZA ESTAS 3 FUNCIONES ---
+  // --- LÓGICA DE PASOS ---
 
   Future<void> _sendCode() async {
     final email = _emailController.text.trim();
@@ -89,7 +79,6 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     }
     setState(() => _isLoading = true);
     try {
-      // Cambio de nombre: sendPasswordResetCode
       await AuthService.sendPasswordResetCode(email);
       setState(() => _isLoading = false);
       _showSnack("Código enviado a $email");
@@ -103,13 +92,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   Future<void> _verifyCode() async {
     final code = _otpController.text.trim();
-    if (code.length < 4) {
-      _showSnack("Código incompleto", isError: true);
+    if (code.length < 6) {
+      _showSnack("El código debe tener 6 dígitos", isError: true);
       return;
     }
     setState(() => _isLoading = true);
     try {
-      // Cambio de nombre: verifyPasswordResetCode
       await AuthService.verifyPasswordResetCode(
         _emailController.text.trim(),
         code,
@@ -125,9 +113,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   Future<void> _changePassword() async {
     final p1 = _passController.text;
     final p2 = _confirmPassController.text;
-    if (p1.length < 6) {
+    if (p1.length < 8) {
       _showSnack(
-        "La contraseña debe tener al menos 6 caracteres",
+        "La contraseña debe tener al menos 8 caracteres",
         isError: true,
       );
       return;
@@ -138,7 +126,6 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     }
     setState(() => _isLoading = true);
     try {
-      // Cambio de nombre: resetPassword
       await AuthService.resetPassword(
         _emailController.text.trim(),
         _otpController.text.trim(),
@@ -155,297 +142,316 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   void _nextPage() {
     _pageController.nextPage(
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeInOut,
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeInOutExpo,
     );
     setState(() => _currentStep++);
   }
 
-  // --- ESTILOS VISUALES COPIADOS DEL LOGIN ---
+  // --- ESTILOS VISUALES (IGUAL AL LOGIN DE USUARIO) ---
 
-  InputDecoration _getInputStyle({
+  InputDecoration _getLightInputStyle({
     required String label,
     required IconData icon,
     Widget? suffixIcon,
   }) {
     return InputDecoration(
       labelText: label,
-      labelStyle: GoogleFonts.poppins(
-        fontSize: 14,
-        color: Colors.grey.shade600,
+      labelStyle: GoogleFonts.montserrat(
+        color: Colors.blueGrey.shade300,
+        fontSize: 13,
       ),
-      prefixIcon: Icon(icon, size: 20, color: AppColors.primaryGreen),
+      prefixIcon: Icon(icon, color: AppColors.primaryGreen, size: 20),
+      suffixIcon: suffixIcon,
       filled: true,
       fillColor: Colors.grey.shade50,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide.none,
-      ),
+      contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 15),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.grey.shade200),
+        borderRadius: BorderRadius.circular(16),
+        borderSide: BorderSide(color: Colors.grey.shade100),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         borderSide: const BorderSide(color: AppColors.primaryGreen, width: 1.5),
       ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-      suffixIcon: suffixIcon,
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFFF8FAFC),
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: Colors.transparent,
         elevation: 0,
-        leading: BackButton(
-          color: Colors.black,
-          onPressed: () {
-            if (_currentStep > 0) {
-              _pageController.previousPage(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-              );
-              setState(() => _currentStep--);
-            } else {
-              Navigator.pop(context);
-            }
-          },
-        ),
-        // Quitamos el título del AppBar para dejar el diseño limpio como el Login
-        // o lo dejamos muy sutil.
-        title: Text(
-          "Recuperación",
-          style: GoogleFonts.poppins(color: Colors.grey[400], fontSize: 14),
-        ),
-        centerTitle: true,
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Barra de progreso sutil
-            if (_currentStep < 3)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: (_currentStep + 1) / 3,
-                    backgroundColor: Colors.grey.shade100,
-                    color: AppColors.primaryGreen,
-                    minHeight: 4,
-                  ),
-                ),
+        leading: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: CircleAvatar(
+            backgroundColor: Colors.white,
+            child: IconButton(
+              icon: const Icon(
+                Icons.arrow_back_ios_new_rounded,
+                color: Colors.black87,
+                size: 18,
               ),
-
-            Expanded(
-              child: PageView(
-                controller: _pageController,
-                physics: const NeverScrollableScrollPhysics(),
-                children: [
-                  _buildEmailStep(),
-                  _buildOtpStep(),
-                  _buildNewPasswordStep(),
-                ],
+              onPressed: () {
+                if (_currentStep > 0) {
+                  _pageController.previousPage(
+                    duration: const Duration(milliseconds: 400),
+                    curve: Curves.easeInOutExpo,
+                  );
+                  setState(() => _currentStep--);
+                } else {
+                  Navigator.pop(context);
+                }
+              },
+            ),
+          ),
+        ),
+      ),
+      body: Stack(
+        children: [
+          // 1. FONDO CON GRADIENTE LIGHT
+          Container(
+            decoration: const BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment.center,
+                radius: 1.5,
+                colors: [Colors.white, Color(0xFFF1F5F9)],
               ),
             ),
-          ],
-        ),
+          ),
+
+          SafeArea(
+            child: Column(
+              children: [
+                const SizedBox(height: 20),
+                // Barra de progreso elegante
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 50),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: LinearProgressIndicator(
+                      value: (_currentStep + 1) / 3,
+                      backgroundColor: Colors.grey.shade100,
+                      color: AppColors.primaryGreen,
+                      minHeight: 6,
+                    ),
+                  ),
+                ),
+
+                Expanded(
+                  child: PageView(
+                    controller: _pageController,
+                    physics: const NeverScrollableScrollPhysics(),
+                    children: [
+                      _buildStepContainer(_buildEmailStep()),
+                      _buildStepContainer(_buildOtpStep()),
+                      _buildNewPasswordStep(), // Directo sin container para mejor scroll
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  // --- WIDGETS DE PASOS REDISEÑADOS ---
+  Widget _buildStepContainer(Widget child) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 32.0, vertical: 40),
+      child: child,
+    );
+  }
+
+  // --- WIDGETS DE PASOS ---
 
   Widget _buildEmailStep() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 10),
-          Text(
-            "Recuperar cuenta",
-            style: GoogleFonts.poppins(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
-              color: AppColors.primaryGreen,
-            ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          "RECUPERACIÓN",
+          style: GoogleFonts.montserrat(
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+            color: AppColors.primaryGreen,
+            letterSpacing: 2,
           ),
-          Padding(
-            padding: const EdgeInsets.only(top: 8.0, bottom: 40),
-            child: Text(
-              "Ingresa tu correo para buscar tu cuenta y enviarte un código.",
-              style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600]),
-            ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          "Buscaremos tu cuenta para enviarte un código de seguridad por correo.",
+          style: GoogleFonts.montserrat(
+            fontSize: 15,
+            color: Colors.blueGrey,
+            height: 1.5,
           ),
-
-          TextField(
-            controller: _emailController,
-            keyboardType: TextInputType.emailAddress,
-            style: GoogleFonts.poppins(),
-            decoration: _getInputStyle(
-              label: "Correo electrónico",
-              icon: Icons.alternate_email,
-            ),
+        ),
+        const SizedBox(height: 40),
+        TextField(
+          controller: _emailController,
+          keyboardType: TextInputType.emailAddress,
+          decoration: _getLightInputStyle(
+            label: "Correo electrónico",
+            icon: Icons.alternate_email,
           ),
-
-          const SizedBox(height: 50),
-          _buildButton("Enviar Código", _sendCode),
-        ],
-      ),
+        ),
+        const SizedBox(height: 50),
+        _buildActionButton("CONTINUAR", _sendCode),
+      ],
     );
   }
 
   Widget _buildOtpStep() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 10),
-          Text(
-            "Verifica tu identidad",
-            style: GoogleFonts.poppins(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
-              color: AppColors.primaryGreen,
-            ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          "VERIFICACIÓN",
+          style: GoogleFonts.montserrat(
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+            color: AppColors.primaryGreen,
+            letterSpacing: 2,
           ),
-          Padding(
-            padding: const EdgeInsets.only(top: 8.0, bottom: 40),
-            child: Text(
-              "Hemos enviado un código de 6 dígitos al correo ${_emailController.text}",
-              style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600]),
-            ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          "Ingresa el código enviado al correo:",
+          style: GoogleFonts.montserrat(fontSize: 14, color: Colors.blueGrey),
+        ),
+        Text(
+          _emailController.text,
+          style: GoogleFonts.montserrat(
+            fontSize: 15,
+            color: Colors.black87,
+            fontWeight: FontWeight.bold,
           ),
-
-          // Input de OTP con estilo adaptado
-          TextField(
-            controller: _otpController,
-            keyboardType: TextInputType.number,
-            maxLength: 6,
-            textAlign: TextAlign.center,
-            style: GoogleFonts.poppins(
-              fontSize: 24,
-              letterSpacing: 8,
-              fontWeight: FontWeight.w600,
-            ),
-            decoration:
-                _getInputStyle(
-                  label: "Código de seguridad",
-                  icon: Icons.lock_clock_outlined,
-                ).copyWith(
-                  counterText: "",
-                  contentPadding: const EdgeInsets.symmetric(vertical: 20),
-                ),
+        ),
+        const SizedBox(height: 40),
+        TextField(
+          controller: _otpController,
+          keyboardType: TextInputType.number,
+          maxLength: 6,
+          textAlign: TextAlign.center,
+          style: GoogleFonts.montserrat(
+            fontSize: 28,
+            letterSpacing: 10,
+            fontWeight: FontWeight.w800,
+            color: Colors.black87,
           ),
-
-          const SizedBox(height: 20),
-
-          Center(
-            child: _cooldownSeconds > 0
-                ? Text(
-                    "Reenviar código en $_cooldownSeconds segundos",
-                    style: GoogleFonts.poppins(
-                      color: Colors.grey,
-                      fontSize: 13,
-                    ),
-                  )
-                : TextButton(
-                    onPressed: _sendCode,
-                    child: Text(
-                      "¿No recibiste el código? Reenviar",
-                      style: GoogleFonts.poppins(
-                        color: AppColors.primaryGreen,
-                        fontWeight: FontWeight.w600,
-                      ),
+          decoration: _getLightInputStyle(
+            label: "Código OTP",
+            icon: Icons.security_rounded,
+          ).copyWith(counterText: ""),
+        ),
+        const SizedBox(height: 20),
+        Center(
+          child: _cooldownSeconds > 0
+              ? Text(
+                  "Reenviar en $_cooldownSeconds s",
+                  style: GoogleFonts.montserrat(
+                    color: Colors.grey,
+                    fontSize: 13,
+                  ),
+                )
+              : TextButton(
+                  onPressed: _sendCode,
+                  child: Text(
+                    "¿No recibiste el código? REENVIAR",
+                    style: GoogleFonts.montserrat(
+                      color: AppColors.primaryGreen,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
                     ),
                   ),
-          ),
-
-          const SizedBox(height: 30),
-          _buildButton("Verificar Código", _verifyCode),
-        ],
-      ),
+                ),
+        ),
+        const SizedBox(height: 30),
+        _buildActionButton("VERIFICAR CÓDIGO", _verifyCode),
+      ],
     );
   }
 
   Widget _buildNewPasswordStep() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24.0),
+      padding: const EdgeInsets.all(32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(height: 10),
           Text(
-            "Nueva contraseña",
-            style: GoogleFonts.poppins(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
+            "NUEVA CLAVE",
+            style: GoogleFonts.montserrat(
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
               color: AppColors.primaryGreen,
+              letterSpacing: 2,
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.only(top: 8.0, bottom: 40),
-            child: Text(
-              "Crea una contraseña segura para proteger tu cuenta.",
-              style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600]),
-            ),
+          const SizedBox(height: 12),
+          Text(
+            "Crea una contraseña segura de al menos 8 caracteres.",
+            style: GoogleFonts.montserrat(fontSize: 15, color: Colors.blueGrey),
           ),
-
+          const SizedBox(height: 40),
           TextField(
             controller: _passController,
             obscureText: _obscurePass,
-            style: GoogleFonts.poppins(),
-            decoration: _getInputStyle(
-              label: "Nueva contraseña",
+            decoration: _getLightInputStyle(
+              label: "Contraseña nueva",
               icon: Icons.lock_outline,
               suffixIcon: IconButton(
                 icon: Icon(
                   _obscurePass ? Icons.visibility_off : Icons.visibility,
-                  color: Colors.grey,
+                  color: Colors.grey.shade400,
                 ),
                 onPressed: () => setState(() => _obscurePass = !_obscurePass),
               ),
             ),
           ),
-
           const SizedBox(height: 20),
-
           TextField(
             controller: _confirmPassController,
             obscureText: _obscurePass,
-            style: GoogleFonts.poppins(),
-            decoration: _getInputStyle(
+            decoration: _getLightInputStyle(
               label: "Confirmar contraseña",
               icon: Icons.verified_user_outlined,
             ),
           ),
-
           const SizedBox(height: 50),
-          _buildButton("Actualizar Contraseña", _changePassword),
+          _buildActionButton("ACTUALIZAR Y ENTRAR", _changePassword),
         ],
       ),
     );
   }
 
-  Widget _buildButton(String text, VoidCallback onPressed) {
-    return SizedBox(
+  Widget _buildActionButton(String text, VoidCallback onPressed) {
+    return Container(
       width: double.infinity,
-      height: 56,
+      height: 60,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryGreen.withValues(alpha: 0.2),
+            blurRadius: 15,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
       child: ElevatedButton(
         onPressed: _isLoading ? null : onPressed,
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.primaryGreen,
+          foregroundColor: Colors.white,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(15),
+            borderRadius: BorderRadius.circular(18),
           ),
-          elevation: 4,
-          shadowColor: AppColors.primaryGreen.withValues(alpha: 0.4),
+          elevation: 0,
         ),
         child: _isLoading
             ? const SizedBox(
@@ -458,10 +464,10 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               )
             : Text(
                 text,
-                style: GoogleFonts.poppins(
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w800,
                   fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
+                  letterSpacing: 1,
                 ),
               ),
       ),
