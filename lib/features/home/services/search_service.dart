@@ -129,6 +129,20 @@ class SearchService {
     return [];
   }
 
+  // NUEVO: Borra un lugar específico por su ID
+  Future<bool> deleteRecentPlace(dynamic id) async {
+    try {
+      final response = await _apiClient.dio.delete('/lugares/recientes/$id');
+      if (response.statusCode == 200) {
+        print("Lugar reciente eliminado del servidor.");
+        return true;
+      }
+    } catch (e) {
+      print("Error borrando lugar reciente en SearchService: $e");
+    }
+    return false;
+  }
+
   // lib/features/home/services/search_service.dart
   Future<bool> clearRecentHistory() async {
     try {
@@ -137,35 +151,6 @@ class SearchService {
     } catch (e) {
       print("Error limpiando historial: $e");
       return false;
-    }
-  }
-
-  Future<Map<String, dynamic>?> saveQuickAddress({
-    required String type,
-    required String address,
-    required double lat,
-    required double lng,
-    required String name, // Asegúrate de recibir el nombre
-  }) async {
-    try {
-      final response = await _apiClient.dio.post(
-        '/lugares/favoritos', // <--- CAMBIADO: De '/user/favoritos' a '/lugares/favoritos'
-        data: {
-          'tipo': type,
-          'address': address,
-          'lat': lat,
-          'lng': lng,
-          'name': name, // El backend espera 'name' según el validador
-        },
-      );
-      if (response.statusCode == 200) {
-        return response
-            .data['user']; // Devolvemos el objeto usuario actualizado
-      }
-      return null;
-    } catch (e) {
-      print("Error guardando favorito: $e");
-      return null;
     }
   }
 }

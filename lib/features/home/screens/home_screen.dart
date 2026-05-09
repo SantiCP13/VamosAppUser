@@ -51,6 +51,12 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // --- CONTROLADORES ---
   final MapController _mapController = MapController();
+  final TextEditingController _favSearchController = TextEditingController();
+  List<Map<String, dynamic>> _favSearchResults = [];
+  Timer? _favDebounce;
+  bool _isSearchingFav = false;
+  String? _mapPickingTarget;
+  bool _isStrictPickupMode = false; // Nueva bandera para activar la restricción
   // En la zona de controladores (donde está el MapController)
   AnimationController? _mapMoveController;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -59,19 +65,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final SearchService _searchService = SearchService(); // <--- AÑADE ESTA LÍNEA
   Timer? _debounceGeocoding;
   LatLng?
+  // ignore: unused_field
   _lastGeocodedPosition; // Rastrear dónde pedimos dirección por última vez
   // --- ANIMACIÓN DE RUTA ---
   AnimationController? _routeDrawingController;
   LatLng? _referenceOriginCoords; // Guardará el punto original buscado
   List<LatLng> _animatedRoutePoints = []; // Esta lista es la que verá el mapa
   // --- ESTADO GENERAL ---
-
+  String _loadingTitle = "PREPARANDO TU VIAJE";
+  String _loadingSubtitle = "Estamos calculando la mejor ruta para ti...";
+  // Cerca de donde tienes _isPickingOrigin
+  bool _isOutsideRadius = false;
   TripState _tripState = TripState.DASHBOARD;
   String? _addressTypeToSave; // Guardará 'home' o 'work'
 
   LatLng? _currentPosition;
   final LatLng _defaultLocation = const LatLng(4.9183, -74.0258); // Cajicá
   bool _isMapReady = false;
+  bool _isOriginSnapped = false; // Nueva bandera
+
   bool _isPickingLocation =
       false; // Controla si el panel de pedido está abierto o minimizado
   bool _isOriginConfirmed = false; // Nueva bandera
@@ -85,6 +97,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Map<String, dynamic>? _driverData; // Datos del conductor (Vacío 2)
   String? _currentTripId;
   // Cerca de las otras variables booleanas (aprox línea 65)
+  // ignore: unused_field
   bool _isPickingOrigin = false;
   // --- PAGO ---
   // ignore: prefer_final_fields
@@ -95,7 +108,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String? _destinationName;
   LatLng? _destinationCoordinates;
   List<LatLng> _routePoints = [];
-  String? _originName = "Mi ubicación"; // Valor por defecto
+  String? _originName; // Valor por defecto
+
+  String?
+  _originReferenceName; // Guarda el nombre de lo que el usuario buscó originalmente
   LatLng? _originCoordinates;
 
   // --- MODO Y PASAJEROS ---
@@ -121,7 +137,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Timer? _waitTimer;
   DateTime? _scheduledAt;
   String _pickingAddress = "Buscando dirección...";
-  // ignore: unused_field
+  // ignore: unused_field, prefer_final_fields
   String _pickingSubAddress = ""; // <--- AÑADE ESTA LÍNEA
   LatLng _mapCenter = const LatLng(0, 0);
   List<Map<String, dynamic>> _recentPlaces =
@@ -188,6 +204,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _favSearchController.dispose(); // <--- Agrega esta línea
+    _favDebounce?.cancel();
     _routeDrawingController?.dispose(); // <--- VITAL para no gastar memoria
 
     _checkStatusTimer?.cancel();
@@ -346,7 +364,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       SnackBar(
         content: Text(
           "⚠️ GPS no detectado. Usando ubicación aproximada.",
-          style: GoogleFonts.poppins(),
+          style: GoogleFonts.montserrat(),
         ),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -382,7 +400,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       if (_currentUser.canUseCorporateMode) {
         bool success = await AuthService.toggleAppMode(true);
         if (success && mounted) {
-          _showModeSnackBar("Modo Corporativo activado", Colors.blue[800]!);
+          _showModeSnackBar("Modo Corporativo activado", AppColors.darkBlue);
         }
       } else {
         _showCorporateLinkingModal();
@@ -401,7 +419,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       SnackBar(
         content: Text(
           message,
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+          style: GoogleFonts.montserrat(fontWeight: FontWeight.bold),
         ),
         backgroundColor: color,
         duration: const Duration(seconds: 2),
@@ -494,7 +512,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
         content: Text(
           "En MODO PERSONAL, los viajes dentro de la misma ciudad no están permitidos.\n\nPara traslados urbanos, por favor activa el MODO CORPORATIVO.",
-          style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[700]),
+          style: GoogleFonts.montserrat(fontSize: 14, color: Colors.grey[700]),
           textAlign: TextAlign.center,
         ),
         actions: [
@@ -527,73 +545,43 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _showIncompleteProfileDialog() {
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: Column(
-          children: [
-            CircleAvatar(
-              backgroundColor: Colors.red.withValues(alpha: 0.1),
-              radius: 30,
-              child: Icon(
-                Icons.badge_outlined,
-                color: Colors.red[800],
-                size: 35,
-              ),
-            ),
-            const SizedBox(height: 15),
-            Text(
-              "Perfil Incompleto",
-              style: GoogleFonts.montserrat(
-                fontWeight: FontWeight.w800,
-                color: AppColors.darkBlue,
-              ),
-            ),
-          ],
-        ),
-        content: Text(
-          "Para generar el seguro de viaje (FUEC), es obligatorio tener tu número de documento registrado.",
-          textAlign: TextAlign.center,
-          style: GoogleFonts.poppins(fontSize: 14),
-        ),
-        actions: [
-          Column(
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    Navigator.pushNamed(context, '/profile_edit');
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryGreen,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                    padding: const EdgeInsets.symmetric(vertical: 15),
-                  ),
-                  child: Text(
-                    "IR A MI PERFIL",
-                    style: GoogleFonts.montserrat(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
+              const Icon(
+                Icons.shield_moon_rounded,
+                color: AppColors.primaryGreen,
+                size: 60,
+              ),
+              const SizedBox(height: 20),
+              Text(
+                "Perfil Incompleto",
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 20,
                 ),
               ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: Text(
-                  "CANCELAR",
-                  style: GoogleFonts.montserrat(
-                    color: Colors.grey,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+              const SizedBox(height: 10),
+              Text(
+                "Para generar el seguro de viaje (FUEC), es obligatorio registrar tu documento.",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.montserrat(color: Colors.grey),
+              ),
+              const SizedBox(height: 25),
+              _buildPremiumButton(
+                text: "IR A MI PERFIL",
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  Navigator.pushNamed(context, '/profile_edit');
+                },
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -626,7 +614,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           message ??
               "No hay conductores disponibles cerca de ti en este momento. Por favor, intenta de nuevo en unos minutos.",
           textAlign: TextAlign.center,
-          style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[700]),
+          style: GoogleFonts.montserrat(fontSize: 14, color: Colors.grey[700]),
         ),
         actions: [
           SizedBox(
@@ -672,32 +660,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // --- REEMPLAZA ESTOS MÉTODOS EN home_screen.dart ---
 
   Future<void> _confirmMapSelection() async {
+    // 1. BLOQUEO PREVENTIVO (Solo si es estricto)
+    if (_isStrictPickupMode && _isOutsideRadius) {
+      _showAppSnackBar(
+        "Estás fuera del rango permitido (200m).",
+        isError: true,
+      );
+      return;
+    }
+
     if (_isLoadingAddress || _pickingAddress == "Buscando dirección...") return;
+
+    setState(() {
+      _loadingTitle = "VALIDANDO UBICACIÓN";
+      _loadingSubtitle = "Confirmando dirección seleccionada...";
+      _tripState = TripState.CALCULATING;
+      _isLoadingAddress = true;
+    });
 
     final LatLng pointOnMap = _mapController.camera.center;
 
-    // 1. VALIDACIÓN DE SEGURIDAD (Solo si viene de BUSCADOR)
-    // Si _referenceOriginCoords existe, significa que el usuario buscó una dirección por texto
-    if (_isPickingOrigin && _referenceOriginCoords != null) {
-      double distance = Geolocator.distanceBetween(
-        _referenceOriginCoords!.latitude,
-        _referenceOriginCoords!.longitude,
-        pointOnMap.latitude,
-        pointOnMap.longitude,
-      );
-
-      if (distance > 200) {
-        _showAppSnackBar(
-          "Por seguridad, ajusta el pin cerca de la dirección (Máx 200m).",
-          isError: true,
+    try {
+      // 3. GUARDAR FAVORITO
+      if (_addressTypeToSave != null) {
+        await _saveFavoriteToDB(
+          _addressTypeToSave!,
+          _pickingAddress,
+          pointOnMap.latitude,
+          pointOnMap.longitude,
         );
+        setState(() {
+          _tripState = TripState.DASHBOARD;
+          _isPickingLocation = false;
+          _addressTypeToSave = null;
+          _isLoadingAddress = false;
+        });
         return;
       }
-    }
 
-    setState(() => _isLoadingAddress = true);
-
-    try {
+      // 4. GEODECODIFICACIÓN
       final data = await _searchService.getReverseGeocode(
         pointOnMap.latitude,
         pointOnMap.longitude,
@@ -710,44 +711,89 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           (data['snapped_lng'] as num).toDouble(),
         );
 
+        // --- VALIDACIÓN DE RESTRICCIÓN 200 METROS (Solo si aplica) ---
+        if (_isStrictPickupMode && _mapPickingTarget == 'pickup') {
+          double distance = Geolocator.distanceBetween(
+            _referenceOriginCoords!.latitude,
+            _referenceOriginCoords!.longitude,
+            pointOnMap.latitude,
+            pointOnMap.longitude,
+          );
+
+          if (distance > 200) {
+            setState(() {
+              _isLoadingAddress = false;
+              _tripState = TripState.CONFIRMING_PICKUP;
+              _isOutsideRadius = true;
+            });
+            _showAppSnackBar("No puedes alejarte más de 200m.", isError: true);
+            return;
+          }
+        }
+
+        // --- FINALIZAR PROCESO (Fuera del IF de restricción) ---
         setState(() {
           _isLoadingAddress = false;
+          _isOutsideRadius = false;
+          _isOriginSnapped = true;
 
-          if (_isPickingOrigin) {
-            // --- FINALIZAR ORIGEN ---
+          if (_mapPickingTarget == 'pickup') {
             _originName = data['name'];
             _originCoordinates = snappedPoint;
             _isOriginConfirmed = true;
-            _isPickingLocation = false; // Cerramos el mapa
-            _referenceOriginCoords =
-                null; // Limpiamos la referencia de seguridad
-
-            if (_destinationCoordinates != null) {
-              _calculateRouteAndPrice(_destinationCoordinates!);
-            }
-          } else {
-            // --- FINALIZAR DESTINO ---
+          } else if (_mapPickingTarget == 'reference') {
+            _originReferenceName = data['name'];
+            _referenceOriginCoords = snappedPoint;
+            _originName = data['name'];
+            _originCoordinates = snappedPoint;
+            _isOriginConfirmed = true;
+          } else if (_mapPickingTarget == 'destination') {
             _destinationName = data['name'];
             _destinationCoordinates = snappedPoint;
-
-            // ¿De dónde venimos?
-            if (_originCoordinates == null || _referenceOriginCoords != null) {
-              // Si no hay origen o venimos de buscador, PEDIMOS RECOGIDA
-              _isPickingOrigin = true;
-              _isOriginConfirmed = false;
-              _isPickingLocation = true;
-              _startPickupConfirmation();
-            } else {
-              // Si el origen ya fue fijado manualmente antes, saltamos directo al precio
-              _isPickingLocation = false;
-              _calculateRouteAndPrice(_destinationCoordinates!);
-            }
           }
+
+          _isPickingLocation = false;
+          _mapPickingTarget = null;
         });
+        // LÓGICA DE REGRESO O CÁLCULO
+        if (_destinationCoordinates == null) {
+          // Si estamos confirmando origen pero NO hay destino, abrimos buscador
+          _openSearchFromCurrentState();
+        } else if (_originCoordinates != null &&
+            _destinationCoordinates != null) {
+          // Si ya tenemos ambos, calculamos ruta de inmediato
+          _calculateRouteAndPrice(_destinationCoordinates!);
+        }
       }
     } catch (e) {
-      if (mounted) setState(() => _isLoadingAddress = false);
+      debugPrint("Error en confirmación: $e");
+      if (mounted) {
+        setState(() {
+          _isLoadingAddress = false;
+          _tripState =
+              TripState.CONFIRMING_PICKUP; // Volvemos al mapa si algo falla
+        });
+        _showAppSnackBar(
+          "Error al procesar ubicación, intenta de nuevo.",
+          isError: true,
+        );
+      }
     }
+  }
+
+  Widget _buildSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(25, 20, 25, 10),
+      child: Text(
+        title.toUpperCase(),
+        style: GoogleFonts.montserrat(
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          color: const Color(0xFF64748B), // Un gris azulado elegante
+          letterSpacing: 2,
+        ),
+      ),
+    );
   }
 
   Future<void> _checkActiveTrip() async {
@@ -827,121 +873,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
-  Future<void> _calculateRouteAndPrice(LatLng destination) async {
-    if (_isPickingLocation || _isCalculatingRoute) return;
-
-    // 1. Usamos los puntos que YA fueron "snapped" en _confirmMapSelection
-    LatLng startPoint =
-        _originCoordinates ?? _currentPosition ?? _defaultLocation;
-    LatLng endPoint = destination;
-
-    // --- VALIDACIÓN DE DISTANCIA MÍNIMA ---
-    double metrosDeDistancia = Geolocator.distanceBetween(
-      startPoint.latitude,
-      startPoint.longitude,
-      endPoint.latitude,
-      endPoint.longitude,
-    );
-
-    if (metrosDeDistancia < 20) {
-      if (mounted) {
-        setState(() {
-          _tripState = TripState.DASHBOARD;
-          _isCalculatingRoute = false;
-        });
-        _showAppSnackBar("El destino está demasiado cerca.", isError: true);
-      }
-      return;
-    }
-
-    if (_routePoints.isEmpty) {
-      setState(() {
-        _isCalculatingRoute = true;
-        _tripState = TripState.CALCULATING;
-      });
-    }
-
-    try {
-      // --- BLOQUE LEGAL ---
-      bool allowed = await _isTripAllowed(startPoint, endPoint);
-      if (!allowed) {
-        setState(() {
-          _tripState = TripState.DASHBOARD;
-          _isCalculatingRoute = false;
-        });
-        return;
-      }
-
-      // 2. NORMALIZACIÓN A 4 DECIMALES (Vital para el Caché del Backend)
-      // Esto asegura que el "Hash" en el servidor coincida exactamente.
-      LatLng finalStart = LatLng(
-        double.parse(startPoint.latitude.toStringAsFixed(4)),
-        double.parse(startPoint.longitude.toStringAsFixed(4)),
-      );
-      LatLng finalEnd = LatLng(
-        double.parse(endPoint.latitude.toStringAsFixed(4)),
-        double.parse(endPoint.longitude.toStringAsFixed(4)),
-      );
-
-      // 3. Cotizar con el servidor (Ya con el imán aplicado y decimales unificados)
-      final result = await _routeService.getRoute(
-        finalStart,
-        finalEnd,
-        idContrato: _currentUser.isCorporateMode
-            ? (_currentUser.companyUuid != null
-                  ? int.tryParse(_currentUser.companyUuid!)
-                  : null)
-            : null,
-        tipoVehiculo: _getDbCategory(_selectedServiceCategory),
-      );
-
-      if (!mounted) return;
-
-      setState(() {
-        _routePoints = result.points;
-        // Actualizamos pines a la ruta real del mapa
-        _originCoordinates = result.points.first;
-        _destinationCoordinates = result.points.last;
-
-        _animatedRoutePoints = [];
-        _tripPrice = result.price;
-        _baseRoutePrice = result.price;
-        _tripDesglose = result.desglose;
-        _categoryPricesFromServer = result.preciosCategorias ?? {};
-        _tripDistance =
-            "${(result.distanceMeters / 1000).toStringAsFixed(1)} km";
-        _tripDuration = "${(result.durationSeconds / 60).round()} min";
-        _isCalculatingRoute = false;
-      });
-
-      // 4. Animación y cámara
-      _fitCameraToRoute();
-      await Future.delayed(const Duration(milliseconds: 200));
-      _animateRouteDrawing();
-      await Future.delayed(const Duration(milliseconds: 2000));
-
-      if (mounted) {
-        setState(() {
-          _tripState = TripState.ROUTE_PREVIEW;
-          AuthService.isTripActive = true;
-        });
-      }
-    } catch (e) {
-      debugPrint("🚨 Error en ruta: $e");
-      if (mounted) {
-        setState(() {
-          _tripState = TripState.DASHBOARD;
-          _isCalculatingRoute = false;
-        });
-        _showAppSnackBar(
-          e.toString().replaceAll("Exception: ", ""),
-          isError: true,
-        );
-        _moveToCurrentPosition();
-      }
-    }
-  }
-
   void _updateFinalPrice() {
     // Lógica de salto automático de categoría según pasajeros
     if (_totalPassengers > 4 && _selectedServiceCategory != 'VAN') {
@@ -965,6 +896,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
 
+  /*
   void _showRequestTripPanel() {
     showModalBottomSheet(
       context: context,
@@ -998,16 +930,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           },
         );
       },
-    ).then((wasConfirmed) {
-      // Recibimos el valor aquí
-      // SOLO reseteamos si wasConfirmed NO es true.
-      // Si es true, significa que presionamos "Solicitar" y los datos deben persistir.
-      if (wasConfirmed != true && _tripState == TripState.ROUTE_PREVIEW) {
+    ).then((result) {
+      // Cambiamos 'wasConfirmed' por 'result'
+      // ✅ Si el resultado es 'PICKING', NO hacemos nada (dejamos que el mapa fluya)
+      if (result == 'PICKING') return;
+
+      // Si el resultado es true (proceso de solicitud iniciado), tampoco reseteamos
+      if (result == true) return;
+
+      // Solo si se cierra deslizando hacia abajo o dando atrás sin elegir nada:
+      if (_tripState == TripState.ROUTE_PREVIEW) {
         _resetApp();
       }
     });
   }
-
+*/
   void _moveToCurrentPosition() {
     if (_currentPosition != null) {
       _animatedMapMove(_currentPosition!, 16.0);
@@ -1070,57 +1007,120 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   List<Marker> _buildMarkers() {
     final List<Marker> markers = [];
 
-    // 1. Ubicación GPS actual
+    // 1. Ubicación GPS actual (MANTIENE TU LÓGICA)
     if (_currentPosition != null) {
       markers.add(
         Marker(
           point: _currentPosition!,
-          width: 15,
-          height: 15,
+          width: 22,
+          height: 22,
           child: Container(
-            decoration: const BoxDecoration(
-              color: AppColors.primaryGreen,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2196F3),
               shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 3),
+              boxShadow: const [
+                BoxShadow(
+                  color: Colors.black26,
+                  blurRadius: 6,
+                  offset: Offset(0, 2),
+                ),
+              ],
             ),
           ),
         ),
       );
     }
 
-    if (_routePoints.isNotEmpty && _tripState != TripState.DASHBOARD) {
-      final LatLng startPt = _routePoints.first;
+    // --- LÓGICA DE PERSISTENCIA PARA EL ANCLA (PUNTO A) ---
+    if (_referenceOriginCoords != null) {
+      bool mostrarAncla = false;
+
+      // ✅ Solo mostramos el ancla si el objetivo es ajustar la recogida ('pickup')
+      // Si estamos cambiando la 'reference' o el 'destination', el ancla vieja desaparece.
+      if (_isPickingLocation && _mapPickingTarget == 'pickup') {
+        mostrarAncla = true;
+      }
+      // Mostrar en el resumen final si hay diferencia
+      else if (!_isPickingLocation &&
+          _routePoints.isNotEmpty &&
+          _tripState != TripState.ROUTE_PREVIEW) {
+        mostrarAncla = true;
+      }
+
+      if (mostrarAncla) {
+        markers.add(
+          Marker(
+            point: _referenceOriginCoords!,
+            width: 100,
+            height: 40,
+            alignment: Alignment.topCenter,
+            child: _buildReferencePin(),
+          ),
+        );
+      }
+    }
+    print("🔍 DEBUG PEAJES: $_tripDesglose");
+    if (_tripState == TripState.ROUTE_PREVIEW && _tripDesglose != null) {
+      final List peajes = _tripDesglose?['peajes_detalles'] ?? [];
+      for (var peaje in peajes) {
+        // Extraemos los valores del mapa 'peaje' a variables locales
+        final lat = peaje['lat']?.toDouble();
+        final lng = peaje['lng']?.toDouble();
+
+        // Ahora sí, usamos esas variables locales
+        if (lat != null && lng != null) {
+          markers.add(
+            Marker(
+              point: LatLng(lat, lng), // Usando las variables recién definidas
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  const Icon(Icons.circle, color: Colors.white, size: 24),
+                  Icon(Icons.toll, color: Colors.amber[900], size: 20),
+                ],
+              ),
+            ),
+          );
+        }
+      }
+    }
+    // 2. LOGICA DE RUTA Y PINES (MANTIENE TU DISEÑO ORIGINAL)
+    // Solo dibujamos los pines de Recogida (Verde) y Destino (Azul) si NO estamos ajustando el mapa,
+    // para que no se dupliquen con el pin flotante del centro.
+    if (_routePoints.isNotEmpty &&
+        _tripState != TripState.DASHBOARD &&
+        !_isPickingLocation) {
+      final LatLng startPt = _originCoordinates ?? _routePoints.first;
       final LatLng endPt = _routePoints.last;
 
-      // 1. PUNTOS BLANCOS (Base en la calle)
+      // PUNTO BLANCO BASE
       markers.add(_buildBaseDot(startPt, AppColors.primaryGreen));
       markers.add(_buildBaseDot(endPt, AppColors.darkBlue));
 
-      // 2. PINES (Aumentamos width y height para que no se corten y sean grandes)
+      // PIN DE RECOGIDA PRINCIPAL (Verde)
       markers.add(
         Marker(
           point: startPt,
-          width: 200, // Más ancho para nombres largos
-          height: 100, // Más alto para que respire
-          rotate:
-              true, // CLAVE: No rotar con el mapa, siempre hacia arriba del móvil
-
-          alignment: Alignment.topCenter, // La base del widget toca el punto
+          width: 200,
+          height: 100,
+          rotate: true,
+          alignment: Alignment.topCenter,
           child: _buildSimplePin(
-            label: _originName?.split(',').first ?? "Inicio",
+            label: _originName?.split(',').first ?? "Recogida",
             color: AppColors.primaryGreen,
             icon: Icons.person_pin_circle,
           ),
         ),
       );
 
+      // PIN DE DESTINO (Azul)
       markers.add(
         Marker(
           point: endPt,
           width: 220,
           height: 110,
-          rotate:
-              true, // CLAVE: No rotar con el mapa, siempre hacia arriba del móvil
-
+          rotate: true,
           alignment: Alignment.topCenter,
           child: _buildSimplePin(
             label: _destinationName?.split(',').first ?? "Destino",
@@ -1130,17 +1130,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
       );
 
-      // 4. BURBUJA DE TIEMPO (En la mitad de la ruta)
+      // BURBUJA DE TIEMPO
       if (_animatedRoutePoints.length > 5) {
         final midIndex = (_animatedRoutePoints.length / 2).floor();
         markers.add(
           Marker(
             point: _animatedRoutePoints[midIndex],
-            width: 80,
+            width: 85,
             height: 35,
-            rotate:
-                true, // CLAVE: No rotar con el mapa, siempre hacia arriba del móvil
-
+            rotate: true,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
               decoration: BoxDecoration(
@@ -1156,7 +1154,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 children: [
                   const Icon(
                     Icons.access_time_filled,
-                    size: 14,
+                    size: 12,
                     color: AppColors.primaryGreen,
                   ),
                   const SizedBox(width: 5),
@@ -1242,37 +1240,129 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    // 1. Verificación de carga inicial
     if (AuthService.currentUser == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
+    // Determinamos qué vista mostrar basándonos en el estado
     return Scaffold(
       key: _scaffoldKey,
-      drawer: SideMenu(onToggleMode: _toggleAppMode),
-      // Usamos AnimatedSwitcher para que el cambio entre Dashboard y Mapa sea suave
+      // El drawer solo en Dashboard
+      drawer: (_tripState == TripState.DASHBOARD && !_isPickingLocation)
+          ? SideMenu(onToggleMode: _toggleAppMode)
+          : null,
       body: AnimatedSwitcher(
         duration: const Duration(
-          milliseconds: 200,
-        ), // Duración de la transición
+          milliseconds: 500,
+        ), // Transición suave de medio segundo
         switchInCurve: Curves.easeInOut,
         switchOutCurve: Curves.easeInOut,
-        child: (_tripState == TripState.DASHBOARD && !_isPickingLocation)
-            ? Container(
-                key: const ValueKey(
-                  "uber_dashboard",
-                ), // Key única para el Dashboard
-                child: _buildUberDashboardFull(),
-              )
-            : _buildMapInterface(), // Si no es Dashboard, mostramos la interfaz del mapa
+        child: _buildCurrentStateBody(),
+      ),
+    );
+  }
+
+  // Nueva función para organizar las jerarquías de las pantallas
+  Widget _buildCurrentStateBody() {
+    // 1. PRIORIDAD: Pantalla completa de carga
+    if (_tripState == TripState.CALCULATING) {
+      return _buildFullScreenLoading(key: const ValueKey("loading_screen"));
+    }
+
+    // 2. DASHBOARD
+    // POR ESTO:
+    if (_tripState == TripState.DASHBOARD && !_isPickingLocation) {
+      return _buildUberDashboardFull(key: const ValueKey("dashboard_screen"));
+    }
+
+    return _buildMapInterface(key: const ValueKey("map_screen"));
+  }
+
+  Widget _buildFullScreenLoading({required Key key}) {
+    final isCorp = _currentUser.isCorporateMode;
+    final color = isCorp ? AppColors.darkBlue : AppColors.primaryGreen;
+
+    return Container(
+      key: key,
+      width: double.infinity,
+      height: double.infinity,
+      color: Colors.white,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // EL ICONO DE PULSO SE QUEDA AFUERA: Siempre animando
+          _PulseLoadingIcon(color: color),
+
+          const SizedBox(height: 50),
+
+          // --- ANIMACIÓN DE TEXTO SUAVE ---
+          // --- DENTRO DE _buildFullScreenLoading ---
+          // --- DENTRO DE _buildFullScreenLoading ---
+          SizedBox(
+            height: 120, // Altura fija para evitar que la UI se mueva
+            child: AnimatedSwitcher(
+              duration: const Duration(
+                milliseconds: 600,
+              ), // Duración más larga para suavidad
+              switchInCurve: Curves.easeInOut,
+              switchOutCurve: Curves.easeInOut,
+              transitionBuilder: (Widget child, Animation<double> animation) {
+                // SOLO EFECTO DE FADE Y ESCALA, NADA DE OFFSET (NADA DE ARRIBA/ABAJO)
+                return FadeTransition(
+                  opacity: animation,
+                  child: ScaleTransition(
+                    scale: Tween<double>(
+                      begin: 0.98,
+                      end: 1.0,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                );
+              },
+              child: Column(
+                key: ValueKey(
+                  _loadingTitle + _loadingSubtitle,
+                ), // Clave para disparar animación
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    _loadingTitle,
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.montserrat(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.darkBlue,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 40),
+                    child: Text(
+                      _loadingSubtitle,
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.montserrat(
+                        fontSize: 13,
+                        color: Colors.grey.shade600,
+                        fontWeight: FontWeight.w500,
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
   // --- PEGA ESTO AL FINAL DE LA CLASE _HomeScreenState ---
-  Widget _buildMapInterface() {
+  Widget _buildMapInterface({required Key key}) {
     return Stack(
-      key: const ValueKey("map_interface"),
+      key: key, // <--- AÑADE ESTO
+
       children: [
         Positioned.fill(
           child: FlutterMap(
@@ -1303,30 +1393,48 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 tileProvider: CachedTileProvider(),
                 retinaMode: MediaQuery.of(context).devicePixelRatio > 1.0,
               ),
-              // Línea de precisión (Dotted Polyline)
-              if (_isPickingLocation && _currentPosition != null)
+              if (_isPickingLocation &&
+                  _isStrictPickupMode &&
+                  _referenceOriginCoords != null)
+                CircleLayer(
+                  circles: [
+                    CircleMarker(
+                      point: _referenceOriginCoords!,
+                      radius: 200,
+                      useRadiusInMeter: true,
+                      color: AppColors.primaryGreen.withValues(alpha: 0.08),
+                      borderColor: AppColors.primaryGreen.withValues(
+                        alpha: 0.3,
+                      ),
+                      borderStrokeWidth: 2,
+                    ),
+                  ],
+                ),
+
+              // 2. LÍNEA DE PUNTOS: Solo si es Ajuste de Recogida
+              if (_isPickingLocation &&
+                  _mapPickingTarget == 'pickup' &&
+                  _referenceOriginCoords != null)
                 PolylineLayer(
                   polylines: [
                     Polyline(
-                      points: [_currentPosition!, _mapCenter],
-                      strokeWidth: 3,
-                      color: Colors.grey.withValues(alpha: 0.5), // CORREGIDO
+                      points: [_referenceOriginCoords!, _mapCenter],
+                      strokeWidth: 5,
+                      color: Colors.grey.withValues(alpha: 0.5),
                       pattern: const StrokePattern.dotted(),
                     ),
                   ],
                 ),
-              if (_animatedRoutePoints
-                  .isNotEmpty) // Quitamos la validación de TripState para evitar parpadeos
+
+              // 3. RUTA DIBUJADA: Solo si NO estamos editando (Vista Previa)
+              if (_animatedRoutePoints.isNotEmpty &&
+                  (!_isPickingLocation || _mapPickingTarget == 'pickup'))
                 PolylineLayer(
                   polylines: [
                     Polyline(
                       points: _animatedRoutePoints,
                       strokeWidth: 5,
                       color: AppColors.primaryGreen,
-                      borderColor: AppColors.primaryGreen.withValues(
-                        alpha: 0.3,
-                      ), // Opcional: efecto de borde suave
-                      borderStrokeWidth: 2,
                     ),
                   ],
                 ),
@@ -1335,23 +1443,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ],
           ),
         ),
+        _buildMapPickingSearchOverlay(), // <--- AÑADIR ESTO AQUÍ
 
         if (!_isPickingLocation) _buildDraggablePanel(),
 
         if (_isPickingLocation) _buildMapPickerUI(),
 
-        Positioned(
-          top: MediaQuery.of(context).padding.top + 10,
-          left: 20,
-          child: _buildRoundMenuButton(),
-        ),
+        if (_tripState == TripState.DASHBOARD && !_isPickingLocation)
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 10,
+            left: 20,
+            child: _buildRoundMenuButton(),
+          ),
       ],
     );
   }
 
-  Widget _buildUberDashboardFull() {
+  Widget _buildUberDashboardFull({required Key key}) {
     return Container(
-      // 1. FONDO IGUAL AL WELCOME SCREEN
+      key: key, // <--- AÑADE ESTO
+
       decoration: const BoxDecoration(
         gradient: RadialGradient(
           center: Alignment(0.0, -0.45),
@@ -1363,20 +1474,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // --- HEADER: Menú y Logo a la derecha ---
+            // --- HEADER: Menú y Logo ---
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   _buildRoundMenuButton(),
                   Hero(
                     tag: 'logo',
-                    child: Image.asset(
-                      'assets/images/V.png',
-                      height: 40, // Logo pequeño premium
-                      fit: BoxFit.contain,
-                    ),
+                    child: Image.asset('assets/images/logo.png', height: 60),
                   ),
                 ],
               ),
@@ -1388,7 +1495,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // --- TÍTULO: "¿A dónde VAMOS hoy?" ---
+                    // --- BIENVENIDA ---
                     Padding(
                       padding: const EdgeInsets.fromLTRB(25, 20, 25, 10),
                       child: RichText(
@@ -1411,51 +1518,132 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       ),
                     ),
 
-                    const SizedBox(height: 15),
+                    const SizedBox(height: 10),
 
-                    // --- BUSCADOR PREMIUM ---
+                    // --- BUSCADOR ---
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: _buildSearchWidgetPremium(),
                     ),
-
-                    // --- DESTINOS RECIENTES (AHORA DEBAJO DEL BUSCADOR) ---
+                    const SizedBox(height: 20),
+                    // --- SECCIÓN: ACCESOS RÁPIDOS ---
+                    _buildSectionTitle("Mis lugares favoritos"),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Row(
+                        children: [
+                          _buildQuickAccessBtn(
+                            icon: Icons.home_rounded,
+                            label: "Casa",
+                            type: "home",
+                            address: _currentUser.homeAddress,
+                            lat: _currentUser.homeLat,
+                            lng: _currentUser.homeLng,
+                          ),
+                          const SizedBox(width: 12),
+                          _buildQuickAccessBtn(
+                            icon: Icons.work_rounded,
+                            label: "Oficina",
+                            type: "work",
+                            address: _currentUser.workAddress,
+                            lat: _currentUser.workLat,
+                            lng: _currentUser.workLng,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    // --- SECCIÓN: RECIENTES ---
                     if (_recentPlaces.isNotEmpty) ...[
-                      const SizedBox(height: 20),
+                      _buildSectionTitle("Destinos recientes"),
                       ..._recentPlaces
                           .take(3)
                           .map((place) => _buildRecentItemPremium(place)),
                     ],
 
-                    const SizedBox(height: 35),
+                    const SizedBox(height: 20),
 
-                    // --- GRID DE SERVICIOS (FONDO AZUL) ---
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 25),
-                      child: Text(
-                        "NUESTROS SERVICIOS",
-                        style: GoogleFonts.montserrat(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          color: const Color(0xFF64748B),
-                          letterSpacing: 2,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 15),
+                    // --- SECCIÓN: SERVICIOS ---
+                    _buildSectionTitle("Nuestros servicios"),
                     _buildServiceGrid(),
 
-                    const SizedBox(height: 30),
+                    const SizedBox(height: 20),
 
-                    // --- BANNER DE TUTORIAL ---
+                    // --- SECCIÓN: COMUNIDAD / TUTORIAL ---
+                    _buildSectionTitle("Para ti"),
                     _buildTutorialBanner(AppColors.primaryGreen),
 
-                    const SizedBox(height: 50),
+                    const SizedBox(height: 20),
                   ],
                 ),
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuickAccessBtn({
+    required IconData icon,
+    required String label,
+    required String type, // <--- ESTO ES LO QUE FALTABA
+    String? address,
+    double? lat,
+    double? lng,
+  }) {
+    bool isSet = address != null && address.isNotEmpty;
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          if (isSet) {
+            // Si ya existe, abrimos el modal de opciones (Viajar o Cambiar)
+            _showQuickAddressOptions(label, type, address, lat!, lng!);
+          } else {
+            // Si no existe, abrimos buscador para configurar
+            _openSearchForConfig(type);
+          }
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 15),
+          decoration: BoxDecoration(
+            color: AppColors.primaryGreen,
+            borderRadius: BorderRadius.circular(15),
+            border: Border.all(color: Colors.grey.shade100),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 10,
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                color: isSet
+                    ? const ui.Color.fromARGB(255, 255, 255, 255)
+                    : Colors.grey.shade300,
+                size: 30,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: GoogleFonts.montserrat(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: const ui.Color.fromARGB(255, 255, 255, 255),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1479,9 +1667,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       child: IconButton(
         icon: const Icon(
           Icons.menu_rounded,
-          color: AppColors.primaryGreen,
+          color: AppColors.darkBlue,
           size: 28,
         ),
+        // Ya no necesitas el if aquí, ya controlaste la visibilidad afuera
         onPressed: () => _scaffoldKey.currentState?.openDrawer(),
       ),
     );
@@ -1515,8 +1704,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             Text(
               "Ingresa tu destino...",
               style: GoogleFonts.montserrat(
-                fontSize: 16,
-                color: Colors.grey.shade500,
+                fontSize: 14,
+                color: const ui.Color.fromARGB(255, 129, 129, 129),
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -1728,68 +1917,54 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  // Modifica este método para usar _lastGeocodedPosition correctamente
   void _handleMapCameraMovement(MapCamera camera) {
-    setState(() {
-      _mapCenter = camera.center;
-    });
-
-    // FILTRO: Si el movimiento es menor a 5 metros, no pidas dirección todavía
-    if (_lastGeocodedPosition != null) {
-      double distance = Geolocator.distanceBetween(
-        _lastGeocodedPosition!.latitude,
-        _lastGeocodedPosition!.longitude,
+    // --- BLOQUE 1: RESTRICCIÓN DE 200M (SOLO MODO ESTRICTO) ---
+    if (_isStrictPickupMode && _referenceOriginCoords != null) {
+      double distFromOrigin = Geolocator.distanceBetween(
+        _referenceOriginCoords!.latitude,
+        _referenceOriginCoords!.longitude,
         camera.center.latitude,
         camera.center.longitude,
       );
-      if (distance < 5) return;
-    }
 
-    _debounceGeocoding?.cancel();
-    _debounceGeocoding = Timer(const Duration(milliseconds: 500), () async {
-      // 1. Si el mapa se movió menos de 20 metros de la última geocodificación, no gastes ni un solo bit de datos.
-      if (_lastGeocodedPosition != null) {
-        double dist = Geolocator.distanceBetween(
-          _lastGeocodedPosition!.latitude,
-          _lastGeocodedPosition!.longitude,
+      if (distFromOrigin > 200) {
+        final double bearing = Geolocator.bearingBetween(
+          _referenceOriginCoords!.latitude,
+          _referenceOriginCoords!.longitude,
           camera.center.latitude,
           camera.center.longitude,
         );
-        if (dist < 20) return;
+
+        final LatLng puntoLimite = const Distance().offset(
+          _referenceOriginCoords!,
+          195.0,
+          bearing,
+        );
+
+        _mapController.move(puntoLimite, camera.zoom);
+        if (!_isOutsideRadius) setState(() => _isOutsideRadius = true);
+        return; // No continuamos con la geocodificación si está fuera de rango
+      } else {
+        if (_isOutsideRadius) setState(() => _isOutsideRadius = false);
       }
+    }
+
+    // --- BLOQUE 2: GEOCODIFICACIÓN (LIBRE O ESTRICTA) ---
+    // Mantenemos el debounce pero sin bloquear el movimiento en modo libre
+    _debounceGeocoding?.cancel();
+    _debounceGeocoding = Timer(const Duration(milliseconds: 600), () async {
+      if (!mounted) return;
 
       final data = await _searchService.getReverseGeocode(
         camera.center.latitude,
         camera.center.longitude,
-        persist: false, // <--- EXPLICITAMENTE FALSE PARA NO PAGAR API
+        persist: false,
       );
 
       if (data != null && mounted) {
         setState(() {
           _pickingAddress = data['name'] ?? "Ubicación seleccionada";
-
-          double sLat = (data['snapped_lat'] as num).toDouble();
-          double sLng = (data['snapped_lng'] as num).toDouble();
-          LatLng snappedPoint = LatLng(sLat, sLng);
-
-          // --- EL IMÁN PERFECTO ---
-          // Calculamos la distancia entre el toque del usuario y la calle
-          double distanceToRoad = Geolocator.distanceBetween(
-            camera.center.latitude,
-            camera.center.longitude,
-            sLat,
-            sLng,
-          );
-
-          // Si el usuario está a más de 15 metros (está en un edificio o parque),
-          // el imán lo atrae suavemente a la calle.
-          // Si está a menos de 15m, lo dejamos elegir su punto exacto en el andén.
-          if (distanceToRoad > 15 && camera.zoom > 16.5) {
-            _animatedMapMove(snappedPoint, camera.zoom);
-            _lastGeocodedPosition = snappedPoint;
-          } else {
-            _lastGeocodedPosition = camera.center;
-          }
+          _lastGeocodedPosition = camera.center;
         });
       }
     });
@@ -1798,27 +1973,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget _buildMapPickerUI() {
     final bool isSavingFavorite = _addressTypeToSave != null;
 
-    String mainLabel;
-    String buttonText;
-    Color activeColor;
-    IconData iconData;
+    String mainLabel = "";
+    String buttonText = "";
+    Color activeColor = Colors.grey;
+    IconData iconData = Icons.location_on;
 
     if (isSavingFavorite) {
       mainLabel = "CONFIGURAR FAVORITO";
-      buttonText = "GUARDAR FAVORITO"; // Simplificado
+      buttonText = "GUARDAR FAVORITO";
       activeColor = AppColors.darkBlue;
       iconData = Icons.bookmark_add_rounded;
-    } else if (_isPickingOrigin) {
-      mainLabel = "PUNTO DE RECOGIDA";
+    } else if (_mapPickingTarget == 'pickup') {
+      mainLabel = "PUNTO DE ENCUENTRO";
       buttonText = "CONFIRMAR RECOGIDA";
       activeColor = AppColors.primaryGreen;
-      iconData = Icons.person_pin_circle_rounded;
-    } else {
-      mainLabel = "DESTINO DEL VIAJE";
-      buttonText = "CONFIRMAR DESTINO";
+      iconData = Icons.person_pin_circle;
+    } else if (_mapPickingTarget == 'reference') {
+      mainLabel = "NUEVA DIRECCIÓN DE PARTIDA";
+      buttonText = "ESTABLECER INICIO";
+      activeColor = Colors.black;
+      iconData = Icons.adjust;
+    } else if (_mapPickingTarget == 'destination') {
+      mainLabel = "NUEVO DESTINO";
+      buttonText = "ESTABLECER DESTINO";
       activeColor = AppColors.darkBlue;
-      iconData = Icons.location_on_rounded;
+      iconData = Icons.location_on;
+    } else {
+      // Caso de seguridad por si acaso
+      mainLabel = "SELECCIONAR UBICACIÓN";
+      buttonText = "CONFIRMAR";
+      activeColor = AppColors.primaryGreen;
+      iconData = Icons.location_on;
     }
+
     if (_pickingAddress == "Buscando dirección...") {
       buttonText = "BUSCANDO VÍA...";
     }
@@ -1992,54 +2179,44 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       ),
                       const SizedBox(height: 25),
                       // Busca el GestureDetector del botón de confirmación y modifícalo así:
+                      // Busca esto dentro de _buildMapPickerUI
                       GestureDetector(
-                        onTap:
-                            (_isLoadingAddress ||
-                                _pickingAddress == "Buscando dirección...")
-                            ? null // DESHABILITADO COMPLETAMENTE
-                            : _confirmMapSelection,
+                        onTap: () {
+                          // Si el usuario quiere confirmar, dejamos que el método _confirmMapSelection
+                          // gestione si es seguro o no, pero permitimos el clic.
+                          _confirmMapSelection();
+                        },
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 200),
                           width: double.infinity,
                           height: 60,
                           decoration: BoxDecoration(
-                            // Si está buscando o cargando, color gris. Si no, color activo.
-                            color:
-                                (_isLoadingAddress ||
-                                    _pickingAddress == "Buscando dirección...")
+                            // Eliminamos la condición que bloqueaba el color por "Buscando dirección..."
+                            // Solo lo bloqueamos si está cargando activamente (isLoadingAddress)
+                            color: _isLoadingAddress
                                 ? Colors.grey.shade400
                                 : activeColor,
                             borderRadius: BorderRadius.circular(18),
-                            boxShadow:
-                                (_isLoadingAddress ||
-                                    _pickingAddress == "Buscando dirección...")
-                                ? []
-                                : [
-                                    BoxShadow(
-                                      // ignore: deprecated_member_use
-                                      color: activeColor.withOpacity(0.3),
-                                      blurRadius: 12,
-                                      offset: const Offset(0, 6),
-                                    ),
-                                  ],
+                            boxShadow: [
+                              BoxShadow(
+                                color: activeColor.withValues(alpha: 0.3),
+                                blurRadius: 12,
+                                offset: const Offset(0, 6),
+                              ),
+                            ],
                           ),
                           child: Center(
                             child: _isLoadingAddress
-                                ? const SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: CircularProgressIndicator(
-                                      color: Colors.white,
-                                      strokeWidth: 3,
-                                    ),
+                                ? const CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 3,
                                   )
                                 : Text(
-                                    buttonText, // Texto dinámico: "BUSCANDO VÍA..." o "CONFIRMAR..."
+                                    buttonText,
                                     style: GoogleFonts.montserrat(
                                       fontWeight: FontWeight.w800,
                                       color: Colors.white,
                                       fontSize: 14,
-                                      letterSpacing: 0.8,
                                     ),
                                   ),
                           ),
@@ -2054,20 +2231,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             setState(() {
                               _isPickingLocation = false;
                               _addressTypeToSave = null;
-                              _isPickingOrigin = false; // Reset esencial
-
-                              // Si ya existe una ruta (puntos guardados), volvemos al resumen
-                              if (_routePoints.isNotEmpty &&
-                                  _destinationCoordinates != null) {
-                                _tripState = TripState.ROUTE_PREVIEW;
-                                // Ajustamos la cámara para ver la ruta que ya teníamos
-                                _fitCameraToRoute();
-                              } else {
-                                // Si no hay nada, volvemos al inicio
-                                _tripState = TripState.DASHBOARD;
-                                _resetApp();
-                              }
+                              _isPickingOrigin = false;
+                              _mapPickingTarget =
+                                  null; // IMPORTANTE: Limpiar el target para no quedar en bucle
                             });
+
+                            // LÓGICA DE REGRESO INTELIGENTE:
+                            // 1. Si no hay origen ni destino, es que el viaje nunca inició, volvemos al dashboard
+                            if (_originCoordinates == null &&
+                                _destinationCoordinates == null) {
+                              _resetApp();
+                            }
+                            // 2. Si estábamos editando/fijando pero ya había una ruta, volvemos al preview
+                            else if (_routePoints.isNotEmpty &&
+                                _destinationCoordinates != null) {
+                              setState(
+                                () => _tripState = TripState.ROUTE_PREVIEW,
+                              );
+                              _fitCameraToRoute();
+                            }
+                            // 3. CASO CLAVE: Si estábamos en el mapa y NO hay viaje completo,
+                            // regresamos al buscador para que el usuario pueda corregir su elección.
+                            else {
+                              _openSearchFromCurrentState();
+                            }
                           },
                           style: TextButton.styleFrom(
                             shape: RoundedRectangleBorder(
@@ -2104,13 +2291,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildMinifiedHeader() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
       child: Row(
         children: [
           Icon(
             Icons.directions_car,
             color: _currentUser.isCorporateMode
-                ? Colors.blue[800]
+                ? AppColors.darkBlue
                 : AppColors.primaryGreen,
           ),
           const SizedBox(width: 15),
@@ -2120,17 +2307,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               children: [
                 Text(
                   "Viaje a ${_destinationName?.split(',').first ?? 'Destino'}",
-                  style: GoogleFonts.poppins(
+                  style: GoogleFonts.montserrat(
                     fontWeight: FontWeight.bold,
-                    fontSize: 14,
+                    fontSize: 18,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
                   "Total: \$ ${_formatCurrency(_tripPrice)}",
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
+                  style: GoogleFonts.montserrat(
+                    fontSize: 14,
                     color: Colors.grey[600],
                   ),
                 ),
@@ -2172,9 +2359,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     ];
 
     final isCorp = _currentUser.isCorporateMode;
-    final activeColor = isCorp
-        ? const Color(0xFF1565C0)
-        : AppColors.primaryGreen;
+    final activeColor = isCorp ? AppColors.darkBlue : AppColors.primaryGreen;
 
     return Container(
       height: 125, // Altura optimizada para que no se vea apretado
@@ -2252,7 +2437,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     const SizedBox(height: 6),
                     Text(
                       opt['label'],
-                      style: GoogleFonts.poppins(
+                      style: GoogleFonts.montserrat(
                         fontWeight: isSelected
                             ? FontWeight.bold
                             : FontWeight.w600,
@@ -2262,7 +2447,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                     Text(
                       "\$ ${_formatCurrency(displayPrice)}",
-                      style: GoogleFonts.poppins(
+                      style: GoogleFonts.montserrat(
                         fontSize: 11,
                         fontWeight: isSelected
                             ? FontWeight.bold
@@ -2284,7 +2469,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       ),
                       child: Text(
                         "${opt['capacity']} pax",
-                        style: GoogleFonts.poppins(
+                        style: GoogleFonts.montserrat(
                           fontSize: 8,
                           fontWeight: FontWeight.bold,
                           color: isSelected ? activeColor : Colors.grey[500],
@@ -2318,7 +2503,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ), // Reducimos un poco los espacios de 20 a 15
 
           _sectionLabel("VAMOS PARA"),
-          _buildTripDetailsCard(primaryColor, setModalState),
+          _buildTripDetailsCard(primaryColor, setModalState, _isOriginSnapped),
 
           const SizedBox(height: 15),
           _sectionLabel("¿EN CUÁL CARRO NOS VAMOS?"),
@@ -2340,7 +2525,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               onPressed: () => _resetApp(),
               child: Text(
                 "Cancelar solicitud",
-                style: GoogleFonts.poppins(
+                style: GoogleFonts.montserrat(
                   color: Colors.red[400],
                   fontWeight: FontWeight.w600,
                   fontSize: 13,
@@ -2359,7 +2544,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       padding: const EdgeInsets.only(left: 4, bottom: 8),
       child: Text(
         text,
-        style: GoogleFonts.poppins(
+        style: GoogleFonts.montserrat(
           fontSize: 10,
           fontWeight: FontWeight.w800,
           color: Colors.grey[400],
@@ -2514,7 +2699,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ? "Por favor entrega \$${_formatCurrency(_tripPrice)} al conductor."
                 : "Procesando pago electrónico...",
             textAlign: TextAlign.center,
-            style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[700]),
+            style: GoogleFonts.montserrat(
+              fontSize: 14,
+              color: Colors.grey[700],
+            ),
           ),
           const SizedBox(height: 20),
           if (_selectedPaymentMethod == 'EFECTIVO')
@@ -2542,6 +2730,66 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  void _onFavSearchChanged(String query) {
+    if (query.trim().length < 3) {
+      setState(() {
+        _favSearchResults = [];
+        _isSearchingFav = false;
+      });
+      return;
+    }
+
+    _favDebounce?.cancel();
+    _favDebounce = Timer(const Duration(milliseconds: 500), () async {
+      if (!mounted) return;
+      setState(() => _isSearchingFav = true);
+
+      final results = await _searchService.searchPlaces(
+        query,
+        lat: _currentPosition?.latitude,
+        lng: _currentPosition?.longitude,
+      );
+
+      if (mounted) {
+        setState(() {
+          _favSearchResults = results;
+          _isSearchingFav = false;
+        });
+      }
+    });
+  }
+
+  Future<void> _onFavResultSelected(Map<String, dynamic> place) async {
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    // 1. Si no tiene coordenadas, las pedimos al servidor
+    if (place['lat'] == null) {
+      setState(() => _isLoadingAddress = true);
+      final coords = await _searchService.getPlaceCoords(
+        place['place_id'] ?? place['mapbox_id'],
+        null,
+      );
+      if (coords != null) {
+        place['lat'] = coords['lat'];
+        place['lng'] = coords['lng'];
+      }
+    }
+
+    if (place['lat'] != null && mounted) {
+      final LatLng target = LatLng(place['lat'], place['lng']);
+
+      setState(() {
+        _pickingAddress = place['name'] ?? "Ubicación seleccionada";
+        _favSearchResults = []; // Limpiamos la lista de sugerencias
+        _favSearchController.text = ""; // Limpiamos el buscador
+        _isLoadingAddress = false;
+      });
+
+      // Movemos el mapa suavemente al lugar elegido
+      _animatedMapMove(target, 17.5);
+    }
+  }
+
   Widget _buildGenericMinifiedHeader(String title, IconData icon) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
@@ -2550,14 +2798,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           Icon(
             icon,
             color: _currentUser.isCorporateMode
-                ? Colors.blue[800]
+                ? AppColors.darkBlue
                 : AppColors.primaryGreen,
           ),
           const SizedBox(width: 15),
           Expanded(
             child: Text(
               title,
-              style: GoogleFonts.poppins(
+              style: GoogleFonts.montserrat(
                 fontWeight: FontWeight.bold,
                 fontSize: 14,
               ),
@@ -2576,24 +2824,46 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       width: double.infinity,
       height: 56,
       child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: _isOriginConfirmed ? color : AppColors.darkBlue,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+          ),
+        ),
         onPressed: () {
-          // Si el origen ya fue confirmado (por buscador o por mapa), pedimos el viaje
           if (_isOriginConfirmed) {
             _handleTripRequest();
           } else {
-            // Si no, lo mandamos a que mueva el pin de recogida primero
+            // ❌ ELIMINA ESTA LÍNEA: Navigator.pop(context, 'PICKING');
+
+            // ✅ Solo llama al método. Al hacer setState dentro de él,
+            // la UI detectará que _isPickingLocation es true y cambiará los widgets.
             _startPickupConfirmation();
           }
         },
         child: Text(
-          "Confirmar este servicio",
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+          _isOriginConfirmed
+              ? "Confirmar este servicio"
+              : "Fijar punto de recogida",
+          style: GoogleFonts.montserrat(
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+            fontSize: 16,
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildTripDetailsCard(Color color, StateSetter setModalState) {
+  Widget _buildTripDetailsCard(
+    Color color,
+    StateSetter setModalState,
+    bool isSnapped, // Mantén este parámetro
+  ) {
+    // 1. Definimos la condición directamente aquí, combinando el parámetro recibido
+    // y nuestra variable de estado global _isOriginConfirmed.
+    final bool showFixPickup = !_isOriginConfirmed;
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -2602,39 +2872,81 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       ),
       child: Column(
         children: [
-          // --- FILA 1: ORIGEN (RECOGIDA) ---
+          // 2. Usamos la variable aquí
+          if (showFixPickup) ...[
+            _buildLocationRow(
+              icon: Icons.adjust_rounded,
+              iconColor: _isOriginConfirmed
+                  ? AppColors.primaryGreen
+                  : Colors.orangeAccent,
+              label: "PUNTO DE RECOGIDA EXACTO",
+              address: _originName ?? "Toca para fijar recogida",
+              isHighlight: !_isOriginConfirmed,
+              onEdit: () {
+                // 1. Activamos el estado de carga ANTES de abrir el modo de picking
+                setState(() {
+                  _tripState = TripState.CALCULATING;
+                });
+
+                // 2. Pequeño delay para que el usuario VEA la pantalla de carga (opcional pero recomendado)
+                Future.delayed(const Duration(milliseconds: 300), () {
+                  setState(() {
+                    _mapPickingTarget =
+                        'pickup'; // O 'reference'/'destination' según corresponda
+                    _isPickingOrigin = true;
+                    _isPickingLocation = true;
+                    _isOriginSnapped = false;
+                    _tripState = TripState
+                        .CONFIRMING_PICKUP; // Regresamos al estado de mapa
+                  });
+                });
+
+                _startPickupConfirmation();
+              },
+            ),
+            _buildCustomDivider(),
+          ],
+
+          // --- FILA 2: ORIGEN / REFERENCIA (Siempre se muestra) ---
           _buildLocationRow(
-            icon: Icons.radio_button_checked,
-            iconColor: AppColors.primaryGreen,
-            label: "PUNTO DE RECOGIDA",
-            address: _originName ?? "Mi ubicación",
+            icon: Icons.search_rounded,
+            iconColor: Colors.grey,
+            label: "DIRECCIÓN DE PARTIDA",
+            address: _originReferenceName ?? "Mi ubicación",
             onEdit: () {
-              // NO usar Navigator.pop aquí
-              _startPickupConfirmation(); // Esto activará el modo mapa automáticamente
+              setState(() {
+                _mapPickingTarget = 'reference';
+                _isPickingOrigin = true;
+                _isPickingLocation = true;
+                _isOriginSnapped =
+                    false; // Si edita la referencia, debe volver a fijar
+              });
+              _startPickupConfirmation(
+                initialAddress: _originReferenceName,
+                initialPosition: _originCoordinates,
+              );
             },
           ),
 
-          // Línea conectora visual entre puntos
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 25),
-            child: Row(
-              children: [
-                Container(width: 2, height: 15, color: Colors.grey.shade200),
-                const Expanded(child: Divider(height: 1, indent: 20)),
-              ],
-            ),
-          ),
+          _buildCustomDivider(),
 
-          // --- FILA 2: DESTINO ---
+          // --- FILA 3: DESTINO ---
           _buildLocationRow(
             icon: Icons.location_on,
             iconColor: AppColors.darkBlue,
-            label: "INFORMACIÓN DEL VIAJE",
+            label: "DESTINO DEL VIAJE",
             address: _destinationName ?? "Seleccionar destino",
             info: "$_tripDistance • $_tripDuration aprox.",
             onEdit: () {
-              // NO usar Navigator.pop aquí
-              _openSearchFromCurrentState(); // Abre el buscador directamente
+              setState(() {
+                _mapPickingTarget = 'destination';
+                _isPickingOrigin = false;
+                _isPickingLocation = true;
+              });
+              _startPickupConfirmation(
+                initialAddress: _destinationName,
+                initialPosition: _destinationCoordinates,
+              );
             },
           ),
 
@@ -2658,7 +2970,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       children: [
                         Text(
                           "Pasajeros",
-                          style: GoogleFonts.poppins(
+                          style: GoogleFonts.montserrat(
                             fontSize: 11,
                             color: Colors.grey[500],
                             fontWeight: FontWeight.bold,
@@ -2666,7 +2978,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                         Text(
                           _getPassengerSummary(),
-                          style: GoogleFonts.poppins(
+                          style: GoogleFonts.montserrat(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
                             color: AppColors.darkBlue,
@@ -2687,13 +2999,64 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  // Marcador sutil para el punto que se buscó originalmente (Referencia)
+  Widget _buildReferencePin() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Etiqueta pequeña
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.black87,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            "DIRECCIÓN BUSCADA",
+            style: GoogleFonts.montserrat(
+              fontSize: 7,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+            ),
+          ),
+        ),
+        // Un punto negro pequeño como ancla
+        Container(
+          margin: const EdgeInsets.only(
+            top: 2,
+          ), // <--- Cambia .top(2) por .only(top: 2)
+          width: 8,
+          height: 8,
+          decoration: const BoxDecoration(
+            color: Colors.black,
+            shape: BoxShape.circle,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCustomDivider() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 25),
+      child: Row(
+        children: [
+          Container(width: 2, height: 10, color: Colors.grey.shade200),
+          const Expanded(child: Divider(height: 1, indent: 20)),
+        ],
+      ),
+    );
+  }
+
   Widget _buildLocationRow({
     required IconData icon,
     required Color iconColor,
     required String label,
     required String address,
     required VoidCallback onEdit,
-    String? info, // <--- Nuevo parámetro para la distancia/tiempo
+    String? info,
+    bool isHighlight =
+        false, // <--- 1. Agregamos el parámetro con valor por defecto
   }) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
@@ -2707,28 +3070,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               children: [
                 Text(
                   label,
-                  style: GoogleFonts.poppins(
+                  style: GoogleFonts.montserrat(
                     fontSize: 9,
                     fontWeight: FontWeight.w800,
-                    color: Colors.grey[400],
+                    color: isHighlight
+                        ? Colors.orange[800]
+                        : Colors
+                              .grey[400], // <--- 2. Color dinámico en etiqueta
                     letterSpacing: 0.5,
                   ),
                 ),
                 Text(
                   address,
-                  style: GoogleFonts.poppins(
+                  style: GoogleFonts.montserrat(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.darkBlue,
+                    // 3. Color dinámico en la dirección: naranja si resalta, si no, azul oscuro
+                    color: isHighlight
+                        ? Colors.orange[900]
+                        : AppColors.darkBlue,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                // --- MOSTRAR DISTANCIA Y TIEMPO SI EXISTE ---
                 if (info != null)
                   Text(
                     info,
-                    style: GoogleFonts.poppins(
+                    style: GoogleFonts.montserrat(
                       fontSize: 11,
                       color: Colors.grey[500],
                       fontWeight: FontWeight.w400,
@@ -2740,18 +3108,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           TextButton(
             onPressed: onEdit,
             style: TextButton.styleFrom(
-              backgroundColor: Colors.grey[50],
+              backgroundColor: isHighlight
+                  ? Colors.orange[50]
+                  : Colors.grey[50], // 4. Fondo sutil naranja
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8),
               ),
             ),
             child: Text(
-              "Cambiar",
-              style: GoogleFonts.poppins(
+              isHighlight ? "FIJAR" : "Cambiar", // 5. Texto dinámico
+              style: GoogleFonts.montserrat(
                 fontSize: 11,
                 fontWeight: FontWeight.bold,
-                color: AppColors.primaryGreen,
+                color: isHighlight
+                    ? Colors.orange[900]
+                    : AppColors.primaryGreen,
               ),
             ),
           ),
@@ -2863,7 +3235,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             const SizedBox(width: 8),
             Text(
               title,
-              style: GoogleFonts.poppins(
+              style: GoogleFonts.montserrat(
                 color: isSelected ? Colors.white : Colors.grey[600],
                 fontWeight: FontWeight.bold,
                 fontSize: 13,
@@ -2887,7 +3259,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             const SizedBox(width: 10),
             Text(
               "Verificar Pasajeros",
-              style: GoogleFonts.poppins(
+              style: GoogleFonts.montserrat(
                 fontWeight: FontWeight.bold,
                 fontSize: 18,
               ),
@@ -2900,12 +3272,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           children: [
             Text(
               "¿Están todos los pasajeros en la lista?",
-              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+              style: GoogleFonts.montserrat(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 10),
             Text(
               "IMPORTANTE: El conductor solicitará el documento físico de CADA persona antes de iniciar. Sin registro en la App, no podrán subir al vehículo.",
-              style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey[800]),
+              style: GoogleFonts.montserrat(
+                fontSize: 13,
+                color: Colors.grey[800],
+              ),
             ),
             const SizedBox(height: 15),
             Container(
@@ -2921,7 +3296,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 children: [
                   Text(
                     "PASAJEROS CONFIRMADOS:",
-                    style: GoogleFonts.poppins(
+                    style: GoogleFonts.montserrat(
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
                       color: Colors.grey[600],
@@ -2931,7 +3306,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   if (_includeMyself)
                     Text(
                       "• Yo (${_currentUser.name})",
-                      style: GoogleFonts.poppins(
+                      style: GoogleFonts.montserrat(
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
                       ),
@@ -2939,7 +3314,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ..._selectedBeneficiariesList.map(
                     (b) => Text(
                       "• ${b.name}",
-                      style: GoogleFonts.poppins(fontSize: 13),
+                      style: GoogleFonts.montserrat(fontSize: 13),
                     ),
                   ),
                 ],
@@ -2950,22 +3325,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         actions: [
           TextButton(
             onPressed: () async {
-              // 1. Agregamos async aquí
-              Navigator.pop(
-                ctx,
-              ); // 2. Cierra el diálogo de confirmación de pasajeros
+              // 1. Cierra el diálogo de confirmación de pasajeros
+              Navigator.pop(ctx);
 
-              // 3. Abrimos el selector y ESPERAMOS (await) a que el usuario termine
+              // 2. Abre el selector y ESPERAMOS a que el usuario termine
               await _showBeneficiarySelector();
 
-              // 4. Una vez cerrado el selector, volvemos a mostrar el panel de solicitud
+              // 3. Al terminar, simplemente refrescamos la pantalla.
+              // El panel Draggable (que ya está en el fondo) mostrará los cambios.
               if (mounted) {
-                _showRequestTripPanel();
+                setState(() {});
               }
             },
             child: Text(
               "Editar Lista",
-              style: GoogleFonts.poppins(
+              style: GoogleFonts.montserrat(
                 color: Colors.red,
                 fontWeight: FontWeight.bold,
               ),
@@ -2984,7 +3358,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
             child: Text(
               "Confirmar y Pedir",
-              style: GoogleFonts.poppins(color: Colors.white),
+              style: GoogleFonts.montserrat(color: Colors.white),
             ),
           ),
         ],
@@ -3024,12 +3398,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             children: [
               Text(
                 "Estás solicitando un servicio Corporativo para terceros.",
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                style: GoogleFonts.montserrat(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 10),
               Text(
                 "El FUEC se generará a nombre de:",
-                style: GoogleFonts.poppins(fontSize: 13),
+                style: GoogleFonts.montserrat(fontSize: 13),
               ),
               const SizedBox(height: 10),
               Container(
@@ -3044,19 +3418,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   children: [
                     Text(
                       "Titular:",
-                      style: GoogleFonts.poppins(
+                      style: GoogleFonts.montserrat(
                         fontSize: 11,
                         color: Colors.grey,
                       ),
                     ),
                     Text(
                       _currentUser.name,
-                      style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+                      style: GoogleFonts.montserrat(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     const SizedBox(height: 5),
                     Text(
                       "Empresa:",
-                      style: GoogleFonts.poppins(
+                      style: GoogleFonts.montserrat(
                         fontSize: 11,
                         color: Colors.grey,
                       ),
@@ -3065,7 +3441,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       _currentUser.empresa.isEmpty
                           ? "N/A"
                           : _currentUser.empresa,
-                      style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+                      style: GoogleFonts.montserrat(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ],
                 ),
@@ -3075,7 +3453,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: Text("Volver", style: GoogleFonts.poppins()),
+              child: Text("Volver", style: GoogleFonts.montserrat()),
             ),
             ElevatedButton(
               onPressed: () {
@@ -3083,14 +3461,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 _showConfirmPassengersDialog();
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue[800],
+                backgroundColor: AppColors.darkBlue,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
               child: Text(
                 "Aceptar",
-                style: GoogleFonts.poppins(color: Colors.white),
+                style: GoogleFonts.montserrat(color: Colors.white),
               ),
             ),
           ],
@@ -3116,8 +3494,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       return;
     }
 
-    setState(() => _tripState = TripState.CALCULATING);
-
+    setState(() {
+      _loadingTitle = "SOLICITANDO SERVICIO";
+      _loadingSubtitle = "Conectando con un conductor cercano...";
+      _tripState = TripState.CALCULATING;
+    });
     try {
       // 1. Obtener dirección con Timeout
       String realOriginAddress = "Ubicación actual";
@@ -3171,10 +3552,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       String? tripId = await tripService
           .createTripRequest(
             currentUser: _currentUser,
-            origin: _originCoordinates ?? _currentPosition!,
+            origin: _originCoordinates!,
             destination: _destinationCoordinates!,
-            originAddress:
-                realOriginAddress, // <--- AQUÍ PASAMOS LA DIRECCIÓN REAL
+            // Usamos los mismos puntos ya que _confirmMapSelection se encarga de que
+            // _originCoordinates y _destinationCoordinates ya sean los "snapped"
+            snappedLatOrigin: _originCoordinates!.latitude,
+            snappedLngOrigin: _originCoordinates!.longitude,
+            snappedLatDestino: _destinationCoordinates!.latitude,
+            snappedLngDestino: _destinationCoordinates!.longitude,
+
+            originAddress: _originName!,
             destinationAddress: _destinationName!,
             serviceCategory: _selectedServiceCategory,
             estimatedPrice: _tripPrice,
@@ -3234,13 +3621,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Icon(Icons.calendar_today, color: Colors.blue, size: 50),
+        title: const Icon(
+          Icons.calendar_today,
+          color: AppColors.darkBlue,
+          size: 50,
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
               "¡Viaje Programado!",
-              style: GoogleFonts.poppins(
+              style: GoogleFonts.montserrat(
                 fontWeight: FontWeight.bold,
                 fontSize: 18,
               ),
@@ -3249,7 +3640,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             Text(
               "Tu servicio ha sido registrado. Te notificaremos con los datos del conductor y el vehículo 15 minutos antes de la hora seleccionada.",
               textAlign: TextAlign.center,
-              style: GoogleFonts.poppins(fontSize: 14),
+              style: GoogleFonts.montserrat(fontSize: 14),
             ),
           ],
         ),
@@ -3262,7 +3653,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 _resetApp(); // Limpiamos el mapa y volvemos al inicio
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue[800],
+                backgroundColor: AppColors.darkBlue,
               ),
               child: const Text(
                 "Entendido",
@@ -3277,309 +3668,159 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _showBeneficiarySelector() {
     bool isCorp = _currentUser.isCorporateMode;
-    Color primaryColor = isCorp ? Colors.blue[800]! : AppColors.primaryGreen;
+    Color primaryColor = isCorp ? AppColors.darkBlue : AppColors.primaryGreen;
 
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
-      ),
+      backgroundColor: Colors.transparent,
       builder: (context) {
         return StatefulBuilder(
           builder: (BuildContext context, StateSetter setModalState) {
             return Container(
-              padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
-              height: MediaQuery.of(context).size.height * 0.7,
+              height: MediaQuery.of(context).size.height * 0.75,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+              ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey[300],
-                        borderRadius: BorderRadius.circular(2),
-                      ),
+                  // Indicador de arrastre
+                  Container(
+                    width: 40,
+                    height: 5,
+                    margin: const EdgeInsets.only(top: 12, bottom: 20),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[300],
+                      borderRadius: BorderRadius.circular(10),
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        "¿Quiénes viajan?",
-                        style: GoogleFonts.poppins(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          setState(() {});
-                          Navigator.pop(context);
-                        },
-                        child: Text(
-                          "Listo",
-                          style: GoogleFonts.poppins(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                            color: primaryColor,
+
+                  // Cabecera
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          "¿Quiénes viajan?",
+                          style: GoogleFonts.montserrat(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            color: AppColors.darkBlue,
                           ),
                         ),
-                      ),
-                    ],
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ),
                   ),
+
                   const SizedBox(height: 10),
 
-                  // OPCIÓN: YO
-                  Container(
-                    decoration: BoxDecoration(
-                      color: _includeMyself
-                          ? primaryColor.withValues(alpha: 0.05)
-                          : Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: _includeMyself
-                            ? primaryColor
-                            : Colors.grey.shade200,
-                      ),
-                    ),
-                    child: CheckboxListTile(
-                      value: _includeMyself,
-                      activeColor: primaryColor,
-                      title: Text(
-                        "Viajo yo",
-                        style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-                      ),
-                      subtitle: Text(
-                        _currentUser.name,
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
-                      secondary: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.grey.shade200),
-                        ),
-                        child: Icon(
-                          Icons.person,
-                          color: primaryColor,
-                          size: 20,
-                        ),
-                      ),
-                      onChanged: (bool? val) {
-                        setModalState(() {
-                          _includeMyself = val ?? false;
-                        });
-                        setState(() {
-                          if (_totalPassengers > 4) {
-                            _selectedServiceCategory = 'VAN';
-                          } else if (_selectedServiceCategory == 'VAN' &&
-                              _totalPassengers <= 4) {
-                            _selectedServiceCategory = 'STANDARD';
-                          }
-                          _updateFinalPrice();
-                        });
-                      },
-                    ),
-                  ),
-
-                  const SizedBox(height: 20),
-                  Text(
-                    "Tus Pasajeros",
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-
+                  // Lista de Pasajeros
                   Expanded(
-                    child: _currentUser.beneficiaries.isEmpty
-                        ? Center(
-                            child: Text(
-                              "No tienes pasajeros agregados",
-                              style: GoogleFonts.poppins(
-                                color: Colors.grey[400],
+                    child: ListView(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 10,
+                      ),
+                      children: [
+                        // Opción "Yo"
+                        _buildSelectionCard(
+                          title: "Viajo yo",
+                          subtitle: _currentUser.name,
+                          isSelected: _includeMyself,
+                          icon: Icons.person_rounded,
+                          primaryColor: primaryColor,
+                          onChanged: (val) {
+                            setModalState(() => _includeMyself = val);
+                            setState(() => _updateFinalPrice());
+                          },
+                        ),
+
+                        const Padding(
+                          padding: EdgeInsets.symmetric(
+                            vertical: 15,
+                            horizontal: 10,
+                          ),
+                          child: Text(
+                            "MIS PASAJEROS",
+                            style: TextStyle(
+                              color: Colors.grey,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+
+                        if (_currentUser.beneficiaries.isEmpty)
+                          Center(
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 20),
+                              child: Text(
+                                "No tienes pasajeros guardados",
+                                style: GoogleFonts.montserrat(
+                                  color: Colors.grey[400],
+                                ),
                               ),
                             ),
                           )
-                        : ListView.separated(
-                            itemCount: _currentUser.beneficiaries.length,
-                            separatorBuilder: (context, index) =>
-                                const SizedBox(height: 10),
-                            itemBuilder: (ctx, index) {
-                              if (index >= _currentUser.beneficiaries.length)
-                                // ignore: curly_braces_in_flow_control_structures
-                                return const SizedBox.shrink();
-
-                              final b = _currentUser.beneficiaries[index];
-                              final isSelected = _selectedPassengerIds.contains(
-                                b.id,
-                              );
-
-                              return Dismissible(
-                                key: Key(b.id),
-                                direction: DismissDirection.endToStart,
-                                background: Container(
-                                  alignment: Alignment.centerRight,
-                                  padding: const EdgeInsets.only(right: 20),
-                                  decoration: BoxDecoration(
-                                    color: Colors.red[100],
-                                    borderRadius: BorderRadius.circular(16),
-                                  ),
-                                  child: const Icon(
-                                    Icons.delete,
-                                    color: Colors.red,
-                                  ),
-                                ),
-                                confirmDismiss: (_) async {
-                                  return await showDialog(
-                                    context: context,
-                                    builder: (ctx) => AlertDialog(
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(16),
-                                      ),
-                                      title: Text(
-                                        "¿Borrar?",
-                                        style: GoogleFonts.poppins(
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      content: Text(
-                                        "Se eliminará a ${b.name}.",
-                                        style: GoogleFonts.poppins(),
-                                      ),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () =>
-                                              Navigator.pop(ctx, false),
-                                          child: Text(
-                                            "Cancelar",
-                                            style: GoogleFonts.poppins(),
-                                          ),
-                                        ),
-                                        TextButton(
-                                          onPressed: () =>
-                                              Navigator.pop(ctx, true),
-                                          child: Text(
-                                            "Borrar",
-                                            style: GoogleFonts.poppins(
-                                              color: Colors.red,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                                onDismissed: (_) async {
-                                  // 1. Llamar al borrado persistente que acabamos de crear
-                                  bool deleted =
-                                      await AuthService.removeBeneficiary(b.id);
-
-                                  if (deleted) {
-                                    setModalState(() {
-                                      // 2. ¡CLAVE! Si estaba seleccionado para el viaje, quitarlo del set
+                        else
+                          ..._currentUser.beneficiaries.map((b) {
+                            final isSelected = _selectedPassengerIds.contains(
+                              b.id,
+                            );
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: _buildSelectionCard(
+                                title: b.name,
+                                subtitle:
+                                    "${b.documentType}: ${b.documentNumber}",
+                                isSelected: isSelected,
+                                icon: Icons.group_rounded,
+                                primaryColor: primaryColor,
+                                onChanged: (val) {
+                                  setModalState(() {
+                                    if (val) {
+                                      _selectedPassengerIds.add(b.id);
+                                    } else {
                                       _selectedPassengerIds.remove(b.id);
-                                    });
-
-                                    setState(() {
-                                      // 3. Recalcular precio y categoría de una vez
-                                      _updateFinalPrice();
-                                    });
-                                  }
+                                    }
+                                  });
+                                  setState(() => _updateFinalPrice());
                                 },
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: isSelected
-                                        ? primaryColor.withValues(alpha: 0.05)
-                                        : Colors.grey.shade50,
-                                    borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(
-                                      color: isSelected
-                                          ? primaryColor
-                                          : Colors.grey.shade200,
-                                    ),
-                                  ),
-                                  child: CheckboxListTile(
-                                    value: isSelected,
-                                    activeColor: primaryColor,
-                                    title: Text(
-                                      b.name,
-                                      style: GoogleFonts.poppins(
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    // Busca esta parte en el listado de beneficiarios:
-                                    subtitle: Text(
-                                      "${b.documentType}: ${b.documentNumber}", // <--- Ahora mostrará "CC: 12345"
-                                      style: GoogleFonts.poppins(fontSize: 12),
-                                    ),
-                                    secondary: Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                          color: Colors.grey.shade200,
-                                        ),
-                                      ),
-                                      child: Icon(
-                                        Icons.person_outline,
-                                        color: Colors.grey[600],
-                                        size: 20,
-                                      ),
-                                    ),
-                                    onChanged: (bool? val) {
-                                      setModalState(() {
-                                        if (val == true) {
-                                          _selectedPassengerIds.add(b.id);
-                                        } else {
-                                          _selectedPassengerIds.remove(b.id);
-                                        }
-                                      });
-                                      setState(() {
-                                        if (_totalPassengers > 4) {
-                                          _selectedServiceCategory = 'VAN';
-                                        }
-                                        _updateFinalPrice();
-                                      });
-                                    },
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
+                              ),
+                            );
+                          }),
+                      ],
+                    ),
                   ),
 
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 56,
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        _showAddBeneficiaryDialog(setModalState);
-                      },
-                      icon: const Icon(Icons.add),
-                      label: Text(
-                        "Agregar Nuevo Pasajero",
-                        style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        side: BorderSide(color: primaryColor),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(15),
+                  // Botón Agregar
+                  Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.darkBlue,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(18),
+                          ),
                         ),
-                        foregroundColor: primaryColor,
+                        onPressed: () =>
+                            _showAddBeneficiaryDialog(setModalState),
+                        child: Text(
+                          "AGREGAR PASAJERO",
+                          style: GoogleFonts.montserrat(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -3589,6 +3830,80 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           },
         );
       },
+    );
+  }
+
+  // Widget de Tarjeta Premium
+  Widget _buildSelectionCard({
+    required String title,
+    required String subtitle,
+    required bool isSelected,
+    required IconData icon,
+    required Color primaryColor,
+    required Function(bool) onChanged,
+  }) {
+    return GestureDetector(
+      onTap: () => onChanged(!isSelected),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? primaryColor.withValues(alpha: 0.08)
+              : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? primaryColor : Colors.grey.shade200,
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isSelected ? primaryColor : Colors.grey.shade100,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                icon,
+                color: isSelected ? Colors.white : Colors.grey,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: GoogleFonts.montserrat(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: GoogleFonts.montserrat(
+                      color: Colors.grey[600],
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Checkbox(
+              value: isSelected,
+              activeColor: primaryColor,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(5),
+              ),
+              onChanged: (val) => onChanged(val!),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -3609,7 +3924,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
           title: Text(
             "Nuevo Pasajero",
-            style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+            style: GoogleFonts.montserrat(fontWeight: FontWeight.bold),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -3631,7 +3946,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         value: type,
                         child: Text(
                           "$type - ${_getDocName(type)}",
-                          style: GoogleFonts.poppins(fontSize: 14),
+                          style: GoogleFonts.montserrat(fontSize: 14),
                         ),
                       );
                     }).toList(),
@@ -3664,13 +3979,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               onPressed: () => Navigator.pop(dialogContext),
               child: Text(
                 "Cancelar",
-                style: GoogleFonts.poppins(color: Colors.grey),
+                style: GoogleFonts.montserrat(color: Colors.grey),
               ),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: _currentUser.isCorporateMode
-                    ? Colors.blue[800]
+                    ? AppColors.darkBlue
                     : AppColors.primaryGreen,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -3716,7 +4031,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               },
               child: Text(
                 "Guardar",
-                style: GoogleFonts.poppins(
+                style: GoogleFonts.montserrat(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,
                 ),
@@ -3800,13 +4115,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             const SizedBox(height: 20),
             Text(
               "¡Viaje Completado!",
-              style: GoogleFonts.poppins(
+              style: GoogleFonts.montserrat(
                 fontWeight: FontWeight.bold,
                 fontSize: 20,
               ),
             ),
             const SizedBox(height: 10),
-            Text("Gracias por viajar con VAMOS.", style: GoogleFonts.poppins()),
+            Text(
+              "Gracias por viajar con VAMOS.",
+              style: GoogleFonts.montserrat(),
+            ),
           ],
         ),
         actions: [
@@ -3827,7 +4145,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               },
               child: Text(
                 "Finalizar",
-                style: GoogleFonts.poppins(color: Colors.white),
+                style: GoogleFonts.montserrat(color: Colors.white),
               ),
             ),
           ),
@@ -3837,9 +4155,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _resetApp() {
-    FocusScope.of(context).unfocus(); // <--- CIERRA EL TECLADO SI ESTÁ ABIERTO
-    _routeDrawingController
-        ?.stop(); // <--- Detenemos la animación si está corriendo
+    print("DEBUG: _resetApp ejecutado!");
+
+    FocusScope.of(context).unfocus();
+    _routeDrawingController?.stop();
     _routeDrawingController?.reset();
     _simulationTimer?.cancel();
     _waitTimer?.cancel();
@@ -3847,21 +4166,32 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     if (mounted) {
       setState(() {
+        _isOriginSnapped = false;
+        _isOriginConfirmed =
+            false; // AGREGA ESTO: Invalida el estado de confirmación
+        _originName = null; // AGREGA ESTO: Limpia el nombre
+        _originCoordinates = null; // AGREGA ESTO: Limpia las coordenadas
+
         _tripState = TripState.DASHBOARD;
-        _fitCameraToRoute(); // Esto centrará al usuario automáticamente
+        _fitCameraToRoute();
 
         AuthService.isTripActive = false;
-        _isCalculatingRoute =
-            false; // <--- IMPORTANTE: Detener animaciones de carga
+        _isCalculatingRoute = false;
         _isPickingLocation = false;
         _isPickingOrigin = false;
         _isOriginConfirmed = false;
-        _animatedRoutePoints = []; // <--- AÑADE ESTA LÍNEA
+        _animatedRoutePoints = [];
 
         _routePoints = [];
         _destinationCoordinates = null;
         _destinationName = null;
         _originCoordinates = null;
+
+        // --- 🛡️ CRUCIAL: LIMPIAR REFERENCIA ---
+        _referenceOriginCoords = null;
+        _originReferenceName = null;
+        // --------------------------------------
+
         _sheetExtentNotifier.value = 0.45;
         _driverPosition = null;
         _scheduledAt = null;
@@ -3871,14 +4201,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _includeMyself = true;
         _driverEta = "Calculando...";
         _tripDesglose = null;
-        // En tu función _resetApp() añade:
-        _isOriginConfirmed = false;
       });
-      // Volvemos a la vista general
       _moveToCurrentPosition();
     }
   }
-
   // --- HELPERS UI ---
 
   Widget _buildMapControlBtn(IconData icon, VoidCallback tap) {
@@ -3916,19 +4242,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     children: [
       LinearProgressIndicator(
         color: _currentUser.isCorporateMode
-            ? Colors.blue[800]
+            ? AppColors.darkBlue
             : AppColors.primaryGreen,
         borderRadius: BorderRadius.circular(10),
       ),
       const SizedBox(height: 25),
       Text(
         "Buscando conductor...",
-        style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold),
+        style: GoogleFonts.montserrat(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+        ),
       ),
       const SizedBox(height: 5),
       Text(
         "Estamos conectando con los conductores cercanos",
-        style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey),
+        style: GoogleFonts.montserrat(fontSize: 13, color: Colors.grey),
       ),
       const SizedBox(height: 25),
       SizedBox(
@@ -3989,15 +4318,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       children: [
         Text(
           driver['nombre']?.toString() ?? "Conductor asignado",
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16),
+          style: GoogleFonts.montserrat(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
         ),
         Text(
           "${vehicle['marca'] ?? ''} ${vehicle['placa'] ?? 'Sin placa'}",
-          style: GoogleFonts.poppins(color: Colors.grey[600], fontSize: 13),
+          style: GoogleFonts.montserrat(color: Colors.grey[600], fontSize: 13),
         ),
         Text(
           "Tu conductor está en camino",
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 18),
+          style: GoogleFonts.montserrat(
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+          ),
         ),
         const SizedBox(height: 15),
 
@@ -4024,14 +4359,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   children: [
                     Text(
                       driver['nombre'] ?? "Conductor",
-                      style: GoogleFonts.poppins(
+                      style: GoogleFonts.montserrat(
                         fontWeight: FontWeight.bold,
                         fontSize: 16,
                       ),
                     ),
                     Text(
                       "${vehicle['marca']} ${vehicle['modelo']} • ${vehicle['placa']}",
-                      style: GoogleFonts.poppins(
+                      style: GoogleFonts.montserrat(
                         color: Colors.grey[600],
                         fontSize: 13,
                       ),
@@ -4054,7 +4389,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                     Text(
                       " 4.8",
-                      style: GoogleFonts.poppins(
+                      style: GoogleFonts.montserrat(
                         fontWeight: FontWeight.bold,
                         fontSize: 12,
                       ),
@@ -4073,7 +4408,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               _waitTimer == null
                   ? "Llegada estimada: $_driverEta"
                   : "¡El conductor ha llegado!",
-              style: GoogleFonts.poppins(
+              style: GoogleFonts.montserrat(
                 color: AppColors.primaryGreen,
                 fontWeight: FontWeight.bold,
                 fontSize: 14,
@@ -4083,7 +4418,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               const SizedBox(height: 5),
               Text(
                 "Tiempo de espera legal: ${(_waitSeconds ~/ 60).toString().padLeft(2, '0')}:${(_waitSeconds % 60).toString().padLeft(2, '0')}",
-                style: GoogleFonts.poppins(
+                style: GoogleFonts.montserrat(
                   color: Colors.grey[700],
                   fontWeight: FontWeight.w600,
                   fontSize: 14,
@@ -4100,7 +4435,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             icon: const Icon(Icons.close, color: Colors.red),
             label: Text(
               "Cancelar Viaje",
-              style: GoogleFonts.poppins(color: Colors.red),
+              style: GoogleFonts.montserrat(color: Colors.red),
             ),
             style: OutlinedButton.styleFrom(
               side: const BorderSide(color: Colors.red),
@@ -4158,7 +4493,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   children: [
                     Text(
                       "Total estimado",
-                      style: GoogleFonts.poppins(
+                      style: GoogleFonts.montserrat(
                         fontSize: 14,
                         color: Colors.grey[600],
                         fontWeight: FontWeight.w500,
@@ -4175,7 +4510,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         const SizedBox(width: 4),
                         Text(
                           "Sujeto a cambios por tráfico",
-                          style: GoogleFonts.poppins(
+                          style: GoogleFonts.montserrat(
                             fontSize: 10,
                             color: Colors.grey[400],
                           ),
@@ -4186,7 +4521,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
                 Text(
                   "\$ ${_formatCurrency(_tripPrice)}",
-                  style: GoogleFonts.poppins(
+                  style: GoogleFonts.montserrat(
                     fontSize: 28,
                     fontWeight: FontWeight.bold,
                     color: primaryColor,
@@ -4243,7 +4578,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         Expanded(
                           child: Text(
                             "${peajes.length} peajes incluidos en el precio",
-                            style: GoogleFonts.poppins(
+                            style: GoogleFonts.montserrat(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
                               color: Colors.grey[800],
@@ -4252,7 +4587,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                         Text(
                           "\$ ${_formatCurrency(totalPeajes)}",
-                          style: GoogleFonts.poppins(
+                          style: GoogleFonts.montserrat(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
                             color: Colors.grey[700],
@@ -4291,7 +4626,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   Expanded(
                                     child: Text(
                                       p['nombre'],
-                                      style: GoogleFonts.poppins(
+                                      style: GoogleFonts.montserrat(
                                         fontSize: 12,
                                         color: Colors.grey[600],
                                       ),
@@ -4299,7 +4634,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   ),
                                   Text(
                                     "\$ ${_formatCurrency(p['precio'].toDouble())}",
-                                    style: GoogleFonts.poppins(
+                                    style: GoogleFonts.montserrat(
                                       fontSize: 12,
                                       fontWeight: FontWeight.w500,
                                       color: Colors.grey[800],
@@ -4356,16 +4691,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: Colors.blue[50],
+                          color: AppColors.darkBlue,
                           shape: BoxShape.circle,
                         ),
-                        child: Icon(Icons.domain, color: Colors.blue[900]),
+                        child: Icon(Icons.domain, color: AppColors.darkBlue),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
                           "Modo Corporativo",
-                          style: GoogleFonts.poppins(
+                          style: GoogleFonts.montserrat(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
                           ),
@@ -4388,14 +4723,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           const SizedBox(height: 20),
                           Text(
                             "Validando...",
-                            style: GoogleFonts.poppins(
+                            style: GoogleFonts.montserrat(
                               fontWeight: FontWeight.bold,
                             ),
                           ),
                           const SizedBox(height: 10),
                           Text(
                             "Verificando con ${selectedCompany?['name']}",
-                            style: GoogleFonts.poppins(color: Colors.grey),
+                            style: GoogleFonts.montserrat(color: Colors.grey),
                           ),
                           const SizedBox(height: 20),
                         ],
@@ -4404,12 +4739,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ] else ...[
                     Text(
                       "Selecciona tu empresa para validar tu documento.",
-                      style: GoogleFonts.poppins(color: Colors.grey[600]),
+                      style: GoogleFonts.montserrat(color: Colors.grey[600]),
                     ),
                     const SizedBox(height: 20),
                     Text(
                       "Empresa",
-                      style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+                      style: GoogleFonts.montserrat(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     FutureBuilder<List<Map<String, String>>>(
@@ -4450,7 +4787,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               isExpanded: true,
                               hint: Text(
                                 "Toca para seleccionar...",
-                                style: GoogleFonts.poppins(
+                                style: GoogleFonts.montserrat(
                                   color: Colors.grey[600],
                                   fontSize: 14,
                                 ),
@@ -4466,7 +4803,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                       company['nit'], // El valor interno es el NIT
                                   child: Text(
                                     company['name']!,
-                                    style: GoogleFonts.poppins(),
+                                    style: GoogleFonts.montserrat(),
                                   ),
                                 );
                               }).toList(),
@@ -4498,7 +4835,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       height: 56,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue[800],
+                          backgroundColor: AppColors.darkBlue,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(15),
                           ),
@@ -4531,7 +4868,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               },
                         child: Text(
                           "Verificar Vinculación",
-                          style: GoogleFonts.poppins(
+                          style: GoogleFonts.montserrat(
                             fontWeight: FontWeight.bold,
                             color: Colors.white,
                             fontSize: 16,
@@ -4563,7 +4900,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             const SizedBox(height: 20),
             Text(
               "¡Bienvenido!",
-              style: GoogleFonts.poppins(
+              style: GoogleFonts.montserrat(
                 fontSize: 22,
                 fontWeight: FontWeight.bold,
               ),
@@ -4572,7 +4909,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             Text(
               "Tu identidad ha sido verificada correctamente por $companyName.",
               textAlign: TextAlign.center,
-              style: GoogleFonts.poppins(),
+              style: GoogleFonts.montserrat(),
             ),
           ],
         ),
@@ -4587,7 +4924,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             onPressed: () => Navigator.pop(ctx),
             child: Text(
               "Continuar",
-              style: GoogleFonts.poppins(color: Colors.white),
+              style: GoogleFonts.montserrat(color: Colors.white),
             ),
           ),
         ],
@@ -4607,7 +4944,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             Expanded(
               child: Text(
                 "Verificación Fallida",
-                style: GoogleFonts.poppins(
+                style: GoogleFonts.montserrat(
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
                 ),
@@ -4617,14 +4954,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
         content: Text(
           "No encontramos la cédula ${_currentUser.documentNumber} activa en $companyName.",
-          style: GoogleFonts.poppins(fontSize: 14),
+          style: GoogleFonts.montserrat(fontSize: 14),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: Text(
               "Intentar de nuevo",
-              style: GoogleFonts.poppins(color: Colors.red),
+              style: GoogleFonts.montserrat(color: Colors.red),
             ),
           ),
         ],
@@ -4645,50 +4982,265 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
 
     // 🔥 CLAVE: Al volver de la pantalla de búsqueda, SIEMPRE recargamos
-    if (mounted) {
-      await _loadRecentPlaces(); // Llama al API que acabamos de limpiar arriba
-    }
+    // Hacemos un pequeño delay para dar tiempo al backend de procesar el guardado
+    await Future.delayed(const Duration(milliseconds: 300));
+    await _loadRecentPlaces();
 
     if (result != null) {
+      // 🔥 AQUÍ ESTÁ EL AJUSTE:
+      // Antes de procesar el resultado, forzamos que si el usuario usó el buscador,
+      // la precisión del "Punto de recogida" se reinicie a FALSE
+      // porque el buscador no garantiza la precisión del pin en el mapa.
+      setState(() {
+        _isOriginSnapped = false;
+      });
+
       _handleSearchResult(result);
+    }
+  }
+
+  Future<void> _calculateRouteAndPrice(LatLng destination) async {
+    _isPickingLocation = false;
+    _isCalculatingRoute = false;
+
+    // 1. Usamos los puntos que YA fueron "snapped" en _confirmMapSelection
+    LatLng startPoint =
+        _originCoordinates ?? _currentPosition ?? _defaultLocation;
+    LatLng endPoint = destination;
+
+    // --- VALIDACIÓN DE DISTANCIA MÍNIMA ---
+    double metrosDeDistancia = Geolocator.distanceBetween(
+      startPoint.latitude,
+      startPoint.longitude,
+      endPoint.latitude,
+      endPoint.longitude,
+    );
+
+    if (metrosDeDistancia < 20) {
+      if (mounted) {
+        setState(() {
+          _tripState = TripState.DASHBOARD;
+          _isCalculatingRoute = false;
+        });
+        _showAppSnackBar("El destino está demasiado cerca.", isError: true);
+      }
+      return;
+    }
+
+    if (_routePoints.isEmpty) {
+      setState(() {
+        _loadingTitle = "CALCULANDO RUTA";
+        _loadingSubtitle = "Estamos trazando el camino más eficiente...";
+        _isCalculatingRoute = true;
+        _tripState = TripState.CALCULATING;
+      });
+    }
+
+    try {
+      await Future.delayed(const Duration(milliseconds: 1500));
+
+      // --- BLOQUE LEGAL ---
+      bool allowed = await _isTripAllowed(startPoint, endPoint);
+      if (!allowed) {
+        setState(() {
+          _tripState = TripState.DASHBOARD;
+          _isCalculatingRoute = false;
+        });
+        return;
+      }
+
+      // 2. NORMALIZACIÓN A 4 DECIMALES (Vital para el Caché del Backend)
+      // Esto asegura que el "Hash" en el servidor coincida exactamente.
+      LatLng finalStart = LatLng(
+        double.parse(startPoint.latitude.toStringAsFixed(4)),
+        double.parse(startPoint.longitude.toStringAsFixed(4)),
+      );
+      LatLng finalEnd = LatLng(
+        double.parse(endPoint.latitude.toStringAsFixed(4)),
+        double.parse(endPoint.longitude.toStringAsFixed(4)),
+      );
+
+      // 3. Cotizar con el servidor (Ya con el imán aplicado y decimales unificados)
+      final result = await _routeService.getRoute(
+        finalStart,
+        finalEnd,
+        idContrato: _currentUser.isCorporateMode
+            ? (_currentUser.companyUuid != null
+                  ? int.tryParse(_currentUser.companyUuid!)
+                  : null)
+            : null,
+        tipoVehiculo: _getDbCategory(_selectedServiceCategory),
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _routePoints = result.points;
+        // Actualizamos pines a la ruta real del mapa
+        _originCoordinates = result.points.first;
+        _destinationCoordinates = result.points.last;
+
+        _animatedRoutePoints = [];
+        _tripPrice = result.price;
+        _baseRoutePrice = result.price;
+        _tripDesglose = result.desglose;
+        _categoryPricesFromServer = result.preciosCategorias ?? {};
+        _tripDistance =
+            "${(result.distanceMeters / 1000).toStringAsFixed(1)} km";
+        _tripDuration = "${(result.durationSeconds / 60).round()} min";
+        _isCalculatingRoute = false;
+      });
+
+      // 4. Animación y cámara
+      _fitCameraToRoute();
+
+      // ESTA ES LA TRANSICIÓN QUE DEBES AJUSTAR
+      if (mounted) {
+        setState(() {
+          _isCalculatingRoute = false; // Apagamos el flag de cálculo
+          _tripState = TripState.ROUTE_PREVIEW; // Cambiamos al estado correcto
+          AuthService.isTripActive = true;
+        });
+
+        // 2. Esperamos a que el mapa aparezca y luego dibujamos la ruta
+        await Future.delayed(const Duration(milliseconds: 400));
+        _animateRouteDrawing();
+      }
+    } catch (e) {
+      debugPrint("🚨 Error en ruta: $e");
+      if (mounted) {
+        setState(() {
+          _tripState = TripState.DASHBOARD;
+          _isCalculatingRoute = false;
+        });
+        _showAppSnackBar(
+          e.toString().replaceAll("Exception: ", ""),
+          isError: true,
+        );
+        _moveToCurrentPosition();
+      }
     }
   }
 
   void _handleSearchResult(dynamic result) {
     if (result == null) return;
 
+    final bool isMapPick = result['isMapPick'] ?? false;
+    final bool isManualOrigin = result['isManualOrigin'] ?? false;
+
     setState(() {
-      // Si el usuario toca "Fijar en el mapa" desde el buscador
-      if (result is Map && result['isMapPick'] == true) {
-        _isPickingLocation = true;
-        _isPickingOrigin = result['isPickingOrigin'] ?? false;
-        _referenceOriginCoords =
-            null; // MODO MANUAL: Matamos la restricción de 100m
+      _isOriginSnapped = false;
+      _isOriginConfirmed = false;
 
-        LatLng initialPoint = _isPickingOrigin
-            ? (_currentPosition ?? _defaultLocation)
-            : (_destinationCoordinates ?? _currentPosition ?? _defaultLocation);
+      // --- CASO A: Selección Directa (Lista) ---
+      if (!isMapPick &&
+          !isManualOrigin &&
+          result['destinationCoords'] != null) {
+        _destinationName = result['destinationName'];
+        _destinationCoordinates = result['destinationCoords'];
+        _originName = "Mi ubicación";
+        _originCoordinates = _currentPosition;
+        _referenceOriginCoords = _currentPosition;
 
-        _animatedMapMove(initialPoint, _isPickingOrigin ? 17.0 : 18.5);
+        setState(() {
+          _mapPickingTarget = 'pickup';
+          _isPickingLocation = true;
+          _isPickingOrigin = true;
+          _tripState = TripState.CONFIRMING_PICKUP;
+        });
+        _startPickupConfirmation(strict: true);
         return;
       }
 
-      // Si el usuario selecciona una dirección de la lista
-      // Caso C: El usuario seleccionó una dirección de la lista
-      if (result is Map && result.containsKey('destinationCoords')) {
+      // --- CASO B: Fijar en Mapa (Sin restricción) ---
+      if (isMapPick) {
+        // Obtenemos el tipo desde el resultado del buscador
+        final String? pickType = result['mapPickType'];
+
         _destinationName = result['destinationName'];
-        _destinationCoordinates =
-            result['destinationCoords']; // Ya viene snapped desde la Search Screen
+        _destinationCoordinates = result['destinationCoords'];
+        final String? addressFromSearch = result['destinationName'];
+
+        _isPickingLocation = true;
+
+        // AQUÍ ESTÁ EL CAMBIO:
+        // Si el usuario eligió "Fijar punto de partida" (pickup_pin),
+        // el target debe ser 'reference' para que el modal diga "Establecer Inicio"
+        if (pickType == 'pickup_pin') {
+          _mapPickingTarget = 'reference';
+          _referenceOriginCoords = LatLng(result['lat'], result['lng']);
+        } else {
+          _mapPickingTarget = 'destination';
+        }
+
+        // Lanzamos sin restricción (strict: false) para que no pida 200m
+        _startPickupConfirmation(
+          strict: false,
+          initialAddress: addressFromSearch,
+        );
+        return;
+      }
+
+      // --- CASO C: Buscador completo (Con restricción obligatoria) ---
+      if (isManualOrigin) {
         _originName = result['originName'];
         _originCoordinates = result['originCoords'];
+        _referenceOriginCoords = _originCoordinates; // Punto para los 200m
+        _destinationName = result['destinationName'];
+        _destinationCoordinates = result['destinationCoords'];
 
-        _referenceOriginCoords = result['originCoords'];
+        _isPickingLocation = true;
+        _mapPickingTarget = 'pickup';
 
-        // SI ES BUSCADOR: Uber deja el origen confirmado pero te permite ajustar el pin si quieres
-        _isOriginConfirmed = true;
-        _calculateRouteAndPrice(_destinationCoordinates!);
+        // strict: true OBLIGA a confirmar en el mapa con los 200m
+        _startPickupConfirmation(strict: true);
+        return;
       }
     });
+  }
+
+  // Método auxiliar de guardado real
+  // Busca y reemplaza el método _saveFavoriteToDB
+  Future<void> _saveFavoriteToDB(
+    String type,
+    String addr,
+    double lat,
+    double lng,
+  ) async {
+    setState(() => _isLoadingAddress = true);
+
+    bool success = await AuthService.updateUserAddress(
+      type: type,
+      address: addr,
+      lat: lat,
+      lng: lng,
+    );
+
+    if (success && mounted) {
+      setState(() {
+        _isLoadingAddress = false;
+        // ACTUALIZACIÓN LOCAL CLAVE:
+        // Actualizamos el objeto en memoria para que la UI reaccione inmediatamente
+        if (type == 'home') {
+          AuthService.currentUser!.homeAddress = addr;
+          AuthService.currentUser!.homeLat = lat;
+          AuthService.currentUser!.homeLng = lng;
+        } else {
+          AuthService.currentUser!.workAddress = addr;
+          AuthService.currentUser!.workLat = lat;
+          AuthService.currentUser!.workLng = lng;
+        }
+
+        _isPickingLocation = false;
+        _addressTypeToSave = null;
+      });
+
+      _showAppSnackBar("¡${type == 'home' ? 'Casa' : 'Oficina'} guardada!");
+      _loadRecentPlaces(); // Refresca la lista de recientes en el Dashboard
+    } else {
+      if (mounted) setState(() => _isLoadingAddress = false);
+      _showAppSnackBar("Error al guardar la ubicación", isError: true);
+    }
   }
 
   void _fitCameraToRoute({double? extent}) {
@@ -4732,33 +5284,334 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
-  // Nuevo método para cuando el usuario elige el vehículo (Captura 3 -> 4)
-  void _startPickupConfirmation() {
-    LatLng initialPoint =
-        _originCoordinates ?? _currentPosition ?? _defaultLocation;
+  void _showQuickAddressOptions(
+    String label,
+    String type,
+    String address,
+    double lat,
+    double lng,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor:
+          Colors.transparent, // Transparente para manejar el diseño interno
+      isScrollControlled: true,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.fromLTRB(25, 12, 25, 30),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // BARRA SUPERIOR DE ARRASTRE
+            Container(
+              width: 40,
+              height: 5,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            const SizedBox(height: 25),
+
+            // ICONO SEGÚN TIPO
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: AppColors.primaryGreen.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                type == 'home' ? Icons.home_rounded : Icons.work_rounded,
+                color: AppColors.primaryGreen,
+                size: 40,
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // TÍTULO PREMIUM
+            Text(
+              "Tu $label",
+              style: GoogleFonts.montserrat(
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+                color: AppColors.darkBlue,
+                letterSpacing: -0.5,
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // DIRECCIÓN CON ESTILO LIMPIO
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Text(
+                address,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.montserrat(
+                  color: AppColors.darkBlue,
+                  fontSize: 15,
+                  height: 1.4,
+                ),
+              ),
+            ),
+            const SizedBox(height: 35),
+
+            // BOTÓN PRINCIPAL: VAMOS PARA ALLÁ
+            SizedBox(
+              width: double.infinity,
+              height: 60,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryGreen,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  elevation: 5,
+                  shadowColor: AppColors.darkBlue.withValues(alpha: 0.3),
+                ),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _handleSearchResult({
+                    'destinationName': label,
+                    'destinationCoords': LatLng(lat, lng),
+                  });
+                },
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.navigation_rounded, color: Colors.white),
+                    const SizedBox(width: 12),
+                    Text(
+                      "VAMOS PARA ALLÁ",
+                      style: GoogleFonts.montserrat(
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        fontSize: 14,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // BOTÓN SECUNDARIO: CAMBIAR DIRECCIÓN
+            SizedBox(
+              width: double.infinity,
+              height: 60,
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: AppColors.darkBlue, width: 2),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                ),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _openSearchForConfig(type);
+                },
+                child: Text(
+                  "CAMBIAR DIRECCIÓN",
+                  style: GoogleFonts.montserrat(
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.darkBlue,
+                    fontSize: 12,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openSearchForConfig(String type) {
+    setState(() {
+      _addressTypeToSave = type; // 'home' o 'work'
+      _isPickingLocation = true; // Activa la interfaz de selección
+      _isPickingOrigin = false; // Aseguramos que no es un viaje
+      _favSearchResults = []; // Limpiamos búsquedas previas
+      _favSearchController.clear();
+
+      // Iniciamos el mapa en tu posición actual para que sea más fácil elegir
+      if (_currentPosition != null) {
+        _animatedMapMove(_currentPosition!, 17.0);
+      }
+    });
+  }
+
+  Widget _buildMapPickingSearchOverlay() {
+    // ✅ MODIFICACIÓN: No mostrar si no estamos en picking,
+    // O si estamos específicamente ajustando el punto de recogida ('pickup')
+    if (!_isPickingLocation || _mapPickingTarget == 'pickup') {
+      return const SizedBox.shrink();
+    }
+
+    if (_addressTypeToSave == null && _mapPickingTarget == null) {
+      return const SizedBox.shrink();
+    }
+
+    String hintText = "";
+    // Lógica para Favoritos
+    if (_addressTypeToSave != null) {
+      hintText =
+          "¿Cuál es la dirección de tu ${_addressTypeToSave == 'home' ? 'Casa' : 'Oficina'}?";
+    }
+    // Lógica para puntos de viaje
+    else {
+      if (_mapPickingTarget == 'pickup') {
+        hintText = "Ajustar punto de encuentro...";
+      }
+      if (_mapPickingTarget == 'reference') {
+        hintText = "Buscar nueva dirección de partida...";
+      }
+      if (_mapPickingTarget == 'destination') {
+        hintText = "Buscar nuevo destino...";
+      }
+    }
+
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + 40,
+      left: 20,
+      right: 20,
+      child: Column(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(15),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 15,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: TextField(
+              controller: _favSearchController,
+              onChanged: _onFavSearchChanged,
+              decoration: InputDecoration(
+                hintText: hintText,
+                prefixIcon: Icon(
+                  Icons.search,
+                  color: (_mapPickingTarget == 'pickup')
+                      ? AppColors
+                            .primaryGreen // Verde para ajuste fino
+                      : AppColors.darkBlue, // Azul para búsqueda libre
+                ),
+                suffixIcon: _isSearchingFav
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : (_favSearchController
+                              .text
+                              .isNotEmpty // Solo si hay texto mostramos la X
+                          ? IconButton(
+                              icon: const Icon(Icons.close, size: 18),
+                              onPressed: () {
+                                _favSearchController.clear();
+                                setState(() {
+                                  _favSearchResults = [];
+                                  _isSearchingFav = false;
+                                });
+                              },
+                            )
+                          : null),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(vertical: 15),
+              ),
+            ),
+          ),
+          if (_favSearchResults.isNotEmpty) _buildMapSearchResultsList(),
+        ],
+      ),
+    );
+  }
+
+  // Lista de resultados flotante (reutilizando tu lógica de favoritos)
+  Widget _buildMapSearchResultsList() {
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      constraints: const BoxConstraints(maxHeight: 200),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10)],
+      ),
+      child: ListView.separated(
+        shrinkWrap: true,
+        padding: EdgeInsets.zero,
+        itemCount: _favSearchResults.length,
+        separatorBuilder: (_, _) => const Divider(height: 1, indent: 50),
+        itemBuilder: (ctx, i) {
+          final place = _favSearchResults[i];
+          return ListTile(
+            leading: const Icon(
+              Icons.location_on_outlined,
+              color: Colors.grey,
+              size: 20,
+            ),
+            title: Text(
+              place['name'] ?? "",
+              style: GoogleFonts.montserrat(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            onTap: () =>
+                _onFavResultSelected(place), // Esto ya mueve la cámara al lugar
+          );
+        },
+      ),
+    );
+  }
+
+  // CAMBIA LA FIRMA Y LA LÓGICA DE INICIO
+  void _startPickupConfirmation({
+    bool strict = false,
+    String? initialAddress,
+    LatLng? initialPosition,
+  }) {
+    _mapPickingTarget ??= 'pickup';
+    _isStrictPickupMode = strict;
+
+    // Usa la posición inicial si se provee, sino usa la lógica anterior
+    LatLng targetPoint =
+        initialPosition ??
+        _referenceOriginCoords ??
+        _currentPosition ??
+        _defaultLocation;
 
     setState(() {
       _tripState = TripState.CONFIRMING_PICKUP;
       _isPickingLocation = true;
-      _isPickingOrigin = true;
-      _isOriginConfirmed = false;
-      _mapCenter = initialPoint;
+      // IMPORTANTE: No reseteamos _isOriginConfirmed a false aquí,
+      // solo si realmente estamos iniciando un proceso nuevo.
+      _mapCenter = targetPoint;
+      _pickingAddress = initialAddress ?? "Selecciona ubicación en el mapa";
+      _lastGeocodedPosition = targetPoint;
     });
 
-    _animatedMapMove(initialPoint, 17.0);
+    _animatedMapMove(targetPoint, 18.5);
 
-    // Pedir dirección inmediata al entrar
-    _searchService
-        .getReverseGeocode(initialPoint.latitude, initialPoint.longitude)
-        .then((data) {
-          if (data != null && mounted) {
-            setState(() {
-              _pickingAddress = data['name'] ?? "Ubicación en mapa";
-              _pickingSubAddress = data['address'] ?? "";
-              _lastGeocodedPosition = initialPoint;
-            });
-          }
-        });
+    if (initialAddress == null) {
+      _searchService
+          .getReverseGeocode(targetPoint.latitude, targetPoint.longitude)
+          .then((data) {
+            if (data != null && mounted) {
+              setState(
+                () => _pickingAddress = data['name'] ?? "Ubicación en mapa",
+              );
+            }
+          });
+    }
   }
 
   void _startTrackingListener(String tripId) async {
@@ -4851,14 +5704,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 children: [
                   Text(
                     "En viaje hacia el destino",
-                    style: GoogleFonts.poppins(
+                    style: GoogleFonts.montserrat(
                       fontWeight: FontWeight.bold,
                       fontSize: 16,
                     ),
                   ),
                   Text(
                     _destinationName ?? "Destino seleccionado",
-                    style: GoogleFonts.poppins(
+                    style: GoogleFonts.montserrat(
                       color: Colors.grey[600],
                       fontSize: 13,
                     ),
@@ -4880,11 +5733,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               children: [
                 Text(
                   "Valor a pagar",
-                  style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
+                  style: GoogleFonts.montserrat(
+                    fontSize: 12,
+                    color: Colors.grey,
+                  ),
                 ),
                 Text(
                   "\$ ${_formatCurrency(_tripPrice)}",
-                  style: GoogleFonts.poppins(
+                  style: GoogleFonts.montserrat(
                     fontWeight: FontWeight.bold,
                     fontSize: 18,
                   ),
@@ -4897,7 +5753,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               icon: const Icon(Icons.security, color: Colors.white, size: 18),
               label: Text(
                 "S.O.S",
-                style: GoogleFonts.poppins(
+                style: GoogleFonts.montserrat(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,
                 ),
@@ -4984,27 +5840,70 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
+  Widget _buildPremiumButton({
+    required String text,
+    required VoidCallback onPressed,
+    bool isPrimary = true,
+    bool isLoading = false,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      height: 56,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: isPrimary ? AppColors.darkBlue : Colors.white,
+          foregroundColor: isPrimary ? Colors.white : AppColors.darkBlue,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: isPrimary
+                ? BorderSide.none
+                : const BorderSide(color: AppColors.darkBlue, width: 2),
+          ),
+          elevation: isPrimary ? 2 : 0,
+        ),
+        onPressed: isLoading ? null : onPressed,
+        child: isLoading
+            ? const CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2,
+              )
+            : Text(
+                text,
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 14,
+                ),
+              ),
+      ),
+    );
+  }
+
   // --- SUSTITUIR EL MÉTODO _buildPaymentSelector COMPLETO ---
   Widget _buildPaymentSelector(StateSetter setModalState) {
-    if (_userMethods.isEmpty) return const SizedBox.shrink();
+    // Filtramos los métodos: Si no es modo corporativo, quitamos el corporativo
+    final List<PaymentMethod> metodosDisponibles = _userMethods.where((m) {
+      if (_currentUser.isCorporateMode) return true; // Si es Corp, ve todos
+      return m.type !=
+          PaymentMethodType
+              .corporateVoucher; // Si es Personal, oculta corporativo
+    }).toList();
+
+    if (metodosDisponibles.isEmpty) return const SizedBox.shrink();
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
+        color: Colors.white,
         borderRadius: BorderRadius.circular(15),
         border: Border.all(color: Colors.grey.shade200),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           isExpanded: true,
-          icon: const Icon(
-            Icons.arrow_drop_down_circle_outlined,
-            size: 20,
-            color: Colors.grey,
-          ),
-          value: _selectedMethod?.id,
-          items: _userMethods
+          value: metodosDisponibles.any((m) => m.id == _selectedMethod?.id)
+              ? _selectedMethod?.id
+              : metodosDisponibles.first.id,
+          items: metodosDisponibles
               .map(
                 (m) => DropdownMenuItem<String>(
                   value: m.id,
@@ -5013,14 +5912,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       Icon(
                         _getPaymentIcon(m.type),
                         size: 20,
-                        color: Colors.blueGrey[700],
+                        color: AppColors.darkBlue,
                       ),
                       const SizedBox(width: 12),
                       Text(
                         m.name,
-                        style: GoogleFonts.poppins(
+                        style: GoogleFonts.montserrat(
                           fontSize: 14,
-                          fontWeight: FontWeight.w500,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ],
@@ -5028,9 +5927,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               )
               .toList(),
-          onChanged: (String? newId) {
-            if (newId == null) return;
-            final methodObj = _userMethods.firstWhere((m) => m.id == newId);
+          onChanged: (newId) {
+            final methodObj = metodosDisponibles.firstWhere(
+              (m) => m.id == newId,
+            );
             setModalState(() => _selectedMethod = methodObj);
             setState(() {
               _selectedMethod = methodObj;
@@ -5154,39 +6054,41 @@ class _PulseLoadingIconState extends State<_PulseLoadingIcon>
         return Stack(
           alignment: Alignment.center,
           children: [
-            // Círculos de pulso
-            ...List.generate(2, (index) {
-              final progress = (_controller.value + (index * 0.5)) % 1.0;
+            // Círculos de pulso con desvanecimiento
+            ...List.generate(3, (index) {
+              final progress = (_controller.value + (index * 0.33)) % 1.0;
               return Container(
-                width: 40 + (progress * 60),
-                height: 40 + (progress * 60),
+                width: 80 + (progress * 100),
+                height: 80 + (progress * 100),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: widget.color.withValues(alpha: 1.0 - progress),
+                    color: widget.color.withValues(
+                      alpha: 0.3 * (1.0 - progress),
+                    ),
                     width: 2,
                   ),
                 ),
               );
             }),
-            // Ícono Central con sombra
+            // Ícono central
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
                 color: widget.color,
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: widget.color.withValues(alpha: 0.4),
+                    color: widget.color.withValues(alpha: 0.3),
                     blurRadius: 20,
-                    offset: const Offset(0, 8),
+                    offset: const Offset(0, 10),
                   ),
                 ],
               ),
               child: const Icon(
-                Icons.map_rounded,
+                Icons.location_on,
                 color: Colors.white,
-                size: 32,
+                size: 35,
               ),
             ),
           ],
@@ -5236,22 +6138,6 @@ class _AnimatedChecklistState extends State<_AnimatedChecklist> {
         mainAxisSize: MainAxisSize.min,
         children: [
           // --- REEMPLAZAMOS EL PULSE POR UN ICONO ESTÁTICO PREMIUM ---
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: widget.color,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: widget.color.withValues(alpha: 0.2),
-                  blurRadius: 15,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: const Icon(Icons.map_rounded, color: Colors.white, size: 32),
-          ),
-
           const SizedBox(height: 30),
           Text(
             "PREPARANDO TU VIAJE",
@@ -5322,7 +6208,7 @@ class _AnimatedChecklistState extends State<_AnimatedChecklist> {
           const SizedBox(width: 12),
           Text(
             title,
-            style: GoogleFonts.poppins(
+            style: GoogleFonts.montserrat(
               fontSize: 12,
               fontWeight: isDone ? FontWeight.w600 : FontWeight.w400,
               color: isDone ? AppColors.darkBlue : Colors.grey.shade400,

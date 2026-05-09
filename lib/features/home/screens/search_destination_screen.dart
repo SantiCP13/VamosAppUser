@@ -13,12 +13,14 @@ class SearchDestinationScreen extends StatefulWidget {
   final String? initialOriginName;
   final LatLng? initialOriginCoords;
   final LatLng? currentPosition;
+  final String? configModeType; // <--- AGREGAR ESTO (home o work)
 
   const SearchDestinationScreen({
     super.key,
     this.currentPosition,
     this.initialOriginName,
     this.initialOriginCoords,
+    this.configModeType,
   });
 
   @override
@@ -31,7 +33,6 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
   final TextEditingController _originController = TextEditingController();
 
   bool _isEditingOrigin = false;
-  LatLng? _selectedOriginCoords;
   String? _settingAddressType; // 'home' o 'work' o null
 
   final FocusNode _focusNode = FocusNode();
@@ -45,12 +46,25 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
   List<Map<String, dynamic>> _recentPlaces = [];
   bool _isLoading = false;
   Timer? _debounce;
+  Map<String, dynamic>? _selectedOrigin;
+  Map<String, dynamic>? _selectedDestination;
 
   @override
   void initState() {
     super.initState();
-    _originController.text = widget.initialOriginName ?? "Ubicación actual";
-    _selectedOriginCoords = widget.initialOriginCoords;
+    _settingAddressType = widget.configModeType;
+
+    if (widget.initialOriginCoords != null) {
+      _selectedOrigin = {
+        'name': widget.initialOriginName,
+        'lat': widget.initialOriginCoords!.latitude,
+        'lng': widget.initialOriginCoords!.longitude,
+      };
+      _originController.text = widget.initialOriginName ?? "";
+    } else {
+      _selectedOrigin = null;
+      _originController.text = "";
+    }
     _loadRecents();
 
     _originFocusNode.addListener(() {
@@ -59,9 +73,6 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
           _isEditingOrigin = true;
           _searchResults = [];
         });
-        if (_originController.text == "Ubicación actual") {
-          _originController.clear();
-        }
       }
     });
 
@@ -75,44 +86,14 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
     });
   }
 
-  Future<void> _saveQuickAddress(
-    String type,
-    String name,
-    double lat,
-    double lng,
-  ) async {
-    setState(() => _isLoading = true);
-    FocusScope.of(context).unfocus(); // Cerramos el teclado
-
-    bool success = await AuthService.updateUserAddress(
-      type: type,
-      address: name,
-      lat: lat,
-      lng: lng,
-    );
-
-    if (mounted) {
-      setState(() => _isLoading = false);
-
-      if (success) {
-        // Feedback visual
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              "¡${type == 'home' ? 'Casa' : 'Oficina'} guardada exitosamente!",
-            ),
-            backgroundColor: AppColors.primaryGreen,
-          ),
-        );
-        // Forzamos el redibujado para que el botón pase de "Configurar" a "Casa/Oficina"
-        setState(() {});
-      }
-    }
-  }
-
   Future<void> _loadRecents() async {
     final res = await _searchService.getRecentPlaces();
-    if (mounted) setState(() => _recentPlaces = res);
+    if (mounted) {
+      setState(() {
+        // Tomamos solo los primeros 5 para no saturar y que sean los más nuevos
+        _recentPlaces = res.take(7).toList();
+      });
+    }
   }
 
   @override
@@ -197,99 +178,94 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
   }
 
   Future<void> _handleResultTap(Map<String, dynamic> place) async {
-    // 1. Obtener detalles si vienen de Google o no tienen coordenadas aún
-    if (place['source'] == 'google' ||
-        place['place_id'] != null ||
-        (place['lat'] == null)) {
+    // 1. Obtener coordenadas si no las tiene (tu lógica actual)
+    if (place['lat'] == null) {
       setState(() => _isLoading = true);
-
       final details = await _searchService.getPlaceCoords(
         place['place_id'] ?? place['mapbox_id'],
         _sessionToken,
       );
-
       if (mounted) setState(() => _isLoading = false);
-
       if (details != null) {
-        // Actualizamos el objeto 'place' con la data del servidor
         place['lat'] = details['lat'];
         place['lng'] = details['lng'];
-        place['snapped_lat'] = details['snapped_lat'];
-        place['snapped_lng'] = details['snapped_lng'];
       }
     }
 
-    // 2. Extraer coordenadas finales (Prioridad absoluta al Snapping/Imán de la calle)
-    // Usamos .toDouble() para evitar errores de tipo entre int/double en Dart
-    final double latCalle = (place['snapped_lat'] ?? place['lat'] ?? 0.0)
-        .toDouble();
-    final double lngCalle = (place['snapped_lng'] ?? place['lng'] ?? 0.0)
-        .toDouble();
+    setState(() {
+      if (_isEditingOrigin) {
+        // Guardamos el origen
+        _selectedOrigin = place;
+        _originController.text = place['name'] ?? "";
 
-    // Coordenada visual (donde está el edificio/sitio originalmente)
-    final double latReal = (place['lat'] ?? 0.0).toDouble();
-    final double lngReal = (place['lng'] ?? 0.0).toDouble();
-
-    // --- LÓGICA A: GUARDAR DIRECCIÓN RÁPIDA (Favoritos) ---
-    if (_settingAddressType != null) {
-      // Guardamos la dirección en el backend usando el punto de la calle para que el ruteo sea perfecto
-      await _saveQuickAddress(
-        _settingAddressType!,
-        place['name'],
-        latCalle,
-        lngCalle,
-      );
-
-      setState(() {
-        _searchController.clear();
-        _settingAddressType = null;
-      });
-      return;
-    }
-
-    // --- LÓGICA B: EDITANDO PUNTO DE PARTIDA (ORIGEN) ---
-    if (_isEditingOrigin) {
-      setState(() {
-        _originController.text = place['name'];
-        _selectedOriginCoords = LatLng(latCalle, lngCalle);
-        _searchResults = [];
+        // ✅ Esto hará que el IF del build se cumpla y aparezca el segundo campo
         _isEditingOrigin = false;
-      });
-      _focusNode.requestFocus(); // Salto automático al destino
-    }
-    // --- LÓGICA C: SELECCIONANDO DESTINO ---
-    else {
-      final LatLng? finalOriginCoords =
-          _selectedOriginCoords ?? widget.currentPosition;
-      String finalOriginName = _originController.text.trim();
 
-      if (finalOriginName.isEmpty || finalOriginName == "Ubicación actual") {
-        finalOriginName = "Mi ubicación";
+        // Abrimos el teclado en el destino automáticamente tras un breve delay
+        Future.delayed(const Duration(milliseconds: 150), () {
+          _focusNode.requestFocus();
+        });
+      } else {
+        // Guardamos el destino
+        _selectedDestination = place;
+        _searchController.text = place['name'] ?? "";
+        // Si el origen está vacío, pasamos el foco al origen
+        if (_originController.text.isEmpty) {
+          _originFocusNode.requestFocus();
+          _isEditingOrigin = true;
+        }
       }
+      _searchResults = []; // Limpiamos la lista
+    });
+
+    // 2. AUTO-GUARDADO DE RECIENTES (tu lógica actual)
+    if (_settingAddressType == null) {
+      _searchService.saveManualRecent(
+        name: place['name'] ?? "Ubicación",
+        address: place['address'] ?? "",
+        lat: (place['lat'] as num).toDouble(),
+        lng: (place['lng'] as num).toDouble(),
+      );
+    }
+
+    // 3. VERIFICACIÓN FINAL: ¿Tenemos ambos?
+    // Dentro de SearchDestinationScreen -> _handleResultTap
+    if (_selectedOrigin != null && _selectedDestination != null) {
+      if (!mounted) return;
 
       Navigator.pop(context, {
-        'originName': finalOriginName,
-        'originCoords': finalOriginCoords,
-        'destinationName': place['name'],
+        'originName': _selectedOrigin!['name'],
+        'originCoords': LatLng(
+          _selectedOrigin!['lat'],
+          _selectedOrigin!['lng'],
+        ),
+        'destinationName': _selectedDestination!['name'],
         'destinationCoords': LatLng(
-          latCalle,
-          lngCalle,
-        ), // La app usará el punto de la calle
-        'visualDestinationCoords': LatLng(
-          latReal,
-          lngReal,
-        ), // Para poner el pin visualmente
-        'isManualOrigin': _selectedOriginCoords != null,
+          _selectedDestination!['lat'],
+          _selectedDestination!['lng'],
+        ),
+        'isManualOrigin': true, // Caso C: Origen y Destino definidos
+        'isMapPick': false, // No es fijar en mapa libre
+        'settingAddressType': _settingAddressType,
       });
+    }
+  }
+
+  Future<void> _deleteRecent(dynamic id) async {
+    if (id == null) return;
+
+    // 1. Llamada al service que creamos en el Paso 3
+    final success = await _searchService.deleteRecentPlace(id);
+
+    if (success && mounted) {
+      // 2. Refrescamos la lista localmente
+      _loadRecents();
+      _showAppSnackBar("Lugar eliminado del historial");
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool isSearching =
-        _searchController.text.isNotEmpty ||
-        (_originFocusNode.hasFocus && _originController.text.isNotEmpty);
-
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -301,47 +277,57 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
         ),
         child: SafeArea(
           child: Column(
+            crossAxisAlignment:
+                CrossAxisAlignment.start, // Alineación al inicio
             children: [
+              // --- BOTÓN ATRÁS ---
               Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 20,
-                  vertical: 15,
+                  vertical: 10,
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                ),
+              ),
+
+              // --- TÍTULO E INFORMACIÓN RELEVANTE ---
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 25,
+                  vertical: 10,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.08),
-                            blurRadius: 10,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
+                    Text(
+                      "Configura tu viaje",
+                      style: GoogleFonts.montserrat(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.primaryGreen,
                       ),
-                      child: IconButton(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(
-                          Icons.arrow_back_ios_new_rounded,
-                          color: Colors.black54,
-                          size: 20,
-                        ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      "Selecciona primero tu punto de partida para continuar.",
+                      style: GoogleFonts.montserrat(
+                        fontSize: 13,
+                        color: Colors.grey.shade600,
                       ),
                     ),
                   ],
                 ),
               ),
 
+              // --- CONTENEDOR DE INPUTS ---
               Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 20,
                   vertical: 10,
                 ),
                 child: Container(
-                  width: double.infinity,
                   padding: const EdgeInsets.all(15),
                   decoration: BoxDecoration(
                     color: Colors.white,
@@ -350,22 +336,18 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
                       BoxShadow(
                         color: Colors.black.withValues(alpha: 0.04),
                         blurRadius: 20,
-                        offset: const Offset(0, 10),
                       ),
                     ],
                   ),
                   child: Column(
                     children: [
+                      // INPUT 1: SIEMPRE VISIBLE
                       TextField(
                         controller: _originController,
                         focusNode: _originFocusNode,
-                        style: GoogleFonts.montserrat(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                        ),
                         onChanged: (val) {
                           if (val.isEmpty) {
-                            setState(() => _selectedOriginCoords = null);
+                            setState(() => _selectedOrigin = null);
                           }
                           _onSearchChanged(val);
                         },
@@ -374,95 +356,50 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
                           icon: Icons.my_location_rounded,
                           suffixIcon: _originController.text.isNotEmpty
                               ? IconButton(
-                                  icon: const Icon(
-                                    Icons.close_rounded,
-                                    size: 18,
-                                  ),
+                                  icon: const Icon(Icons.close),
                                   onPressed: () {
                                     setState(() {
                                       _originController.clear();
-                                      _selectedOriginCoords = null;
+                                      _selectedOrigin = null;
                                     });
                                   },
                                 )
                               : null,
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _searchController,
-                        focusNode: _focusNode,
-                        style: GoogleFonts.montserrat(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
+
+                      // INPUT 2: DINÁMICO (Solo si hay origen)
+                      if (_selectedOrigin != null) ...[
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _searchController,
+                          focusNode: _focusNode,
+                          onChanged: _onSearchChanged,
+                          decoration: _getInputStyle(
+                            label: "¿A dónde quieres ir?",
+                            icon: Icons.search_rounded,
+                          ),
                         ),
-                        onChanged: _onSearchChanged,
-                        decoration: _getInputStyle(
-                          label: _settingAddressType != null
-                              ? "Escribe la dirección de tu ${_settingAddressType == 'home' ? 'Casa' : 'Oficina'}"
-                              : "A dónde quieres ir",
-                          icon: Icons.search_rounded,
-                          suffixIcon: _isLoading
-                              ? const Padding(
-                                  padding: EdgeInsets.all(15),
-                                  child: SizedBox(
-                                    width: 10,
-                                    height: 10,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  ),
-                                )
-                              : _searchController.text.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(
-                                    Icons.close_rounded,
-                                    size: 20,
-                                  ),
-                                  onPressed: () {
-                                    _searchController.clear();
-                                    _onSearchChanged("");
-                                  },
-                                )
-                              : null,
-                        ),
-                      ),
+                      ],
                     ],
                   ),
                 ),
               ),
 
+              // --- LISTA DE OPCIONES (Solo si hay un foco activo) ---
               Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.only(top: 10),
-                  children: [
-                    if (!isSearching) ...[
-                      _buildMapPickOption(),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 25,
-                          vertical: 10,
+                child: (_originFocusNode.hasFocus || _focusNode.hasFocus)
+                    ? _buildDynamicOptionsList()
+                    : Center(
+                        child: Opacity(
+                          opacity: 0.3,
+                          child: Icon(
+                            Icons.map_outlined,
+                            size: 100,
+                            color: Colors.grey.shade300,
+                          ),
                         ),
-                        child: Divider(height: 1, color: Color(0xFFE2E8F0)),
                       ),
-                      _buildQuickActionsGrid(),
-                      if (_recentPlaces.isNotEmpty) ...[
-                        _buildSectionHeader("RECIENTES"),
-                        ..._recentPlaces.map((place) => _buildPlaceItem(place)),
-                      ],
-                    ],
-                    if (isSearching) ...[
-                      if (_isLoading)
-                        ...List.generate(5, (index) => _buildLoadingShimmer())
-                      else if (_searchResults.isEmpty)
-                        _buildEmptyState()
-                      else
-                        ..._searchResults.map(
-                          (place) => _buildPlaceItem(place),
-                        ),
-                    ],
-                  ],
-                ),
               ),
             ],
           ),
@@ -471,9 +408,61 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
     );
   }
 
+  Widget _buildDynamicOptionsList() {
+    // Si el usuario está escribiendo más de 3 letras, mostramos resultados de API
+    if ((_originFocusNode.hasFocus && _originController.text.length >= 3) ||
+        (_focusNode.hasFocus && _searchController.text.length >= 3)) {
+      if (_isLoading) {
+        return ListView(
+          children: List.generate(5, (_) => _buildLoadingShimmer()),
+        );
+      }
+      if (_searchResults.isEmpty) return _buildEmptyState();
+      return ListView(
+        children: _searchResults
+            .map((place) => _buildPlaceItem(place))
+            .toList(),
+      );
+    }
+
+    // Si el campo está vacío pero tiene el foco, mostramos las opciones fijas
+    return ListView(
+      padding: const EdgeInsets.only(top: 10),
+      children: [
+        // 1. Ubicación Actual (SOLO en origen)
+        if (_originFocusNode.hasFocus && widget.currentPosition != null)
+          _buildCurrentLocationOption(),
+
+        // 2. Casa y Oficina
+        _buildQuickActionsGrid(),
+
+        // 3. Recientes
+        if (_recentPlaces.isNotEmpty) ...[
+          _buildSectionHeader("RECIENTES"),
+          ..._recentPlaces.map((place) => _buildPlaceItem(place)),
+        ],
+
+        const SizedBox(height: 10),
+        const Divider(
+          height: 1,
+          color: Color(0xFFF1F5F9),
+          indent: 25,
+          endIndent: 25,
+        ),
+
+        // 4. Fijar en Mapa (Si es destino, requiere que el origen ya exista)
+        if (_originFocusNode.hasFocus ||
+            (_focusNode.hasFocus && _selectedOrigin != null))
+          _buildMapPickOption(),
+
+        const SizedBox(height: 30),
+      ],
+    );
+  }
+
   Widget _buildSectionHeader(String title) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(25, 20, 25, 10),
+      padding: const EdgeInsets.fromLTRB(25, 20, 25, 8),
       child: Text(
         title,
         style: GoogleFonts.montserrat(
@@ -486,7 +475,51 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
     );
   }
 
+  Widget _buildCurrentLocationOption() {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 25, vertical: 5),
+      leading: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.blue.withValues(alpha: 0.1),
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(
+          Icons.gps_fixed_rounded,
+          color: Colors.blue,
+          size: 20,
+        ),
+      ),
+      title: Text(
+        "Mi ubicación actual",
+        style: GoogleFonts.montserrat(
+          fontWeight: FontWeight.w700,
+          fontSize: 14,
+          color: AppColors.darkBlue,
+        ),
+      ),
+      subtitle: Text(
+        "Usar coordenadas de tu GPS",
+        style: GoogleFonts.montserrat(fontSize: 12, color: Colors.grey),
+      ),
+      onTap: () {
+        if (widget.currentPosition != null) {
+          _handleResultTap({
+            'name': "Ubicación actual",
+            'address': "Cerca de tu posición",
+            'lat': widget.currentPosition!.latitude,
+            'lng': widget.currentPosition!.longitude,
+          });
+        }
+      },
+    );
+  }
+
   Widget _buildMapPickOption() {
+    final bool pickingOrigin = _originFocusNode.hasFocus || _isEditingOrigin;
+    if (!pickingOrigin && _selectedOrigin == null) {
+      return const SizedBox.shrink();
+    }
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 25),
       leading: Container(
@@ -502,26 +535,28 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
         ),
       ),
       title: Text(
-        "Fijar en el mapa",
+        pickingOrigin
+            ? "Fijar punto de partida en mapa"
+            : "Fijar destino en el mapa",
         style: GoogleFonts.montserrat(
           fontWeight: FontWeight.w700,
           fontSize: 14,
-          color: AppColors.darkBlue,
         ),
       ),
-      trailing: const Icon(Icons.chevron_right_rounded, color: Colors.grey),
       onTap: () {
-        bool pickingOrigin = _originFocusNode.hasFocus || _isEditingOrigin;
-        FocusScope.of(context).unfocus();
-        Future.delayed(const Duration(milliseconds: 150), () {
-          if (mounted) {
-            Navigator.pop(context, {
-              'isMapPick': true,
-              'isPickingOrigin': pickingOrigin,
-              'settingAddressType':
-                  _settingAddressType, // <--- Enviamos el tipo al HomeScreen
-            });
-          }
+        Navigator.pop(context, {
+          'isMapPick': true,
+          // Aquí enviamos el tipo correcto para que el modal de HomeScreen sepa qué mostrar
+          'mapPickType': pickingOrigin ? 'pickup_pin' : 'destination_pin',
+          'isPickingOrigin': pickingOrigin,
+          'lat': pickingOrigin
+              ? (_selectedOrigin?['lat'] ?? widget.currentPosition?.latitude)
+              : (_selectedDestination?['lat'] ??
+                    widget.currentPosition?.latitude),
+          'lng': pickingOrigin
+              ? (_selectedOrigin?['lng'] ?? widget.currentPosition?.longitude)
+              : (_selectedDestination?['lng'] ??
+                    widget.currentPosition?.longitude),
         });
       },
     );
@@ -548,63 +583,80 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
     return Expanded(
       child: InkWell(
         onTap: () => _handleQuickAction(label, type, addr),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(18),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 400),
-          padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+          padding: const EdgeInsets.symmetric(
+            vertical: 18,
+            horizontal: 12,
+          ), // Más compacto
           decoration: BoxDecoration(
-            // ignore: deprecated_member_use
-            color: isSet ? AppColors.darkBlue : Colors.white.withOpacity(0.4),
-            borderRadius: BorderRadius.circular(20),
+            color: isSet
+                ? AppColors.darkBlue
+                : Colors.white.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(18),
             border: Border.all(
-              color: isSet ? Colors.transparent : Colors.grey.shade300,
-              width: 1.5,
+              color: isSet ? Colors.transparent : Colors.grey.shade200,
+              width: 1,
             ),
             boxShadow: isSet
                 ? [
                     BoxShadow(
-                      // ignore: deprecated_member_use
-                      color: AppColors.darkBlue.withOpacity(0.3),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
+                      color: AppColors.darkBlue.withValues(alpha: 0.2),
+                      blurRadius: 8,
+                      offset: const Offset(0, 4),
                     ),
                   ]
                 : [],
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+          child: Row(
+            // Cambiamos a Row para que sea más bajo y compacto
             children: [
               Container(
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
                   color: isSet
-                      // ignore: deprecated_member_use
-                      ? AppColors.primaryGreen.withOpacity(0.15)
+                      ? AppColors.primaryGreen.withValues(alpha: 0.2)
                       : Colors.grey.shade100,
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
                   icon,
                   color: isSet ? AppColors.primaryGreen : Colors.grey.shade400,
-                  size: 28,
+                  size: 20, // Icono un poco más pequeño
                 ),
               ),
-              const SizedBox(height: 10),
-              Text(
-                isSet ? label : "Configurar",
-                style: GoogleFonts.montserrat(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  color: isSet ? Colors.white : Colors.grey.shade600,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              Text(
-                isSet ? "Guardado" : label, // Ej: "Configurar Casa"
-                style: GoogleFonts.montserrat(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w500,
-                  color: isSet ? AppColors.primaryGreen : Colors.grey.shade400,
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: GoogleFonts.montserrat(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: isSet ? Colors.white : Colors.grey.shade600,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                    Text(
+                      isSet
+                          ? addr
+                          : "Configurar", // Mostramos la dirección real
+                      style: GoogleFonts.montserrat(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w500,
+                        color: isSet
+                            ? Colors.white.withValues(alpha: 0.7)
+                            : Colors.grey.shade400,
+                      ),
+                      maxLines: 1,
+                      overflow:
+                          TextOverflow.ellipsis, // Si es muy larga, pone "..."
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -616,38 +668,37 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
 
   void _handleQuickAction(String label, String type, String? addr) {
     if (addr != null && addr.isNotEmpty) {
-      _showAddressOptions(
-        label,
-        addr,
-        type == 'home'
-            ? AuthService.currentUser!.homeLat!
-            : AuthService.currentUser!.workLat!,
-        type == 'home'
-            ? AuthService.currentUser!.homeLng!
-            : AuthService.currentUser!.workLng!,
-        type,
-      );
-    } else {
-      // SI NO EXISTE: Activamos el modo de configuración
-      setState(() {
-        _settingAddressType = type;
-        _isEditingOrigin =
-            false; // Aseguramos que estamos buscando destino/favorito
+      final user = AuthService.currentUser!;
+      // Si ya existe, le mandamos al Home la orden de viajar a esa coordenada
+      _handleResultTap({
+        'name': label, // "Casa" u "Oficina"
+        'address': addr,
+        'lat': type == 'home' ? user.homeLat : user.workLat,
+        'lng': type == 'home' ? user.homeLng : user.workLng,
+        'source': 'favorite_shortcut',
       });
-      _focusNode.requestFocus(); // Ponemos el foco en el buscador de arriba
-
-      _showAppSnackBar("Busca la dirección de tu $label");
+    } else {
+      // Si NO existe, activamos el modo "Configuración"
+      setState(() {
+        _settingAddressType = type; // 'home' o 'work'
+        _searchController.clear();
+      });
+      _focusNode
+          .requestFocus(); // Abrir teclado para que busque la dirección de su casa
+      _showAppSnackBar("Escribe la dirección de tu $label");
     }
   }
 
-  void _showAppSnackBar(String message) {
+  void _showAppSnackBar(String message, {bool isError = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
           message,
           style: GoogleFonts.montserrat(fontWeight: FontWeight.w600),
         ),
-        backgroundColor: AppColors.darkBlue,
+        // Si es error se pone rojo, si no, se queda en azul oscuro
+        backgroundColor: isError ? Colors.redAccent : AppColors.darkBlue,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 2),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -655,188 +706,13 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
     );
   }
 
-  void _showAddressOptions(
-    String label,
-    String address,
-    double lat,
-    double lng,
-    String type,
-  ) {
-    final bool isHome = type == 'home';
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent, // Importante para ver el redondeo
-      isScrollControlled: true,
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.fromLTRB(25, 12, 25, 40),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(35)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Tirador superior (Handle)
-            Container(
-              width: 40,
-              height: 5,
-              decoration: BoxDecoration(
-                color: Colors.grey.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-            const SizedBox(height: 30),
-
-            // Icono Central Premium con degradado
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: AppColors.primaryGreen.withValues(alpha: 0.1),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                isHome ? Icons.home_rounded : Icons.business_center_rounded,
-                size: 45,
-                color: AppColors.primaryGreen,
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // Títulos
-            Text(
-              isHome ? "Tu Casa" : "Tu Oficina",
-              style: GoogleFonts.montserrat(
-                fontSize: 24,
-                fontWeight: FontWeight.w900,
-                color: AppColors.darkBlue,
-                letterSpacing: -0.5,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Text(
-                address,
-                textAlign: TextAlign.center,
-                style: GoogleFonts.montserrat(
-                  fontSize: 14,
-                  color: Colors.grey.shade500,
-                  fontWeight: FontWeight.w500,
-                  height: 1.4,
-                ),
-              ),
-            ),
-            const SizedBox(height: 35),
-
-            // BOTÓN PRINCIPAL: VAMOS PARA ALLÁ (Estilo Neumórfico/Premium)
-            GestureDetector(
-              onTap: () {
-                Navigator.pop(ctx);
-                _handleResultTap({
-                  'name': label,
-                  'address': address,
-                  'lat': lat,
-                  'lng': lng,
-                });
-              },
-              child: Container(
-                width: double.infinity,
-                height: 65,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      AppColors.primaryGreen,
-                      const Color.fromARGB(255, 89, 158, 33),
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.primaryGreen.withValues(alpha: 0.3),
-                      blurRadius: 15,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const SizedBox(width: 12),
-                    Text(
-                      "VAMOS PARA ALLÁ",
-                      style: GoogleFonts.montserrat(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 15),
-
-            // BOTÓN SECUNDARIO: CAMBIAR DIRECCIÓN
-            SizedBox(
-              width: double.infinity,
-              height: 60,
-              child: TextButton(
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  // Lógica para enviar al Home a configurar
-                  Navigator.pop(context, {
-                    'isMapPick': true,
-                    'isPickingOrigin': false,
-                    'settingAddressType': type,
-                  });
-                },
-                style: TextButton.styleFrom(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                    side: BorderSide(
-                      color: AppColors.darkBlue.withValues(alpha: 0.1),
-                      width: 2,
-                    ),
-                  ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.edit_location_alt_outlined,
-                      color: AppColors.darkBlue.withValues(alpha: 0.7),
-                      size: 20,
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      "Cambiar dirección",
-                      style: GoogleFonts.montserrat(
-                        color: AppColors.darkBlue.withValues(alpha: 0.8),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildPlaceItem(Map<String, dynamic> place) {
-    bool isRecent = place['type'] == 'recent' || place['source'] == 'cache';
+    bool isRecent = place['type'] == 'recent' || place['source'] == 'user_db';
 
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 25, vertical: 2),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 25, vertical: 4),
       leading: Container(
-        padding: const EdgeInsets.all(8),
+        padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: isRecent
               ? AppColors.primaryGreen.withValues(alpha: 0.1)
@@ -845,20 +721,20 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
         ),
         child: Icon(
           isRecent ? Icons.history_rounded : Icons.location_on_rounded,
-          color: isRecent ? AppColors.primaryGreen : Colors.grey.shade400,
-          size: 18,
+          color: isRecent ? AppColors.primaryGreen : Colors.grey.shade500,
+          size: 20,
         ),
       ),
       title: Text(
         place['name'] ?? "Ubicación",
         style: GoogleFonts.montserrat(
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w700,
           fontSize: 14,
           color: AppColors.darkBlue,
         ),
       ),
       subtitle: Text(
-        "${place['distance'] ?? ''} km • ${place['address'] ?? ''}",
+        "${place['distance'] != null ? '${place['distance']} km • ' : ''}${place['address'] ?? ''}",
         style: GoogleFonts.montserrat(
           fontSize: 12,
           color: Colors.grey.shade500,
@@ -866,6 +742,19 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
+      // --- NUEVO: BOTÓN DE BORRADO INDIVIDUAL ---
+      trailing: isRecent
+          ? IconButton(
+              icon: const Icon(
+                Icons.close_rounded,
+                size: 18,
+                color: Colors.grey,
+              ),
+              onPressed: () => _deleteRecent(
+                place['id'],
+              ), // Usamos el ID que enviamos desde el backend
+            )
+          : null,
       onTap: () => _handleResultTap(place),
     );
   }

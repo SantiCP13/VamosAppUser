@@ -63,17 +63,28 @@ class AuthService {
       final token = await sl<StorageService>().getToken();
       if (token == null) return false;
 
-      // Configurar el token en el header de Dio si no está
       _api.dio.options.headers['Authorization'] = 'Bearer $token';
 
       final response = await _api.dio.get('/me');
       if (response.statusCode == 200) {
+        // 1. Cargamos el usuario desde el servidor
         _currentUser = User.fromMap(response.data['data']);
+
+        // --- CAMBIO AQUÍ ---
+        // 2. Recuperamos la preferencia guardada en el Paso A
+        final storedMode = await sl<StorageService>().getAppMode();
+
+        // 3. Si hay algo guardado, se lo imponemos al usuario ignorando el default del server
+        if (storedMode != null && _currentUser != null) {
+          _currentUser!.appMode = (storedMode == 'CORPORATE')
+              ? AppMode.CORPORATE
+              : AppMode.PERSONAL;
+        }
+
         return true;
       }
       return false;
     } catch (e) {
-      // Si el token expiró o es inválido (401), borrarlo
       if (e is DioException && e.response?.statusCode == 401) {
         logout();
       }
@@ -265,6 +276,25 @@ class AuthService {
     );
   }
 
+  static void _updateUserPreservingMode(Map<String, dynamic> userData) {
+    if (_currentUser == null) {
+      _currentUser = User.fromMap(userData);
+      return;
+    }
+
+    // 1. Guardamos el modo en el que está el usuario justo ahora
+    final currentAppMode = _currentUser!.appMode;
+
+    // 2. Creamos el nuevo objeto con la info fresca del servidor
+    _currentUser = User.fromMap(userData);
+
+    // 3. LE RESTAURAMOS el modo que tenía antes de la actualización
+    _currentUser!.appMode = currentAppMode;
+
+    debugPrint(
+      "🔄 Usuario actualizado (Modo preservado: ${currentAppMode.name})",
+    );
+  }
   // ===========================================================================
   // 3. MÉTODOS DE PERFIL Y BENEFICIARIOS
   // ===========================================================================
@@ -285,10 +315,18 @@ class AuthService {
       );
 
       if (response.data['success'] == true) {
+        // --- CAMBIO AQUÍ ---
+        // 1. Actualizamos el objeto en memoria
         _currentUser!.appMode = isTargetCorporate
             ? AppMode.CORPORATE
             : AppMode.PERSONAL;
-        // No necesitamos guardar nada en storage aquí porque el token manda
+
+        // 2. GUARDAMOS la preferencia localmente para que no se pierda
+        final String modoParaDisco = isTargetCorporate
+            ? 'CORPORATE'
+            : 'PERSONAL';
+        await sl<StorageService>().saveAppMode(modoParaDisco);
+
         return true;
       }
       return false;
@@ -310,32 +348,28 @@ class AuthService {
     required String address,
     required double lat,
     required double lng,
-    double? snappedLat, // Agregados
-    double? snappedLng,
   }) async {
     if (_currentUser == null) return false;
     try {
       final response = await ApiClient().dio.post(
-        '/user/favoritos', // Asegúrate que este sea el endpoint en api.php
+        '/user/favoritos',
         data: {
           'tipo': type,
           'address': address,
           'lat': lat,
           'lng': lng,
-          'snapped_lat': snappedLat ?? lat,
-          'snapped_lng': snappedLng ?? lng,
+          'snapped_lat': lat,
+          'snapped_lng': lng,
         },
       );
 
-      if (response.data['user'] != null) {
-        // MAGIA: Reemplazamos el usuario local con el que devuelve el servidor
-        // Esto hace que la App sepa que el Home ya está guardado
-        _currentUser = User.fromMap(response.data['user']);
+      if (response.statusCode == 200 && response.data['user'] != null) {
+        // --- CAMBIO AQUÍ: Usamos el nuevo escudo en lugar de User.fromMap directo ---
+        _updateUserPreservingMode(response.data['user']);
         return true;
       }
       return false;
     } catch (e) {
-      debugPrint("Error guardando dirección: $e");
       return false;
     }
   }
@@ -466,9 +500,8 @@ class AuthService {
       );
 
       if (response.data['success'] == true) {
-        // IMPORTANTE: Actualizamos el usuario local con la nueva info
-        // Suponiendo que el backend devuelve el objeto user actualizado
-        _currentUser = User.fromMap(response.data['data']['user']);
+        // --- CAMBIO AQUÍ: Usamos el escudo ---
+        _updateUserPreservingMode(response.data['data']['user']);
         return true;
       }
       return false;
@@ -476,7 +509,6 @@ class AuthService {
       return false;
     }
   }
-
   // ===========================================================================
   // 5. CONTRASEÑAS
   // ===========================================================================

@@ -4,9 +4,20 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 class StorageService {
   static const String _tokenKey = 'auth_token';
   static const String _biometricEnabledKey = 'use_biometrics';
+  static const String _appModeKey = 'preferred_app_mode';
+
   // Eliminamos la constante fija de password y usamos una dinámica
 
   final _secureStorage = const FlutterSecureStorage();
+  Future<void> saveAppMode(String mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_appModeKey, mode);
+  }
+
+  Future<String?> getAppMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_appModeKey);
+  }
 
   // --- TOKEN (Sesión actual) ---
   Future<void> saveToken(String token) async =>

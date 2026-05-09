@@ -42,16 +42,20 @@ class SideMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final user = AuthService.currentUser;
+    // CLAVE: Leemos el estado real del objeto usuario que blindamos en los pasos anteriores
     final bool isCorp = user?.isCorporateMode ?? false;
     final String nombreMostrar = user?.name ?? "Usuario";
     final String inicial = nombreMostrar.isNotEmpty
         ? nombreMostrar[0].toUpperCase()
         : "U";
 
+    // Colores dinámicos según el modo
+    final Color activeThemeColor = isCorp
+        ? const Color(0xFF0D47A1)
+        : AppColors.primaryGreen;
+
     return Drawer(
-      backgroundColor: const Color(
-        0xFFF8FAFC,
-      ), // Fondo ligeramente grisáceo premium
+      backgroundColor: const Color(0xFFF8FAFC),
       elevation: 0,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.only(
@@ -61,7 +65,7 @@ class SideMenu extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // 1. CABECERA CON DEGRADADO SUTIL
+          // 1. CABECERA PREMIUM
           Container(
             padding: const EdgeInsets.fromLTRB(25, 60, 25, 30),
             decoration: BoxDecoration(
@@ -79,23 +83,17 @@ class SideMenu extends StatelessWidget {
             ),
             child: Column(
               children: [
-                // Avatar con anillo de estado
-                Container(
+                // Avatar con anillo de estado dinámico
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 400),
                   padding: const EdgeInsets.all(4),
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    border: Border.all(
-                      color: isCorp
-                          ? const Color(0xFF0D47A1)
-                          : AppColors.primaryGreen,
-                      width: 2,
-                    ),
+                    border: Border.all(color: activeThemeColor, width: 3),
                   ),
                   child: CircleAvatar(
                     radius: 45,
-                    backgroundColor: AppColors.primaryGreen.withValues(
-                      alpha: 0.1,
-                    ),
+                    backgroundColor: activeThemeColor.withValues(alpha: 0.1),
                     backgroundImage:
                         (user?.photoUrl != null && user!.photoUrl!.isNotEmpty)
                         ? NetworkImage(user.photoUrl!)
@@ -103,10 +101,10 @@ class SideMenu extends StatelessWidget {
                     child: (user?.photoUrl == null || user!.photoUrl!.isEmpty)
                         ? Text(
                             inicial,
-                            style: GoogleFonts.poppins(
+                            style: GoogleFonts.montserrat(
                               fontSize: 32,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.primaryGreen,
+                              fontWeight: FontWeight.w800,
+                              color: activeThemeColor,
                             ),
                           )
                         : null,
@@ -119,23 +117,37 @@ class SideMenu extends StatelessWidget {
                     fontWeight: FontWeight.w800,
                     fontSize: 20,
                     color: AppColors.darkBlue,
+                    letterSpacing: -0.5,
                   ),
                 ),
-                Text(
-                  user?.email ?? "",
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Colors.grey.shade500,
+                if (isCorp)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      user?.empresa ?? "Empresa Vinculada",
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF0D47A1),
+                      ),
+                    ),
+                  )
+                else
+                  Text(
+                    user?.email ?? "",
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: Colors.grey.shade500,
+                    ),
                   ),
-                ),
                 const SizedBox(height: 25),
 
-                // SWITCHER ESTILO SEGMENTED CONTROL
+                // SWITCHER DE PERFIL TIPO "SEGMENTED"
                 Container(
                   padding: const EdgeInsets.all(4),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF1F5F9),
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(18),
                   ),
                   child: Row(
                     children: [
@@ -146,8 +158,10 @@ class SideMenu extends StatelessWidget {
                         activeColor: AppColors.primaryGreen,
                         icon: Icons.person_rounded,
                         onTap: () {
-                          Navigator.pop(context);
-                          onToggleMode(false);
+                          if (isCorp) {
+                            Navigator.pop(context);
+                            onToggleMode(false);
+                          }
                         },
                       ),
                       _buildQuickProfileOption(
@@ -157,13 +171,9 @@ class SideMenu extends StatelessWidget {
                         activeColor: const Color(0xFF0D47A1),
                         icon: Icons.business_rounded,
                         onTap: () {
-                          Navigator.pop(context);
-                          if (user?.canUseCorporateMode == true) {
+                          if (!isCorp) {
+                            Navigator.pop(context);
                             onToggleMode(true);
-                          } else {
-                            onToggleMode(
-                              true,
-                            ); // Esto abrirá el modal de vinculación
                           }
                         },
                         isLocked: user?.canUseCorporateMode == false,
@@ -175,7 +185,7 @@ class SideMenu extends StatelessWidget {
             ),
           ),
 
-          // 2. LISTADO DE OPCIONES CON ICONOS EN CAJAS
+          // 2. OPCIONES DE MENÚ
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 25),
@@ -195,19 +205,18 @@ class SideMenu extends StatelessWidget {
                 _buildMenuItem(
                   context,
                   icon: Icons.headset_mic_outlined,
-                  text: "Soporte",
+                  text: "Soporte VAMOS",
                   destinationScreen: const SupportScreen(),
                 ),
               ],
             ),
           ),
 
-          // 3. FOOTER LIMPIO
+          // 3. FOOTER
           Padding(
             padding: const EdgeInsets.all(25),
             child: Column(
               children: [
-                // BOTÓN CERRAR SESIÓN ESTILO "SOFT"
                 InkWell(
                   onTap: () => _handleLogout(context),
                   borderRadius: BorderRadius.circular(15),
@@ -216,23 +225,20 @@ class SideMenu extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: Colors.red.withValues(alpha: 0.05),
                       borderRadius: BorderRadius.circular(15),
-                      border: Border.all(
-                        color: Colors.red.withValues(alpha: 0.1),
-                      ),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         const Icon(
-                          Icons.power_settings_new_rounded,
+                          Icons.logout_rounded,
                           color: Colors.redAccent,
                           size: 20,
                         ),
                         const SizedBox(width: 10),
                         Text(
                           "Cerrar Sesión",
-                          style: GoogleFonts.poppins(
-                            fontWeight: FontWeight.bold,
+                          style: GoogleFonts.montserrat(
+                            fontWeight: FontWeight.w700,
                             color: Colors.redAccent,
                             fontSize: 14,
                           ),
@@ -242,12 +248,10 @@ class SideMenu extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 20),
-                Image.asset(
-                  'assets/images/logo.png',
-                  height: 80,
-                  opacity: const AlwaysStoppedAnimation(0.3),
+                Opacity(
+                  opacity: 0.4,
+                  child: Image.asset('assets/images/logo.png', height: 40),
                 ),
-                const SizedBox(height: 10),
               ],
             ),
           ),
@@ -269,11 +273,11 @@ class SideMenu extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 250),
+          duration: const Duration(milliseconds: 300),
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
             color: isActive ? Colors.white : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(14),
             boxShadow: isActive
                 ? [
                     BoxShadow(
@@ -288,16 +292,16 @@ class SideMenu extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                isLocked ? Icons.lock_outline_rounded : icon,
+                isLocked && !isActive ? Icons.lock_outline_rounded : icon,
                 size: 16,
                 color: isActive ? activeColor : Colors.grey.shade400,
               ),
               const SizedBox(width: 8),
               Text(
                 label,
-                style: GoogleFonts.poppins(
+                style: GoogleFonts.montserrat(
                   fontSize: 12,
-                  fontWeight: isActive ? FontWeight.bold : FontWeight.w600,
+                  fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
                   color: isActive ? AppColors.darkBlue : Colors.grey.shade400,
                 ),
               ),
@@ -315,7 +319,7 @@ class SideMenu extends StatelessWidget {
     required Widget destinationScreen,
   }) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 10),
       child: ListTile(
         onTap: () {
           Navigator.pop(context);
@@ -325,16 +329,10 @@ class SideMenu extends StatelessWidget {
           );
         },
         leading: Container(
-          padding: const EdgeInsets.all(8),
+          padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.02),
-                blurRadius: 10,
-              ),
-            ],
           ),
           child: Icon(icon, color: AppColors.darkBlue, size: 20),
         ),
@@ -348,11 +346,10 @@ class SideMenu extends StatelessWidget {
         ),
         trailing: const Icon(
           Icons.arrow_forward_ios_rounded,
-          size: 14,
-          color: Color(0xFFCBD5E1),
+          size: 12,
+          color: Colors.grey,
         ),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
       ),
     );
   }
