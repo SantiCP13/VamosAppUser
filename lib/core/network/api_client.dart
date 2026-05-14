@@ -2,8 +2,9 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import '../../features/auth/services/auth_service.dart';
 import '../navigation/navigation_service.dart';
+import '../di/injection_container.dart';
+import '../services/storage_service.dart';
 
 class ApiClient {
   static final ApiClient _instance = ApiClient._internal();
@@ -43,38 +44,18 @@ class ApiClient {
         // Busca el bloque onError dentro de ApiClient y reemplázalo por este:
         onError: (DioException e, handler) async {
           if (e.response?.statusCode == 403) {
-            // 1. Extraemos el mensaje real sin poner valores por defecto peligrosos
             final serverData = e.response?.data;
-            String serverMsg = '';
+            String serverMsg = serverData is Map
+                ? serverData['message']?.toString().toLowerCase() ?? ''
+                : '';
 
-            if (serverData is Map) {
-              serverMsg = serverData['message']?.toString() ?? '';
-            }
-
-            // 2. Filtro estricto: Solo cerrar sesión si el mensaje es de cuenta inactiva
-            // Agregamos comprobación de que el mensaje NO esté vacío para evitar falsos positivos
-            bool isAccountError =
-                serverMsg.isNotEmpty &&
-                (serverMsg.toLowerCase().contains('desactivada') ||
-                    serverMsg.toLowerCase().contains('inactiva') ||
-                    serverMsg.toLowerCase().contains('administrador') ||
-                    serverMsg.toLowerCase().contains('bloqueada'));
-
-            if (isAccountError) {
-              await AuthService.logout();
-              Future.microtask(() {
-                NavigationService.navigatorKey.currentState
-                    ?.pushNamedAndRemoveUntil(
-                      '/',
-                      (route) => false,
-                      arguments: serverMsg,
-                    );
-              });
-              return handler.next(e);
-            } else {
-              // 3. Si es un error de viaje (403 de negocio), dejamos que pase al HomeScreen
-              // NO usamos resolve, usamos next para que el catch del servicio lo atrape.
-              return handler.next(e);
+            // Usamos sl<StorageService>() para acceder al storage
+            if (serverMsg.contains('acceso denegado') ||
+                serverMsg.contains('inactiva')) {
+              await sl<StorageService>().deleteAll();
+              NavigationService.navigatorKey.currentState
+                  ?.pushNamedAndRemoveUntil('/', (route) => false);
+              return;
             }
           }
           return handler.next(e);

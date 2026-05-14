@@ -6,7 +6,13 @@ import 'package:flutter/foundation.dart';
 import '../../../core/network/api_client.dart';
 
 // 1. Función global para decode (Se mantiene igual)
-List<LatLng> _decodePolylineIsolate(String encoded) {
+List<LatLng> _decodePolylineIsolate(Map<String, dynamic> params) {
+  String encoded = params['encoded'];
+  bool isGoogle = params['isGoogle'];
+  double divisor = isGoogle
+      ? 100000.0
+      : 1000000.0; // Google=5 decimales, Mapbox=6
+
   List<LatLng> points = [];
   int index = 0, len = encoded.length;
   int lat = 0, lng = 0;
@@ -36,7 +42,16 @@ List<LatLng> _decodePolylineIsolate(String encoded) {
       int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
       lng += dlng;
 
-      points.add(LatLng(lat / 1000000.0, lng / 1000000.0));
+      double latFinal = lat / divisor;
+      double lngFinal = lng / divisor;
+      if (latFinal < -90 ||
+          latFinal > 90 ||
+          lngFinal < -180 ||
+          lngFinal > 180) {
+        continue; // Ignorar punto corrupto en lugar de romper el mapa
+      }
+
+      points.add(LatLng(latFinal, lngFinal));
     }
   } catch (e) {
     // Si hay un error en un viaje largo, devolvemos lo que alcanzamos a decodificar
@@ -74,18 +89,26 @@ class RouteService {
           'lng_destino': lngD,
           'id_contrato': idContrato,
           'tipo_vehiculo': tipoVehiculo ?? 'CITY CAR',
+          'radiuses':
+              '1000;1000', // <--- Esto fuerza al backend a buscar vías en un radio de 50 metros
         },
       );
 
       if (response.statusCode == 200) {
         final data = response.data['data'];
+        final String polylineType =
+            data['polyline_type'] ?? 'polyline6'; // Viene del Backend
+
         final geometryData = data['geometry'];
         print("DEBUG GEOMETRY: ${data['geometry']}"); // <-- AÑADE ESTO
 
         List<LatLng> points = [];
         if (geometryData is String) {
-          points = await compute(_decodePolylineIsolate, geometryData);
-          // En route_service.dart, reemplaza el bloque else if por este:
+          points = await compute(_decodePolylineIsolate, {
+            'encoded': geometryData,
+            'isGoogle':
+                polylineType == 'polyline5', // Si es 5, usamos divisor 100k
+          });
         } else if (geometryData is List) {
           // Eliminamos el (geometryData as List) porque es redundante
           points = geometryData.map((coord) {

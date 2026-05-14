@@ -50,22 +50,31 @@ class HomeService {
     required String token,
     required Function(String event, Map<String, dynamic> data) onEvent,
   }) {
-    // CONFIGURACIÓN PARA PRODUCCIÓN (HOSTINGER)
-    // Ignoramos el .env si este tiene 127.0.0.1 para forzar la URL pública
+    // Configuración del cliente Pusher
     _client = PusherChannelsClient.websocket(
       options: PusherChannelsOptions.fromHost(
-        scheme: 'wss', // Siempre wss en producción con SSL
-        host: 'api.vamosapp.com.co', // Tu dominio de Hostinger
-        port: 443, // El puerto SSL estándar
-        key: '06exymiubefjjglwmvqe', // Tu Reverb Key
+        scheme: 'wss',
+        host: 'api.vamosapp.com.co',
+        port: 443,
+        key: '06exymiubefjjglwmvqe',
       ),
       connectionErrorHandler: (exception, trace, client) {
         debugPrint("🚨 Error de Socket: $exception");
       },
     );
 
+    // Función auxiliar para unificar el manejo de eventos y evitar duplicidad
+    void handleEvent(String eventName, dynamic e) {
+      if (e.data != null) {
+        try {
+          onEvent(eventName, json.decode(e.data!));
+        } catch (ex) {
+          debugPrint("❌ Error al decodificar evento $eventName: $ex");
+        }
+      }
+    }
+
     _client!.eventStream.listen((event) {
-      // Log para depuración: Ver si realmente se conecta
       if (event.name == 'pusher:connection_established') {
         debugPrint("✅ Conexión establecida con el servidor de VAMOS");
 
@@ -75,15 +84,38 @@ class HomeService {
         );
         channel.subscribe();
 
-        channel.bind('ViajeAceptado').listen((e) {
-          if (e.data != null) onEvent('ViajeAceptado', json.decode(e.data!));
-        });
+        // --- Binds unificados ---
 
-        channel.bind('ViajeCancelado').listen((e) {
-          if (e.data != null) onEvent('ViajeCancelado', json.decode(e.data!));
-        });
+        channel
+            .bind('ViajeAceptado')
+            .listen((e) => handleEvent('ViajeAceptado', e));
+
+        // 2. Cancelación
+        channel
+            .bind('ViajeCancelado')
+            .listen((e) => handleEvent('ViajeCancelado', e));
+        channel
+            .bind('.ViajeCancelado')
+            .listen((e) => handleEvent('ViajeCancelado', e));
+        channel
+            .bind('App\\Events\\ViajeCanceladoEvent')
+            .listen((e) => handleEvent('ViajeCancelado', e));
+
+        // 3. Estado
+        channel
+            .bind('ViajeEstado')
+            .listen((e) => handleEvent('ViajeEstado', e));
+        channel
+            .bind('.ViajeEstado')
+            .listen((e) => handleEvent('ViajeEstado', e));
+        channel
+            .bind('App\\Events\\ViajeEstadoEvent')
+            .listen((e) => handleEvent('ViajeEstado', e));
+
+        debugPrint("✅ Canales de usuario suscritos correctamente.");
       }
     });
+
     _client!.connect();
   }
 

@@ -51,13 +51,19 @@ class MenuService {
     }
   }
 
-  Future<bool> cancelTrip(String tripId) async {
+  Future<Map<String, dynamic>> cancelTrip(String tripId) async {
     try {
-      // Llama a la ruta de Laravel que ya configuramos
       final response = await _api.dio.post('/viajes/$tripId/cancelar');
-      return response.statusCode == 200;
+      if (response.statusCode == 200) {
+        return {
+          'success': true,
+          'aplica_multa': response.data['aplica_multa'] ?? false,
+        };
+      }
+      return {'success': false, 'aplica_multa': false};
     } catch (e) {
-      return false;
+      debugPrint("Error cancelando: $e");
+      return {'success': false, 'aplica_multa': false};
     }
   }
 

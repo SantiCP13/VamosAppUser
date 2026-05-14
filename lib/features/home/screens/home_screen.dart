@@ -78,7 +78,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool _isOutsideRadius = false;
   TripState _tripState = TripState.DASHBOARD;
   String? _addressTypeToSave; // Guardará 'home' o 'work'
-
+  bool _isCreatingTrip =
+      false; // Agrega esto junto a tus otras variables de estado
   LatLng? _currentPosition;
   final LatLng _defaultLocation = const LatLng(4.9183, -74.0258); // Cajicá
   bool _isMapReady = false;
@@ -163,7 +164,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // 1. Inicializamos el controlador
     _routeDrawingController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1500),
+      duration: const Duration(milliseconds: 800),
     );
 
     // 2. Agregamos el Listener AQUÍ (Solo una vez)
@@ -366,7 +367,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           "⚠️ GPS no detectado. Usando ubicación aproximada.",
           style: GoogleFonts.montserrat(),
         ),
-        behavior: SnackBarBehavior.floating,
+        behavior: SnackBarBehavior.fixed,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.all(20),
       ),
@@ -706,18 +707,35 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       );
 
       if (data != null && mounted) {
-        final LatLng snappedPoint = LatLng(
-          (data['snapped_lat'] as num).toDouble(),
-          (data['snapped_lng'] as num).toDouble(),
-        );
+        // --- CAMBIO CLAVE: Usamos las coordenadas exactas donde el usuario soltó el pin ---
+        final LatLng exactPoint = _mapController.camera.center;
+        if (_destinationCoordinates != null) {
+          double distDestino = Geolocator.distanceBetween(
+            exactPoint.latitude,
+            exactPoint.longitude,
+            _destinationCoordinates!.latitude,
+            _destinationCoordinates!.longitude,
+          );
 
+          if (distDestino < 500) {
+            setState(() {
+              _isLoadingAddress = false;
+              _tripState =
+                  TripState.CONFIRMING_PICKUP; // O el estado que desees
+            });
+            _showTooCloseDialog(); // Tu función de alerta
+            return;
+          }
+        }
         // --- VALIDACIÓN DE RESTRICCIÓN 200 METROS (Solo si aplica) ---
-        if (_isStrictPickupMode && _mapPickingTarget == 'pickup') {
+        if (_isStrictPickupMode &&
+            _mapPickingTarget == 'pickup' &&
+            _addressTypeToSave == null) {
           double distance = Geolocator.distanceBetween(
             _referenceOriginCoords!.latitude,
             _referenceOriginCoords!.longitude,
-            pointOnMap.latitude,
-            pointOnMap.longitude,
+            exactPoint.latitude, // Usamos exactPoint
+            exactPoint.longitude, // Usamos exactPoint
           );
 
           if (distance > 200) {
@@ -731,7 +749,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           }
         }
 
-        // --- FINALIZAR PROCESO (Fuera del IF de restricción) ---
+        // --- FINALIZAR PROCESO ---
         setState(() {
           _isLoadingAddress = false;
           _isOutsideRadius = false;
@@ -739,29 +757,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
           if (_mapPickingTarget == 'pickup') {
             _originName = data['name'];
-            _originCoordinates = snappedPoint;
+            _originCoordinates = exactPoint; // Punto exacto
             _isOriginConfirmed = true;
           } else if (_mapPickingTarget == 'reference') {
             _originReferenceName = data['name'];
-            _referenceOriginCoords = snappedPoint;
+            _referenceOriginCoords = exactPoint; // Punto exacto
             _originName = data['name'];
-            _originCoordinates = snappedPoint;
+            _originCoordinates = exactPoint; // Punto exacto
             _isOriginConfirmed = true;
           } else if (_mapPickingTarget == 'destination') {
             _destinationName = data['name'];
-            _destinationCoordinates = snappedPoint;
+            _destinationCoordinates = exactPoint; // Punto exacto
           }
 
           _isPickingLocation = false;
           _mapPickingTarget = null;
         });
+
         // LÓGICA DE REGRESO O CÁLCULO
         if (_destinationCoordinates == null) {
-          // Si estamos confirmando origen pero NO hay destino, abrimos buscador
           _openSearchFromCurrentState();
-        } else if (_originCoordinates != null &&
-            _destinationCoordinates != null) {
-          // Si ya tenemos ambos, calculamos ruta de inmediato
+        } else if (_originCoordinates != null) {
           _calculateRouteAndPrice(_destinationCoordinates!);
         }
       }
@@ -797,76 +813,85 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _checkActiveTrip() async {
-    if (_isFinishingLock || _isCalculatingRoute) return;
+    if (_isFinishingLock || _isCalculatingRoute || _isCreatingTrip) return;
 
     try {
       final tripData = await _homeService.getActiveTrip().timeout(
         const Duration(seconds: 8),
       );
+
       if (!mounted) return;
 
-      if (tripData != null) {
-        String newTripId = tripData['id'].toString();
+      if (tripData == null) {
+        print("DEBUG: No hay respuesta del servidor, esperando...");
+        return;
+      }
 
-        // 1. Calculamos cuál sería el "Estado Lógico" según el servidor
-        TripState serverState;
-        if (tripData['finalizado_en'] != null ||
-            tripData['estado'] == 'DROPPED_OFF') {
-          serverState = TripState.PAYMENT;
-        } else if (tripData['iniciado_en'] != null) {
-          serverState = TripState.IN_TRIP;
-        } else if (tripData['id_conductor'] != null ||
-            tripData['estado'] == 'ACCEPTED') {
-          serverState = TripState.DRIVER_ON_WAY;
-        } else {
-          serverState = TripState.SEARCHING_DRIVER;
+      print("DEBUG: Estado recibido del servidor: ${tripData['estado']}");
+
+      // 1. MANEJO DE VIAJES PROGRAMADOS
+      if (tripData['programado_para'] != null) {
+        DateTime horaViaje = DateTime.parse(tripData['programado_para']);
+        if (horaViaje.isAfter(DateTime.now())) {
+          setState(() => _tripState = TripState.DASHBOARD);
+          return;
         }
+      }
 
-        // 2. REGLA DE ORO: El estado solo puede avanzar, nunca retroceder
-        // (A menos que el viaje se haya cancelado o estemos en IDLE)
-        bool esAvance = serverState.index >= _tripState.index;
-        bool esReinicio =
-            _tripState == TripState.DASHBOARD ||
-            _tripState == TripState.CALCULATING;
+      // 2. PROCESAMIENTO DE CANCELACIÓN (Corrección: Siempre resetear si es CANCELLED)
+      if (tripData['estado'] == 'CANCELLED') {
+        _resetApp();
+        return;
+      }
 
-        if (esAvance || esReinicio) {
-          setState(() {
-            _currentTripId = newTripId;
-            _driverData = tripData;
-            _tripState = serverState;
-
-            // 🔥 VITAL: Avisar al detector de inactividad
-            // Si el estado NO es DASHBOARD, significa que hay un proceso de viaje activo.
-            AuthService.isTripActive = (serverState != TripState.DASHBOARD);
-
-            if (tripData['llegado_en'] != null && _waitTimer == null) {
-              _startWaitTimer();
-            }
-
-            // Si ya inició el viaje, cancelamos el timer de espera
-            if (serverState == TripState.IN_TRIP) {
-              _waitTimer?.cancel();
-              _waitTimer = null;
-            }
-          });
-
-          // Solo recalculamos la ruta si cambió el estado o no hay puntos
-          if (_routePoints.isEmpty && _destinationCoordinates != null) {
-            _calculateRouteAndPrice(_destinationCoordinates!);
-          }
-        }
-
-        if (_currentTripId != null) {
-          _startTrackingListener(_currentTripId!);
-        }
+      // Calculamos el estado según el servidor
+      TripState serverState;
+      if (tripData['estado'] == 'PENDING_SCHEDULED') {
+        serverState = TripState.DASHBOARD;
+      } else if (tripData['finalizado_en'] != null ||
+          tripData['estado'] == 'DROPPED_OFF') {
+        serverState = TripState.PAYMENT;
+      } else if (tripData['iniciado_en'] != null) {
+        serverState = TripState.IN_TRIP;
+      } else if (tripData['id_conductor'] != null ||
+          tripData['estado'] == 'ACCEPTED') {
+        serverState = TripState.DRIVER_ON_WAY;
       } else {
-        // Si el servidor dice que no hay viaje activo pero nosotros creemos que sí
-        // (Significa que se canceló o terminó en otro lado)
-        if (_tripState == TripState.SEARCHING_DRIVER ||
-            _tripState == TripState.DRIVER_ON_WAY ||
-            _tripState == TripState.IN_TRIP) {
-          _resetApp();
+        serverState = TripState.SEARCHING_DRIVER;
+      }
+
+      // 3. LOGICA DE ACTUALIZACIÓN (Más flexible)
+      // En lugar de usar índices, comparamos si el estado cambió
+      bool haCambiadoElEstado = serverState != _tripState;
+      bool esReinicio =
+          _tripState == TripState.DASHBOARD ||
+          _tripState == TripState.CALCULATING;
+
+      if (haCambiadoElEstado || esReinicio) {
+        setState(() {
+          _currentTripId = tripData['id'].toString();
+          _driverData = tripData;
+          _tripState = serverState;
+          AuthService.isTripActive = (serverState != TripState.DASHBOARD);
+
+          if (tripData['llegado_en'] != null && _waitTimer == null) {
+            _startWaitTimer();
+          }
+
+          if (serverState == TripState.IN_TRIP) {
+            _waitTimer?.cancel();
+            _waitTimer = null;
+          }
+        });
+
+        if (_routePoints.isEmpty && _destinationCoordinates != null) {
+          _calculateRouteAndPrice(_destinationCoordinates!);
         }
+      }
+
+      // Siempre mantenemos el tracking si hay un ID activo
+      if (_currentTripId != null) {
+        _startTrackingListener(_currentTripId!);
       }
     } catch (e) {
       debugPrint("Error en polling: $e");
@@ -1244,38 +1269,171 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    // Determinamos qué vista mostrar basándonos en el estado
-    return Scaffold(
-      key: _scaffoldKey,
-      // El drawer solo en Dashboard
-      drawer: (_tripState == TripState.DASHBOARD && !_isPickingLocation)
-          ? SideMenu(onToggleMode: _toggleAppMode)
-          : null,
-      body: AnimatedSwitcher(
-        duration: const Duration(
-          milliseconds: 500,
-        ), // Transición suave de medio segundo
-        switchInCurve: Curves.easeInOut,
-        switchOutCurve: Curves.easeInOut,
-        child: _buildCurrentStateBody(),
+    // --- IMPLEMENTACIÓN DEL CONTROL DE NAVEGACIÓN ---
+    return PopScope(
+      canPop: false, // Bloqueamos el cierre automático (botón físico atrás)
+      onPopInvokedWithResult: (bool didPop, dynamic result) async {
+        if (didPop) return;
+
+        // Lógica de navegación personalizada
+        if (_tripState == TripState.DASHBOARD) {
+          // Si estamos en inicio, cerramos la app o hacemos lo que prefieras
+          SystemNavigator.pop();
+        } else if (_tripState == TripState.IN_TRIP ||
+            _tripState == TripState.DRIVER_ON_WAY) {
+          // Si hay viaje activo, no dejamos salir, solo minimizamos o mandamos al inicio
+          _showAppSnackBar("Tu viaje está en curso, no puedes cancelar ahora.");
+        } else if (_isPickingLocation) {
+          // Si está editando en mapa, cerramos el modo mapa y volvemos al dashboard
+          setState(() {
+            _isPickingLocation = false;
+            _mapPickingTarget = null;
+          });
+        } else if (_tripState == TripState.ROUTE_PREVIEW ||
+            _tripState == TripState.SEARCHING_DRIVER) {
+          bool? confirm = await _showConfirmExitDialog();
+          if (confirm == true) {
+            _resetApp();
+          }
+        } else {
+          // Fallback: volver al dashboard
+          _resetApp();
+        }
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        drawer: (_tripState == TripState.DASHBOARD && !_isPickingLocation)
+            ? SideMenu(onToggleMode: _toggleAppMode)
+            : null,
+        body: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 500),
+          switchInCurve: Curves.easeInOut,
+          switchOutCurve: Curves.easeInOut,
+          child: _buildCurrentStateBody(),
+        ),
+      ),
+    );
+  }
+
+  // Agrega este método al final de _HomeScreenState
+  Future<bool?> _showConfirmExitDialog() {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: true, // Permitir cerrar tocando fuera
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icono llamativo
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  // ignore: deprecated_member_use
+                  color: AppColors.primaryGreen.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.warning_amber_rounded,
+                  color: AppColors.primaryGreen,
+                  size: 40,
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Título
+              Text(
+                "¿Cancelar tu viaje?",
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 20,
+                  color: AppColors.darkBlue,
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Mensaje
+              Text(
+                "Si regresas ahora, perderás la configuración actual y la búsqueda se detendrá.",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.montserrat(
+                  color: Colors.grey[600],
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 32),
+
+              // Botones
+              Column(
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red[600],
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(15),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: Text(
+                        "SÍ, CANCELAR",
+                        style: GoogleFonts.montserrat(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: Text(
+                      "MANTENER VIAJE",
+                      style: GoogleFonts.montserrat(
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.darkBlue,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 
   // Nueva función para organizar las jerarquías de las pantallas
   Widget _buildCurrentStateBody() {
-    // 1. PRIORIDAD: Pantalla completa de carga
+    // 1. Carga
     if (_tripState == TripState.CALCULATING) {
       return _buildFullScreenLoading(key: const ValueKey("loading_screen"));
     }
 
-    // 2. DASHBOARD
-    // POR ESTO:
+    // 2. Dashboard (Inicio)
     if (_tripState == TripState.DASHBOARD && !_isPickingLocation) {
       return _buildUberDashboardFull(key: const ValueKey("dashboard_screen"));
     }
+    if (_tripState == TripState.DRIVER_ON_WAY) {
+      // Asegúrate de que este widget retorne el contenido que quieres mostrar
+      // cuando el conductor llega.
+      return _buildMapInterface(key: const ValueKey("map_screen"));
+    }
+    // 3. Mapa (Solo si estamos en estados de viaje)
+    // Agregamos una condición explícita para que si estamos en DASHBOARD pero
+    // en modo Picking, no se rompa la lógica.
+    if (_tripState != TripState.DASHBOARD || _isPickingLocation) {
+      return _buildMapInterface(key: const ValueKey("map_screen"));
+    }
 
-    return _buildMapInterface(key: const ValueKey("map_screen"));
+    // 4. Fallback de seguridad
+    return _buildUberDashboardFull(key: const ValueKey("dashboard_screen"));
   }
 
   Widget _buildFullScreenLoading({required Key key}) {
@@ -1391,7 +1549,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 urlTemplate:
                     'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}{r}?access_token=$myMapboxToken',
                 tileProvider: CachedTileProvider(),
-                retinaMode: MediaQuery.of(context).devicePixelRatio > 1.0,
+
+                retinaMode: false,
+                maxNativeZoom: 18,
+                minNativeZoom: 2,
               ),
               if (_isPickingLocation &&
                   _isStrictPickupMode &&
@@ -1919,7 +2080,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _handleMapCameraMovement(MapCamera camera) {
     // --- BLOQUE 1: RESTRICCIÓN DE 200M (SOLO MODO ESTRICTO) ---
-    if (_isStrictPickupMode && _referenceOriginCoords != null) {
+    bool isSavingFavorite = _addressTypeToSave != null;
+
+    if (!isSavingFavorite &&
+        _isStrictPickupMode &&
+        _referenceOriginCoords != null) {
       double distFromOrigin = Geolocator.distanceBetween(
         _referenceOriginCoords!.latitude,
         _referenceOriginCoords!.longitude,
@@ -2232,28 +2397,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               _isPickingLocation = false;
                               _addressTypeToSave = null;
                               _isPickingOrigin = false;
-                              _mapPickingTarget =
-                                  null; // IMPORTANTE: Limpiar el target para no quedar en bucle
+                              _mapPickingTarget = null;
                             });
 
-                            // LÓGICA DE REGRESO INTELIGENTE:
-                            // 1. Si no hay origen ni destino, es que el viaje nunca inició, volvemos al dashboard
-                            if (_originCoordinates == null &&
-                                _destinationCoordinates == null) {
-                              _resetApp();
-                            }
-                            // 2. Si estábamos editando/fijando pero ya había una ruta, volvemos al preview
-                            else if (_routePoints.isNotEmpty &&
-                                _destinationCoordinates != null) {
-                              setState(
-                                () => _tripState = TripState.ROUTE_PREVIEW,
-                              );
+                            // LÓGICA DE REGRESO INTELIGENTE
+                            if (_routePoints.isNotEmpty) {
+                              // Si ya hay ruta, volvemos a la vista previa sin preguntar nada más
+                              setState(() {
+                                _tripState = TripState.ROUTE_PREVIEW;
+                              });
                               _fitCameraToRoute();
-                            }
-                            // 3. CASO CLAVE: Si estábamos en el mapa y NO hay viaje completo,
-                            // regresamos al buscador para que el usuario pueda corregir su elección.
-                            else {
-                              _openSearchFromCurrentState();
+                            } else if (_originCoordinates != null &&
+                                _destinationCoordinates != null) {
+                              // Si tenemos coordenadas pero no ruta, forzamos el cálculo
+                              _calculateRouteAndPrice(_destinationCoordinates!);
+                            } else {
+                              // Si no hay nada, volvemos al estado inicial de Dashboard
+                              setState(() {
+                                _tripState = TripState.DASHBOARD;
+                                _resetApp(); // Solo limpiamos si realmente no había viaje iniciado
+                              });
                             }
                           },
                           style: TextButton.styleFrom(
@@ -2518,21 +2681,43 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
           const SizedBox(height: 20),
           _buildRequestButton(primaryColor),
-          const SizedBox(height: 10),
+          const SizedBox(height: 20),
 
-          Center(
-            child: TextButton(
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: OutlinedButton(
               onPressed: () => _resetApp(),
-              child: Text(
-                "Cancelar solicitud",
-                style: GoogleFonts.montserrat(
-                  color: Colors.red[400],
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(
+                  color: Colors.red.withValues(alpha: 0.3),
+                  width: 1.5,
                 ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                // Añadimos un pequeño efecto de superficie
+                backgroundColor: Colors.red.withValues(alpha: 0.02),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.close_rounded, color: Colors.red[400], size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    "CANCELAR SOLICITUD",
+                    style: GoogleFonts.montserrat(
+                      color: Colors.red[400],
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
+          const SizedBox(height: 20),
         ],
       ),
     );
@@ -2632,15 +2817,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         );
 
       case TripState.DRIVER_ON_WAY:
+        // --- AQUÍ ESTÁ LA MODIFICACIÓN ---
+        bool hasArrived =
+            (_driverData != null && _driverData!['estado'] == 'ARRIVED');
+
         return Column(
           children: [
             isBottom
                 ? _buildGenericMinifiedHeader(
-                    "Conductor en camino",
-                    Icons.directions_car,
+                    hasArrived ? "¡Conductor llegado!" : "Conductor en camino",
+                    hasArrived ? Icons.check_circle : Icons.directions_car,
                   )
                 : _buildExpandArrow(),
-            if (!isBottom) ...[const Divider(), _buildDriverOnWayContent()],
+            if (!isBottom) ...[
+              const Divider(),
+              // Si llegó, mostramos el widget que te sobraba, sino el normal
+              hasArrived
+                  ? _buildDriverArrivedContent()
+                  : _buildDriverOnWayContent(),
+            ],
           ],
         );
 
@@ -2672,6 +2867,37 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       default:
         return const SizedBox.shrink();
     }
+  }
+
+  // Método necesario para el switch de estados
+  Widget _buildDriverArrivedContent() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        children: [
+          const Icon(
+            Icons.check_circle_outline,
+            color: AppColors.primaryGreen,
+            size: 60,
+          ),
+          const SizedBox(height: 10),
+          Text(
+            "¡El conductor ha llegado!",
+            style: GoogleFonts.montserrat(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: AppColors.darkBlue,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            "Tu conductor está esperando en el punto de encuentro.",
+            textAlign: TextAlign.center,
+            style: GoogleFonts.montserrat(color: Colors.grey),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildLoadingRouteContent() {
@@ -2858,10 +3084,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget _buildTripDetailsCard(
     Color color,
     StateSetter setModalState,
-    bool isSnapped, // Mantén este parámetro
+    bool isSnapped,
   ) {
-    // 1. Definimos la condición directamente aquí, combinando el parámetro recibido
-    // y nuestra variable de estado global _isOriginConfirmed.
     final bool showFixPickup = !_isOriginConfirmed;
 
     return Container(
@@ -2869,45 +3093,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.grey.shade100),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         children: [
-          // 2. Usamos la variable aquí
           if (showFixPickup) ...[
             _buildLocationRow(
               icon: Icons.adjust_rounded,
-              iconColor: _isOriginConfirmed
-                  ? AppColors.primaryGreen
-                  : Colors.orangeAccent,
+              iconColor: Colors.orangeAccent,
               label: "PUNTO DE RECOGIDA EXACTO",
               address: _originName ?? "Toca para fijar recogida",
-              isHighlight: !_isOriginConfirmed,
+              isHighlight: true,
               onEdit: () {
-                // 1. Activamos el estado de carga ANTES de abrir el modo de picking
-                setState(() {
-                  _tripState = TripState.CALCULATING;
-                });
-
-                // 2. Pequeño delay para que el usuario VEA la pantalla de carga (opcional pero recomendado)
+                setState(() => _tripState = TripState.CALCULATING);
                 Future.delayed(const Duration(milliseconds: 300), () {
                   setState(() {
-                    _mapPickingTarget =
-                        'pickup'; // O 'reference'/'destination' según corresponda
-                    _isPickingOrigin = true;
+                    _mapPickingTarget = 'pickup';
                     _isPickingLocation = true;
-                    _isOriginSnapped = false;
-                    _tripState = TripState
-                        .CONFIRMING_PICKUP; // Regresamos al estado de mapa
+                    _isStrictPickupMode = true; // Activa restricción
+                    _tripState = TripState.CONFIRMING_PICKUP;
                   });
                 });
-
-                _startPickupConfirmation();
+                _startPickupConfirmation(strict: true);
               },
             ),
             _buildCustomDivider(),
           ],
 
-          // --- FILA 2: ORIGEN / REFERENCIA (Siempre se muestra) ---
           _buildLocationRow(
             icon: Icons.search_rounded,
             iconColor: Colors.grey,
@@ -2916,21 +3134,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             onEdit: () {
               setState(() {
                 _mapPickingTarget = 'reference';
-                _isPickingOrigin = true;
                 _isPickingLocation = true;
-                _isOriginSnapped =
-                    false; // Si edita la referencia, debe volver a fijar
               });
-              _startPickupConfirmation(
-                initialAddress: _originReferenceName,
-                initialPosition: _originCoordinates,
-              );
+              _startPickupConfirmation(initialAddress: _originReferenceName);
             },
           ),
 
           _buildCustomDivider(),
 
-          // --- FILA 3: DESTINO ---
           _buildLocationRow(
             icon: Icons.location_on,
             iconColor: AppColors.darkBlue,
@@ -2940,56 +3151,70 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             onEdit: () {
               setState(() {
                 _mapPickingTarget = 'destination';
-                _isPickingOrigin = false;
                 _isPickingLocation = true;
               });
-              _startPickupConfirmation(
-                initialAddress: _destinationName,
-                initialPosition: _destinationCoordinates,
-              );
+              _startPickupConfirmation(initialAddress: _destinationName);
             },
           ),
 
           const Divider(height: 1),
 
-          // --- SECCIÓN PASAJEROS (Mantenemos tu lógica pero con estilo limpio) ---
+          // --- TARJETA PREMIUM DE PASAJEROS ---
           InkWell(
             onTap: () async {
               await _showBeneficiarySelector();
               setModalState(() {});
             },
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
               child: Row(
                 children: [
-                  Icon(Icons.person_add_alt_1_rounded, color: color, size: 20),
-                  const SizedBox(width: 12),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.group_add_rounded,
+                      color: color,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 15),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          "Pasajeros",
+                          "PASAJEROS",
                           style: GoogleFonts.montserrat(
-                            fontSize: 11,
-                            color: Colors.grey[500],
-                            fontWeight: FontWeight.bold,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.grey.shade400,
+                            letterSpacing: 1.2,
                           ),
                         ),
+                        const SizedBox(height: 4),
                         Text(
-                          _getPassengerSummary(),
+                          _totalPassengers > 1
+                              ? "$_totalPassengers personas seleccionadas"
+                              : "Añade pasajeros a tu viaje",
+
                           style: GoogleFonts.montserrat(
-                            fontSize: 13,
+                            fontSize: 14,
                             fontWeight: FontWeight.w600,
                             color: AppColors.darkBlue,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
                   ),
-                  Icon(Icons.chevron_right, color: Colors.grey[400]),
+                  const Icon(
+                    Icons.arrow_forward_ios_rounded,
+                    size: 16,
+                    color: Colors.grey,
+                  ),
                 ],
               ),
             ),
@@ -3167,15 +3392,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     setModalState(() {});
   }
 
-  String _getPassengerSummary() {
-    List<String> names = [];
-    if (_includeMyself) names.add("Yo");
-    names.addAll(
-      _selectedBeneficiariesList.map((b) => b.name.split(" ").first),
-    );
-    return names.isEmpty ? "Selecciona quién viaja" : names.join(", ");
-  }
-
   Widget _buildTimeSelector(Color color, StateSetter setModalState) {
     return Row(
       children: [
@@ -3248,117 +3464,132 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _showConfirmPassengersDialog() {
+    bool isCorp = _currentUser.isCorporateMode;
+    Color primaryColor = isCorp ? AppColors.darkBlue : AppColors.primaryGreen;
+
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            const Icon(Icons.verified_user, color: AppColors.primaryGreen),
-            const SizedBox(width: 10),
-            Text(
-              "Verificar Pasajeros",
-              style: GoogleFonts.montserrat(
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icono Premium
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: primaryColor.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.verified_user_rounded,
+                  color: primaryColor,
+                  size: 40,
+                ),
               ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              "¿Están todos los pasajeros en la lista?",
-              style: GoogleFonts.montserrat(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              "IMPORTANTE: El conductor solicitará el documento físico de CADA persona antes de iniciar. Sin registro en la App, no podrán subir al vehículo.",
-              style: GoogleFonts.montserrat(
-                fontSize: 13,
-                color: Colors.grey[800],
+              const SizedBox(height: 20),
+
+              // Título
+              Text(
+                "¿Todo listo para viajar?",
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 20,
+                  color: AppColors.darkBlue,
+                ),
               ),
-            ),
-            const SizedBox(height: 15),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade300),
+              const SizedBox(height: 12),
+              Text(
+                "Por seguridad, el conductor solicitará el documento físico de cada pasajero. Confirma que la lista sea correcta.",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.montserrat(
+                  color: Colors.grey[600],
+                  fontSize: 13,
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    "PASAJEROS CONFIRMADOS:",
-                    style: GoogleFonts.montserrat(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  if (_includeMyself)
+              const SizedBox(height: 24),
+
+              // Lista de pasajeros estilo Tarjeta
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.grey.shade200),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      "• Yo (${_currentUser.name})",
+                      "PASAJEROS",
                       style: GoogleFonts.montserrat(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.grey.shade400,
+                        letterSpacing: 1.2,
                       ),
                     ),
-                  ..._selectedBeneficiariesList.map(
-                    (b) => Text(
-                      "• ${b.name}",
-                      style: GoogleFonts.montserrat(fontSize: 13),
+                    const SizedBox(height: 12),
+                    if (_includeMyself)
+                      _buildPassengerRow("Yo (${_currentUser.name})"),
+                    ..._selectedBeneficiariesList.map(
+                      (b) => _buildPassengerRow(b.name),
                     ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 32),
+
+              // Botones
+              _buildPremiumButton(
+                text: "CONFIRMAR Y PEDIR",
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _processTripCreation();
+                },
+              ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _showBeneficiarySelector();
+                },
+                child: Text(
+                  "EDITAR LISTA",
+                  style: GoogleFonts.montserrat(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey,
                   ),
-                ],
+                ),
               ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              // 1. Cierra el diálogo de confirmación de pasajeros
-              Navigator.pop(ctx);
-
-              // 2. Abre el selector y ESPERAMOS a que el usuario termine
-              await _showBeneficiarySelector();
-
-              // 3. Al terminar, simplemente refrescamos la pantalla.
-              // El panel Draggable (que ya está en el fondo) mostrará los cambios.
-              if (mounted) {
-                setState(() {});
-              }
-            },
-            child: Text(
-              "Editar Lista",
-              style: GoogleFonts.montserrat(
-                color: Colors.red,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            ],
           ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              _processTripCreation(); // Única forma de llegar al backend
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primaryGreen,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            child: Text(
-              "Confirmar y Pedir",
-              style: GoogleFonts.montserrat(color: Colors.white),
+        ),
+      ),
+    );
+  }
+
+  // Widget auxiliar para las filas de pasajeros dentro del diálogo
+  Widget _buildPassengerRow(String name) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.check_circle,
+            color: AppColors.primaryGreen,
+            size: 16,
+          ),
+          const SizedBox(width: 10),
+          Text(
+            name,
+            style: GoogleFonts.montserrat(
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
             ),
           ),
         ],
@@ -3495,6 +3726,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
 
     setState(() {
+      _isCreatingTrip = true;
       _loadingTitle = "SOLICITANDO SERVICIO";
       _loadingSubtitle = "Conectando con un conductor cercano...";
       _tripState = TripState.CALCULATING;
@@ -3611,57 +3843,75 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           _showAppSnackBar(errorMsg, isError: true);
         }
       }
+    } finally {
+      Future.delayed(const Duration(seconds: 5), () {
+        if (mounted) {
+          setState(() => _isCreatingTrip = false);
+        }
+      });
     }
   }
 
-  // NUEVO: Diálogo de éxito para viajes programados
   void _showScheduledSuccessDialog() {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Icon(
-          Icons.calendar_today,
-          color: AppColors.darkBlue,
-          size: 50,
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              "¡Viaje Programado!",
-              style: GoogleFonts.montserrat(
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icono con fondo circular suave
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryGreen.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.event_available_rounded,
+                  color: AppColors.primaryGreen,
+                  size: 50,
+                ),
               ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              "Tu servicio ha sido registrado. Te notificaremos con los datos del conductor y el vehículo 15 minutos antes de la hora seleccionada.",
-              textAlign: TextAlign.center,
-              style: GoogleFonts.montserrat(fontSize: 14),
-            ),
-          ],
-        ),
-        actions: [
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () {
-                Navigator.pop(ctx);
-                _resetApp(); // Limpiamos el mapa y volvemos al inicio
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.darkBlue,
+              const SizedBox(height: 24),
+
+              // Título Impactante
+              Text(
+                "¡Viaje Programado!",
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 22,
+                  color: AppColors.darkBlue,
+                ),
               ),
-              child: const Text(
-                "Entendido",
-                style: TextStyle(color: Colors.white),
+              const SizedBox(height: 16),
+
+              // Mensaje explicativo
+              Text(
+                "Tu servicio ha sido registrado con éxito. Te notificaremos los detalles del vehículo y conductor a tu correo electrónico registrado 15 minutos antes de la hora programada.",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.montserrat(
+                  fontSize: 14,
+                  color: Colors.grey.shade600,
+                  height: 1.5,
+                ),
               ),
-            ),
+              const SizedBox(height: 32),
+
+              // Botón de acción principal
+              _buildPremiumButton(
+                text: "ENTENDIDO",
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _resetApp(); // Limpiamos el mapa y volvemos al inicio
+                },
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -3678,14 +3928,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         return StatefulBuilder(
           builder: (BuildContext context, StateSetter setModalState) {
             return Container(
-              height: MediaQuery.of(context).size.height * 0.75,
+              height: MediaQuery.of(context).size.height * 0.8,
               decoration: const BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
               ),
               child: Column(
                 children: [
-                  // Indicador de arrastre
                   Container(
                     width: 40,
                     height: 5,
@@ -3695,21 +3944,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       borderRadius: BorderRadius.circular(10),
                     ),
                   ),
-
-                  // Cabecera
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24),
                     child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          "¿Quiénes viajan?",
-                          style: GoogleFonts.montserrat(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.darkBlue,
-                          ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              "Gestionar Pasajeros",
+                              style: GoogleFonts.montserrat(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            Text(
+                              "Selecciona quiénes viajan contigo",
+                              style: GoogleFonts.montserrat(color: Colors.grey),
+                            ),
+                          ],
                         ),
+                        const Spacer(),
                         IconButton(
                           onPressed: () => Navigator.pop(context),
                           icon: const Icon(Icons.close_rounded),
@@ -3717,18 +3972,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       ],
                     ),
                   ),
-
-                  const SizedBox(height: 10),
-
-                  // Lista de Pasajeros
+                  const Divider(height: 30),
                   Expanded(
                     child: ListView(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 10,
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
                       children: [
-                        // Opción "Yo"
                         _buildSelectionCard(
                           title: "Viajo yo",
                           subtitle: _currentUser.name,
@@ -3740,86 +3988,56 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             setState(() => _updateFinalPrice());
                           },
                         ),
-
-                        const Padding(
-                          padding: EdgeInsets.symmetric(
-                            vertical: 15,
-                            horizontal: 10,
-                          ),
-                          child: Text(
-                            "MIS PASAJEROS",
-                            style: TextStyle(
-                              color: Colors.grey,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 10,
-                            ),
+                        const SizedBox(height: 20),
+                        Text(
+                          "MIS PASAJEROS",
+                          style: GoogleFonts.montserrat(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.grey,
+                            letterSpacing: 1.5,
                           ),
                         ),
-
-                        if (_currentUser.beneficiaries.isEmpty)
-                          Center(
-                            child: Padding(
-                              padding: const EdgeInsets.only(top: 20),
-                              child: Text(
-                                "No tienes pasajeros guardados",
-                                style: GoogleFonts.montserrat(
-                                  color: Colors.grey[400],
-                                ),
-                              ),
+                        const SizedBox(height: 10),
+                        ..._currentUser.beneficiaries.map((b) {
+                          final isSelected = _selectedPassengerIds.contains(
+                            b.id,
+                          );
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: _buildSelectionCard(
+                              title: b.name,
+                              subtitle:
+                                  "${b.documentType}: ${b.documentNumber}",
+                              isSelected: isSelected,
+                              icon: Icons.group_rounded,
+                              primaryColor: primaryColor,
+                              onChanged: (val) {
+                                setModalState(() {
+                                  val
+                                      ? _selectedPassengerIds.add(b.id)
+                                      : _selectedPassengerIds.remove(b.id);
+                                });
+                                setState(() => _updateFinalPrice());
+                              },
                             ),
-                          )
-                        else
-                          ..._currentUser.beneficiaries.map((b) {
-                            final isSelected = _selectedPassengerIds.contains(
-                              b.id,
-                            );
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              child: _buildSelectionCard(
-                                title: b.name,
-                                subtitle:
-                                    "${b.documentType}: ${b.documentNumber}",
-                                isSelected: isSelected,
-                                icon: Icons.group_rounded,
-                                primaryColor: primaryColor,
-                                onChanged: (val) {
-                                  setModalState(() {
-                                    if (val) {
-                                      _selectedPassengerIds.add(b.id);
-                                    } else {
-                                      _selectedPassengerIds.remove(b.id);
-                                    }
-                                  });
-                                  setState(() => _updateFinalPrice());
-                                },
-                              ),
-                            );
-                          }),
+                          );
+                        }),
                       ],
                     ),
                   ),
-
-                  // Botón Agregar
                   Padding(
                     padding: const EdgeInsets.all(24),
-                    child: SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.darkBlue,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                        ),
-                        onPressed: () =>
-                            _showAddBeneficiaryDialog(setModalState),
-                        child: Text(
-                          "AGREGAR PASAJERO",
-                          style: GoogleFonts.montserrat(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
+                    child: OutlinedButton.icon(
+                      onPressed: () => _showAddBeneficiaryDialog(setModalState),
+                      icon: const Icon(Icons.add_circle_outline),
+                      label: const Text("AGREGAR NUEVO PASAJERO"),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: primaryColor,
+                        side: BorderSide(color: primaryColor, width: 2),
+                        minimumSize: const Size(double.infinity, 55),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(15),
                         ),
                       ),
                     ),
@@ -4076,16 +4294,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _startSearchingDriver() {
-    // Solo cambiamos el estado.
-    // QUITAMOS el timer y QUITAMOS la llamada a _assignDriverAndSimulateMovement
+    // 🔥 NO inicies búsqueda si es programado
+    if (_scheduledAt != null) return;
+
     setState(() {
       _tripState = TripState.SEARCHING_DRIVER;
     });
-
-    debugPrint("⏳ Esperando a que un conductor acepte el viaje real...");
-
-    // Nota: Aquí añadiremos el listener para que cuando el backend avise
-    // que el viaje cambió a 'ACCEPTED', la pantalla cambie a 'DRIVER_ON_WAY'.
+    debugPrint("⏳ Esperando a que un conductor acepte el viaje...");
   }
 
   void _finishTripAndSave() async {
@@ -4154,58 +4369,63 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  void _resetApp() {
-    print("DEBUG: _resetApp ejecutado!");
-
-    FocusScope.of(context).unfocus();
-    _routeDrawingController?.stop();
-    _routeDrawingController?.reset();
+  Future<void> _resetApp() async {
+    // 1. Cambiamos a Future<void>
+    print("DEBUG: Iniciando limpieza forzada...");
+    if (_currentTripId != null) {
+      try {
+        final response = await MenuService().cancelTrip(_currentTripId!);
+        print("DEBUG: Resultado de cancelación en servidor: $response");
+      } catch (e) {
+        print("DEBUG: Error al intentar cancelar en servidor: $e");
+      }
+    }
+    // Detener todos los procesos que podrían estar reviviendo el estado
+    _checkStatusTimer?.cancel();
     _simulationTimer?.cancel();
     _waitTimer?.cancel();
     _waitTimer = null;
 
-    if (mounted) {
-      setState(() {
-        _isOriginSnapped = false;
-        _isOriginConfirmed =
-            false; // AGREGA ESTO: Invalida el estado de confirmación
-        _originName = null; // AGREGA ESTO: Limpia el nombre
-        _originCoordinates = null; // AGREGA ESTO: Limpia las coordenadas
+    // Detener animaciones
+    _routeDrawingController?.stop();
+    _routeDrawingController?.reset();
 
-        _tripState = TripState.DASHBOARD;
-        _fitCameraToRoute();
+    if (!mounted) return; // <--- ESTO ES LO MÁS IMPORTANTE
 
-        AuthService.isTripActive = false;
-        _isCalculatingRoute = false;
-        _isPickingLocation = false;
-        _isPickingOrigin = false;
-        _isOriginConfirmed = false;
-        _animatedRoutePoints = [];
+    setState(() {
+      // RESETEO TOTAL DE ESTADOS
+      _tripState = TripState.DASHBOARD;
+      _isPickingLocation = false;
+      _isOriginConfirmed = false;
+      _isCalculatingRoute = false;
+      _isCreatingTrip = false; // <--- ASEGÚRATE DE PONER ESTO EN FALSE
 
-        _routePoints = [];
-        _destinationCoordinates = null;
-        _destinationName = null;
-        _originCoordinates = null;
-
-        // --- 🛡️ CRUCIAL: LIMPIAR REFERENCIA ---
-        _referenceOriginCoords = null;
-        _originReferenceName = null;
-        // --------------------------------------
-
-        _sheetExtentNotifier.value = 0.45;
-        _driverPosition = null;
-        _scheduledAt = null;
-        _currentTripId = null;
-        _driverData = null;
-        _selectedPassengerIds.clear();
-        _includeMyself = true;
-        _driverEta = "Calculando...";
-        _tripDesglose = null;
-      });
+      // Limpieza de datos
+      _currentTripId = null;
+      _driverData = null;
+      _routePoints = [];
+      _animatedRoutePoints = [];
+      _destinationCoordinates = null;
+      _destinationName = null;
+      _originCoordinates = null;
+      _referenceOriginCoords = null;
+      _currentTripId = null;
+      AuthService.isTripActive = false;
+      // Asegurar que el mapa vuelva a la posición inicial
       _moveToCurrentPosition();
-    }
-  }
-  // --- HELPERS UI ---
+    });
+
+    // Opcional: Reiniciar el timer de verificación de estado después de un delay
+    // para no saturar el servidor justo al limpiar
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted) {
+        _checkStatusTimer = Timer.periodic(
+          const Duration(seconds: 10),
+          (t) => _checkActiveTrip(),
+        );
+      }
+    });
+  } // --- HELPERS UI ---
 
   Widget _buildMapControlBtn(IconData icon, VoidCallback tap) {
     // Detectamos el color según el modo actual
@@ -4265,28 +4485,51 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         height: 50,
         child: // Busca el OutlinedButton dentro de _buildSearchingDriverContent y déjalo así:
             // Busca el OutlinedButton dentro de _buildSearchingDriverContent
+            // Busca el OutlinedButton dentro de _buildSearchingDriverContent
             OutlinedButton(
               onPressed: () async {
                 if (_currentTripId != null) {
-                  // 1. Mostramos un pequeño loading o deshabilitamos el botón
-                  // 2. Esperamos la confirmación del servidor
-                  bool canceladoEnServer = await MenuService().cancelTrip(
-                    _currentTripId!,
-                  );
+                  // 1. Ejecutamos la petición al servidor (MenuService devuelve un Map)
+                  final Map<String, dynamic> result = await MenuService()
+                      .cancelTrip(_currentTripId!);
 
-                  if (canceladoEnServer) {
-                    _resetApp(); // Solo limpiamos la pantalla si el server confirmó
+                  // 2. Comprobamos si fue exitoso (usando la estructura real del servicio)
+                  if (result['success'] == true) {
+                    // 3. Verificamos si hubo multa y avisamos
+                    if (result['aplica_multa'] == true) {
+                      if (mounted) {
+                        _showSnackBarMulta(
+                          "Se ha aplicado una multa por cancelación tardía.",
+                        );
+                      }
+                    } else {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text("Viaje cancelado correctamente."),
+                          ),
+                        );
+                      }
+                    }
+
+                    // 4. LIMPIEZA INMEDIATA
+                    _resetApp();
                   } else {
-                    // ignore: use_build_context_synchronously
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text("No se pudo cancelar. Intenta de nuevo."),
-                      ),
-                    );
+                    // Manejo de error
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            "No se pudo cancelar. Intenta de nuevo.",
+                          ),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
                   }
                 }
               },
-              child: Text("Cancelar Solicitud"),
+              child: const Text("Cancelar Solicitud"),
             ),
       ),
     ],
@@ -4456,9 +4699,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (_tripPrice <= 0) return const SizedBox.shrink();
 
     final isCorp = _currentUser.isCorporateMode;
-    final primaryColor = isCorp
-        ? const Color(0xFF1565C0)
-        : AppColors.primaryGreen;
+    final primaryColor = isCorp ? AppColors.darkBlue : AppColors.primaryGreen;
 
     // Extraemos info de peajes
     final List peajes = _tripDesglose?['peajes_detalles'] ?? [];
@@ -4981,51 +5222,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       ),
     );
 
-    // 🔥 CLAVE: Al volver de la pantalla de búsqueda, SIEMPRE recargamos
-    // Hacemos un pequeño delay para dar tiempo al backend de procesar el guardado
     await Future.delayed(const Duration(milliseconds: 300));
     await _loadRecentPlaces();
 
-    if (result != null) {
-      // 🔥 AQUÍ ESTÁ EL AJUSTE:
-      // Antes de procesar el resultado, forzamos que si el usuario usó el buscador,
-      // la precisión del "Punto de recogida" se reinicie a FALSE
-      // porque el buscador no garantiza la precisión del pin en el mapa.
-      setState(() {
-        _isOriginSnapped = false;
-      });
-
-      _handleSearchResult(result);
+    // SI RESULT ES NULL, EL USUARIO CANCELÓ EL BUSCADOR
+    if (result == null) {
+      // Si ya teníamos una ruta, volvemos a la vista previa, NO al dashboard vacío
+      if (_routePoints.isNotEmpty) {
+        setState(() {
+          _isPickingLocation = false;
+          _tripState = TripState.ROUTE_PREVIEW;
+        });
+        _fitCameraToRoute();
+      } else {
+        // Si no teníamos nada, ahí sí volvemos al dashboard
+        setState(() {
+          _isPickingLocation = false;
+          _tripState = TripState.DASHBOARD;
+        });
+      }
+      return;
     }
+
+    // SI HAY RESULTADO, PROCESAMOS
+    _handleSearchResult(result);
   }
 
   Future<void> _calculateRouteAndPrice(LatLng destination) async {
     _isPickingLocation = false;
     _isCalculatingRoute = false;
 
-    // 1. Usamos los puntos que YA fueron "snapped" en _confirmMapSelection
     LatLng startPoint =
         _originCoordinates ?? _currentPosition ?? _defaultLocation;
     LatLng endPoint = destination;
-
-    // --- VALIDACIÓN DE DISTANCIA MÍNIMA ---
-    double metrosDeDistancia = Geolocator.distanceBetween(
-      startPoint.latitude,
-      startPoint.longitude,
-      endPoint.latitude,
-      endPoint.longitude,
-    );
-
-    if (metrosDeDistancia < 20) {
-      if (mounted) {
-        setState(() {
-          _tripState = TripState.DASHBOARD;
-          _isCalculatingRoute = false;
-        });
-        _showAppSnackBar("El destino está demasiado cerca.", isError: true);
-      }
-      return;
-    }
 
     if (_routePoints.isEmpty) {
       setState(() {
@@ -5122,9 +5351,57 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
-  void _handleSearchResult(dynamic result) {
-    if (result == null) return;
+  Future<void> _showTooCloseDialog() async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false, // Obliga al usuario a pulsar el botón
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Icon(Icons.location_off, color: Colors.orange, size: 50),
+        content: Text(
+          "El destino que elegiste está demasiado cerca. Para viajes tan cortos, no podemos asignar un vehículo.",
+          textAlign: TextAlign.center,
+          style: GoogleFonts.montserrat(),
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.darkBlue,
+              ),
+              onPressed: () => Navigator.pop(ctx), // Solo cierra el diálogo
+              child: const Text(
+                "ENTENDIDO",
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
+  void _handleSearchResult(dynamic result) async {
+    if (result == null) return;
+    // 1. VALIDACIÓN ANTICIPADA (Antes de cualquier proceso)
+    LatLng origin =
+        result['originCoords'] ?? _currentPosition ?? _defaultLocation;
+    LatLng destination = result['destinationCoords'];
+
+    double metrosDeDistancia = Geolocator.distanceBetween(
+      origin.latitude,
+      origin.longitude,
+      destination.latitude,
+      destination.longitude,
+    );
+
+    if (metrosDeDistancia < 500) {
+      await _showTooCloseDialog();
+      // RE-ABRIMOS EL BUSCADOR AUTOMÁTICAMENTE
+      _openSearchFromCurrentState();
+      return; // Detenemos todo el flujo aquí
+    }
     final bool isMapPick = result['isMapPick'] ?? false;
     final bool isManualOrigin = result['isManualOrigin'] ?? false;
 
@@ -5259,7 +5536,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (_routePoints.isNotEmpty) {
       try {
         double currentExtent = extent ?? _sheetExtentNotifier.value;
-        final bounds = LatLngBounds.fromPoints(_routePoints);
+
+        final validPoints = _routePoints
+            .where(
+              (p) =>
+                  p.longitude >= -180 &&
+                  p.longitude <= 180 &&
+                  p.latitude >= -90 &&
+                  p.latitude <= 90,
+            )
+            .toList();
+
+        if (validPoints.length < 2) return;
+
+        final bounds = LatLngBounds.fromPoints(validPoints);
 
         // Calculamos cuánto espacio ocupa el modal en píxeles
         double screenHeight = MediaQuery.of(context).size.height;
@@ -5435,6 +5725,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _addressTypeToSave = type; // 'home' o 'work'
       _isPickingLocation = true; // Activa la interfaz de selección
       _isPickingOrigin = false; // Aseguramos que no es un viaje
+      _isStrictPickupMode = false; // <--- ASEGÚRATE DE PONER ESTO EN FALSE
+
       _favSearchResults = []; // Limpiamos búsquedas previas
       _favSearchController.clear();
 
@@ -5636,6 +5928,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
+  // lib/features/home/screens/home_screen.dart
+
   void _initSocketCommunication() async {
     const storage = FlutterSecureStorage();
     final token = await storage.read(key: 'auth_token');
@@ -5644,18 +5938,61 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         userId: _currentUser.id,
         token: token,
         onEvent: (event, data) {
-          if (event == 'ViajeAceptado') {
-            _checkActiveTrip(); // Esto disparará la UI de "Conductor en camino"
+          print("DEBUG SOCKET: Evento recibido: $event, Datos: $data");
+
+          if (!mounted) return;
+
+          // En _initSocketCommunication de HomeScreen.dart
+          // En _initSocketCommunication
+          if (event == 'ViajeEstado') {
+            final viajeData = data.containsKey('viaje') ? data['viaje'] : data;
+            String estado = viajeData['estado'].toString();
+
+            // ✅ CORRECCIÓN: Usa addPostFrameCallback para evitar conflictos de layout
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+
+              setState(() {
+                if (estado == 'CANCELLED') {
+                  _resetApp();
+                } else if (estado == 'ARRIVED') {
+                  _tripState = TripState.DRIVER_ON_WAY;
+                  _showAppSnackBar("¡Tu conductor ha llegado!");
+                } else if (estado == 'STARTED') {
+                  _tripState = TripState.IN_TRIP;
+                }
+              });
+            });
           }
-          // 🔥 NUEVO: Manejo de la cancelación automática
-          // Busca esta parte y reemplázala:
-          // 🔥 EVENTO: El motor de búsqueda no encontró a nadie
-          else if (event == 'ViajeCancelado') {
+          // 🔥 AQUÍ AGREGAS LA LÓGICA PARA EL VIAJE ACEPTADO
+          // Cambia el bloque 'ViajeAceptado' por este:
+          if (event == 'ViajeAceptado') {
+            setState(() {
+              // Usamos ?. y ?? para evitar que la app explote si algún campo falta
+              final viaje = data['viaje'] as Map<String, dynamic>?;
+              _driverData = viaje != null
+                  ? (viaje['conductor'] as Map<String, dynamic>?)
+                  : null;
+
+              _tripState = TripState.DRIVER_ON_WAY;
+            });
+            _showAppSnackBar("¡Un conductor ha aceptado tu viaje!");
+          } else if (event == 'ViajeCancelado') {
+            debugPrint("🚨 Evento de cancelación recibido: $data");
+
+            // Limpiamos todo inmediatamente
+            _resetApp();
+
             if (mounted) {
-              // Igual que arriba: Primero resetear, luego avisar.
-              _resetApp();
+              // Usamos un mensaje por defecto si el mensaje del evento no existe
+              String mensaje = data['mensaje'] ?? "El viaje ha sido cancelado.";
+              _showAppSnackBar(mensaje);
+            }
+          } else if (event == 'NoConductores') {
+            _resetApp();
+            if (mounted) {
               _showNoDriversDialog(
-                data['mensaje'] ?? "No se encontraron conductores cerca.",
+                data['mensaje'] ?? "No se encontraron conductores.",
               );
             }
           }
@@ -5674,7 +6011,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         if (mounted) setState(() => _waitSeconds--);
       } else {
         _waitTimer?.cancel();
-        // Aquí podrías habilitar un botón de "Cancelar sin penalización"
       }
     });
   }
@@ -5796,6 +6132,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> ejecutarCancelacionSegura(String tripId) async {
+    // --- NUEVA VALIDACIÓN: Si ya estamos en estado de limpieza, no hagas nada ---
+    if (_tripState == TripState.DASHBOARD) return;
+
+    setState(() => _isLoadingAddress = true);
+
+    try {
+      // Solo si el servidor no nos ha avisado ya que está cancelado
+      final resultado = await MenuService().cancelTrip(tripId);
+
+      if (resultado['success'] == true) {
+        // Éxito
+        _resetApp();
+      } else {
+        // Si falla (400), asumimos que probablemente ya se canceló
+        _resetApp();
+      }
+    } catch (e) {
+      // Si da error 400 (porque ya está cancelado), simplemente limpiamos localmente
+      _resetApp();
+    } finally {
+      if (mounted) setState(() => _isLoadingAddress = false);
+    }
+  }
+
+  void _showSnackBarMulta(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: GoogleFonts.montserrat(color: Colors.white),
+        ),
+        backgroundColor:
+            Colors.orange[800], // Color naranja para alertas de dinero
+        duration: const Duration(seconds: 5),
       ),
     );
   }

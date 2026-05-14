@@ -4,15 +4,13 @@ import 'passenger_model.dart';
 class TripModel {
   final String id;
   final String dateRaw;
-  final DateTime? scheduledAt; // Fecha programada
+  final DateTime? scheduledAt;
   final String origin;
   final String destination;
   final double price;
-  final double tolls; // <--- AGREGA ESTA LÍNEA
-
+  final double tolls;
   final String status;
 
-  // Datos del Conductor y Vehículo
   final String? driverId;
   final String? driverName;
   final String? driverPhotoUrl;
@@ -30,8 +28,7 @@ class TripModel {
     required this.origin,
     required this.destination,
     required this.price,
-    required this.tolls, // <--- AGREGA ESTA LÍNEA
-
+    required this.tolls,
     required this.status,
     this.driverId,
     this.driverName,
@@ -49,7 +46,6 @@ class TripModel {
     final rawVehicle = json['vehiculo'] ?? json['vehicle'];
     final vehicleData = rawVehicle is Map ? rawVehicle : {};
 
-    // --- NUEVA LÓGICA DE PEAJES PARA EL USUARIO ---
     final desglose = json['desglose_precio'] ?? {};
     final double totalPeajes =
         double.tryParse((desglose['total_peajes'] ?? 0).toString()) ?? 0.0;
@@ -72,20 +68,16 @@ class TripModel {
           : null,
       origin: json['origen'] ?? 'Origen desconocido',
       destination: json['destino'] ?? 'Destino desconocido',
-
-      // 🔥 Precio total oficial (Viene del Backend)
       price:
           double.tryParse(
             (json['precio_estimado'] ?? json['monto_final'] ?? 0).toString(),
           ) ??
           0.0,
-
       status:
           json['status'] ??
           (json['finalizado_en'] != null
               ? 'COMPLETED'
               : (json['cancelado_en'] != null ? 'CANCELLED' : 'PENDING')),
-
       driverId: driverData['id']?.toString(),
       driverName: driverData['name'] ?? driverData['nombre'] ?? 'Sin nombre',
       driverPhotoUrl: driverData['foto_perfil'] ?? driverData['photo_url'],
@@ -94,28 +86,30 @@ class TripModel {
       vehicleModel: vehicleData['modelo'] ?? vehicleData['model'],
       vehicleColor: vehicleData['color'],
       passengers: passengerList,
-
-      // Guardamos los peajes para que el usuario sepa qué pagó
       tolls: totalPeajes,
     );
   }
 
-  // --- LÓGICA DE VISUALIZACIÓN ---
+  // --- GETTERS DE ESTADO UNIFICADOS ---
+  bool get isCompleted =>
+      status.toUpperCase() == 'COMPLETED' || status == 'Completado';
+  bool get isCancelled =>
+      status.toUpperCase() == 'CANCELLED' || status == 'Cancelado';
 
-  String get formattedDate {
-    try {
-      // Si scheduledAt no es nulo, usamos ese, si no, parseamos dateRaw
-      final DateTime date = scheduledAt ?? DateTime.parse(dateRaw);
+  bool get isUpcoming =>
+      scheduledAt != null &&
+      scheduledAt!.isAfter(DateTime.now()) &&
+      !isCancelled &&
+      !isCompleted;
 
-      // Usamos DateFormat para quitar los ceros de más (.00000Z)
-      // El formato 'dd MMM, hh:mm a' dejará algo como: 26 MAR, 01:10 PM
-      final formatter = DateFormat('dd MMM, hh:mm a', 'es_ES');
-      return formatter.format(date).toUpperCase();
-    } catch (e) {
-      // Si falla el parseo, al menos cortamos la cadena para no ver los ceros
-      if (dateRaw.length > 16) return dateRaw.substring(0, 16);
-      return dateRaw;
-    }
+  bool get hasDriverAssigned =>
+      driverName != null && driverName != 'Sin nombre';
+
+  bool get canCancelProgrammed {
+    if (isCancelled || isCompleted) return false;
+    if (scheduledAt == null) return true;
+    if (!hasDriverAssigned) return true;
+    return scheduledAt!.difference(DateTime.now()).inHours >= 24;
   }
 
   String get formattedPrice {
@@ -123,37 +117,28 @@ class TripModel {
     return "\$ ${currency.format(price)}";
   }
 
-  bool get isCompleted => status == 'COMPLETED' || status == 'Completado';
-  bool get isCancelled => status == 'CANCELLED' || status == 'Cancelado';
-  bool get isUpcoming =>
-      scheduledAt != null &&
-      scheduledAt!.isAfter(DateTime.now()) &&
-      !isCancelled &&
-      !isCompleted;
-  bool get hasDriverAssigned =>
-      driverName != null && driverName != 'Sin nombre';
+  String get statusLabel {
+    if (isCancelled) return 'Cancelado';
+    if (isCompleted) return 'Completado';
+    if (status == 'SEARCHING_DRIVER') return 'Buscando conductor';
+    if (status == 'ACCEPTED') return 'Chofer Asignado';
+    if (status == 'PENDING_SCHEDULED') return 'Programado';
+    return 'En curso';
+  }
+  // --- Dentro de class TripModel en trip_model.dart ---
 
-  // Lógica de las 24 horas para habilitar el botón de cancelar
-  bool get canCancelProgrammed {
-    if (scheduledAt == null)
-      // ignore: curly_braces_in_flow_control_structures
-      return true; // Viaje inmediato: siempre puede intentar cancelar
-    if (!hasDriverAssigned)
-      // ignore: curly_braces_in_flow_control_structures
-      return true; // Si no hay chofer asignado, puede cancelar siempre
-
-    // Si hay chofer, solo puede cancelar si faltan más de 24 horas
-    final diferencia = scheduledAt!.difference(DateTime.now());
-    return diferencia.inHours >= 24;
+  // Verifica si estamos a menos de 24 horas de la fecha programada
+  bool get isWithinPenaltyPeriod {
+    if (scheduledAt == null) return false;
+    final difference = scheduledAt!.difference(DateTime.now());
+    return difference.inHours < 24 && difference.inHours >= 0;
   }
 
-  // QUITAMOS EL @override QUE DABA ERROR
-  String get statusLabel {
-    if (isCompleted) return 'Completado';
-    if (isCancelled) return 'Cancelado';
-    if (isUpcoming) {
-      return hasDriverAssigned ? 'Chofer Asignado' : 'Programado';
+  // Mensaje dinámico según el tiempo
+  String get cancelationWarning {
+    if (isWithinPenaltyPeriod) {
+      return "¿Estás seguro? Estás a menos de 24 horas. Se aplicará una multa por cancelación.";
     }
-    return 'En curso';
+    return "¿Estás seguro de cancelar este viaje programado?";
   }
 }

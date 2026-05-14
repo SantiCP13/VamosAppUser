@@ -7,14 +7,9 @@ class CachedTileProvider extends TileProvider {
   static final customCacheManager = CacheManager(
     Config(
       'mapboxTilesCache',
-      stalePeriod: const Duration(
-        days: 15,
-      ), // Bajamos a 15 días (suficiente para rutas frecuentes)
-      maxNrOfCacheObjects:
-          3000, // 3000 tiles es el punto dulce entre ahorro y espacio
-      repo: JsonCacheInfoRepository(
-        databaseName: 'mapboxTilesCache',
-      ), // Asegura persistencia tras reiniciar
+      stalePeriod: const Duration(days: 30), // El mapa de base cambia poco
+      maxNrOfCacheObjects: 5000, // Aumentamos a 5000 tiles
+      repo: JsonCacheInfoRepository(databaseName: 'mapboxTilesCache'),
     ),
   );
 
@@ -22,14 +17,15 @@ class CachedTileProvider extends TileProvider {
   ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
     final url = getTileUrl(coordinates, options);
 
-    // EXPLICACIÓN: Cortamos la URL antes del '?' para que el token no sea parte de la llave.
-    // Esto hace que si la imagen ya existe, no la vuelva a pedir a Mapbox.
-    final String staticCacheKey = url.split('?').first;
+    // EXTRAEMOS LA BASE SIN EL TOKEN
+    // Esto convierte una URL larga con token en una llave simple como:
+    // 'streets-v12/tiles/15/8000/12000'
+    final String cleanKey = url.split('?').first.split('tiles/').last;
 
     return CachedNetworkImageProvider(
       url,
       cacheManager: customCacheManager,
-      cacheKey: staticCacheKey, // USAMOS LA LLAVE ESTÁTICA
+      cacheKey: cleanKey, // USAMOS LA LLAVE LIMPIA
       headers: const {'User-Agent': 'com.vamosapp.vamosuser'},
     );
   }

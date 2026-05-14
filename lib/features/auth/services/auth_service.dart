@@ -132,6 +132,7 @@ class AuthService {
           'password': password,
           'device_id': deviceId,
           'device_name': deviceName,
+          'app_type': 'USER',
         },
       );
 

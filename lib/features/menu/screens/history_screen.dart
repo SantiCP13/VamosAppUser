@@ -1,4 +1,5 @@
 // ignore_for_file: deprecated_member_use
+// ignore: unnecessary_import
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -16,7 +17,7 @@ class HistoryScreen extends StatefulWidget {
 
 class _HistoryScreenState extends State<HistoryScreen> {
   final MenuService _menuService = MenuService();
-  late Future<List<TripModel>> _historyFuture;
+  Future<List<TripModel>> _historyFuture = Future.value([]);
   String _selectedFilter = 'Todos';
 
   @override
@@ -25,10 +26,24 @@ class _HistoryScreenState extends State<HistoryScreen> {
     _loadHistory();
   }
 
-  void _loadHistory() {
-    setState(() {
-      _historyFuture = _menuService.getTripHistory();
-    });
+  Future<void> _loadHistory() async {
+    try {
+      List<TripModel> data = await _menuService.getTripHistory();
+      // ignore: avoid_print
+      print("DEBUG: Viajes recibidos del servidor: ${data.length}");
+      for (var v in data) {
+        // ignore: avoid_print
+        print(
+          "DEBUG: Viaje ID ${v.id} - Estado: ${v.status} - Programado: ${v.scheduledAt}",
+        );
+      }
+      setState(() {
+        _historyFuture = Future.value(data);
+      });
+    } catch (e) {
+      // ignore: avoid_print
+      print("DEBUG ERROR: $e");
+    }
   }
 
   @override
@@ -67,18 +82,26 @@ class _HistoryScreenState extends State<HistoryScreen> {
                             ),
                           );
                         }
-                        if (snapshot.hasError) return _buildErrorState();
 
-                        List<TripModel> allTrips = snapshot.data ?? [];
+                        // 🔥 CAMBIO AQUÍ: Verifica si hay error o si no hay datos
+                        if (snapshot.hasError || !snapshot.hasData) {
+                          return _buildErrorState();
+                        }
+
+                        List<TripModel> allTrips = snapshot.data!;
                         // Ordenar por fecha más reciente
                         allTrips.sort((a, b) {
-                          DateTime dateA =
-                              a.scheduledAt ??
-                              DateTime.parse(a.dateRaw).toLocal();
-                          DateTime dateB =
-                              b.scheduledAt ??
-                              DateTime.parse(b.dateRaw).toLocal();
-                          return dateB.compareTo(dateA);
+                          try {
+                            DateTime dateA =
+                                a.scheduledAt ??
+                                DateTime.parse(a.dateRaw).toLocal();
+                            DateTime dateB =
+                                b.scheduledAt ??
+                                DateTime.parse(b.dateRaw).toLocal();
+                            return dateB.compareTo(dateA);
+                          } catch (e) {
+                            return 0; // Si falla el parseo, no los ordena y evita el crash
+                          }
                         });
 
                         List<TripModel> filteredTrips = _applyFilter(allTrips);
@@ -192,180 +215,171 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Widget _buildTripCardPremium(TripModel trip) {
-    final DateTime dateObj = (trip.scheduledAt ?? DateTime.parse(trip.dateRaw))
-        .toLocal();
+    // 1. Lógica dinámica: Azul si es corporativo (id_contrato > 1), Verde si es personal
+    final bool isCorporate =
+        (int.tryParse(trip.id) != null &&
+            trip.price > 0 &&
+            trip.statusLabel.contains("CORP")) ||
+        (trip.status.contains('CORP'));
 
-    // Le damos un formato premium: "LUN, 4 MAY • 10:30 AM"
+    final Color brandColor = isCorporate
+        ? AppColors.darkBlue
+        : AppColors.primaryGreen;
+    final Color statusColor = trip.isCancelled ? Colors.redAccent : brandColor;
+    final IconData statusIcon = trip.isUpcoming
+        ? Icons.event_available_rounded
+        : Icons.check_circle_rounded;
+
+    DateTime dateObj =
+        trip.scheduledAt ?? DateTime.tryParse(trip.dateRaw) ?? DateTime.now();
+    dateObj = dateObj.toLocal();
     final String localTimeStr = DateFormat(
       'EEE, d MMM • hh:mm a',
       'es',
     ).format(dateObj).toUpperCase();
-    // ----------------------------------
 
-    Color statusColor = AppColors.primaryGreen;
-    if (trip.isCancelled) statusColor = Colors.redAccent;
-    if (trip.isUpcoming) statusColor = AppColors.darkBlue;
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(25),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.9),
-            borderRadius: BorderRadius.circular(25),
-            border: Border.all(color: Colors.white.withOpacity(0.5)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.03),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(25),
+        border: Border.all(color: Colors.grey.shade100),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 15,
+            offset: const Offset(0, 8),
           ),
-          child: Column(
-            children: [
-              // HEADER DE LA TARJETA
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        ],
+      ),
+      child: Column(
+        children: [
+          // HEADER: Fecha y Estado
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
                   children: [
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.calendar_today_rounded,
-                          size: 14,
-                          color: Colors.blueGrey.shade300,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          localTimeStr,
-                          style: GoogleFonts.montserrat(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.blueGrey.shade300,
-                          ),
-                        ),
-                      ],
+                    Icon(
+                      Icons.calendar_today_rounded,
+                      size: 12,
+                      color: Colors.grey.shade400,
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: statusColor.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        trip.statusLabel.toUpperCase(),
-                        style: GoogleFonts.montserrat(
-                          fontSize: 9,
-                          color: statusColor,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.5,
-                        ),
+                    const SizedBox(width: 8),
+                    Text(
+                      localTimeStr,
+                      style: GoogleFonts.montserrat(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.grey.shade400,
                       ),
                     ),
                   ],
                 ),
-              ),
-
-              const Divider(height: 1),
-
-              // CUERPO: RUTA VISUAL
-              Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  children: [
-                    _buildRouteRow(
-                      Icons.radio_button_on,
-                      AppColors.primaryGreen,
-                      "Origen",
-                      trip.origin,
-                      isMain: true, // <--- Nueva bandera para resaltar el verde
-                    ),
-                    const SizedBox(height: 5),
-                    _buildRouteConnector(),
-                    const SizedBox(height: 5),
-                    _buildRouteRow(
-                      Icons.location_on_rounded,
-                      AppColors.darkBlue,
-                      "Destino",
-                      trip.destination,
-                    ),
-                  ],
-                ),
-              ),
-
-              // INFO CONDUCTOR (Si aplica)
-              if (trip.hasDriverAssigned) ...[
                 Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 16),
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(15),
+                    color: statusColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: Row(
                     children: [
-                      const CircleAvatar(
-                        radius: 15,
-                        backgroundColor: Colors.white,
-                        child: Icon(Icons.person, size: 18, color: Colors.grey),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          "${trip.driverName} • ${trip.vehiclePlate}",
-                          style: GoogleFonts.poppins(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.darkBlue,
-                          ),
+                      Icon(statusIcon, size: 10, color: statusColor),
+                      const SizedBox(width: 4),
+                      Text(
+                        trip.isUpcoming
+                            ? "PROGRAMADO"
+                            : trip.statusLabel.toUpperCase(),
+                        style: GoogleFonts.montserrat(
+                          fontSize: 9,
+                          color: statusColor,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.5,
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 16),
               ],
-
-              // FOOTER: PRECIO Y ACCIONES
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "TOTAL",
-                          style: GoogleFonts.montserrat(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.grey,
-                          ),
-                        ),
-                        Text(
-                          trip.formattedPrice,
-                          style: GoogleFonts.montserrat(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.primaryGreen,
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (trip.isUpcoming) _buildCancelButton(trip),
-                  ],
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+
+          const Divider(height: 1),
+
+          // CUERPO: Ruta
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                _buildRouteRow(
+                  Icons.radio_button_on,
+                  AppColors.primaryGreen,
+                  "Origen",
+                  trip.origin,
+                  isMain: true,
+                ),
+                const SizedBox(height: 5),
+                _buildRouteConnector(),
+                const SizedBox(height: 5),
+                _buildRouteRow(
+                  Icons.location_on_rounded,
+                  AppColors.darkBlue,
+                  "Destino",
+                  trip.destination,
+                ),
+              ],
+            ),
+          ),
+
+          // FOOTER: Precio y Acciones
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Envolvemos en Flexible para que el precio no desborde ni pida ancho infinito
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "TOTAL",
+                        style: GoogleFonts.montserrat(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.grey.shade400,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        trip.formattedPrice,
+                        style: GoogleFonts.montserrat(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                          color: brandColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Envolvemos el botón para que se mantenga dentro del espacio permitido
+                if (trip.isUpcoming)
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 8.0),
+                      child: _buildCancelButton(trip),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -375,11 +389,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
     Color color,
     String label,
     String address, {
-    bool isMain = false, // <--- Nuevo parámetro
+    bool isMain = false,
   }) {
     return Row(
       children: [
-        // Círculo de color alrededor del icono para estilo premium
         Container(
           padding: const EdgeInsets.all(6),
           decoration: BoxDecoration(
@@ -389,7 +402,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
           child: Icon(icon, size: 16, color: color),
         ),
         const SizedBox(width: 15),
-        Expanded(
+        // CAMBIO AQUÍ: Usar Flexible en lugar de Expanded
+        Flexible(
+          fit: FlexFit.loose,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -398,7 +413,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 style: GoogleFonts.montserrat(
                   fontSize: 8,
                   fontWeight: FontWeight.w800,
-                  // Si es el origen (isMain), usamos verde para el label
                   color: isMain ? AppColors.primaryGreen : Colors.grey.shade400,
                 ),
               ),
@@ -428,36 +442,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
     );
   }
 
-  Widget _buildCancelButton(TripModel trip) {
-    if (!trip.canCancelProgrammed) {
-      return Text(
-        "BLOQUEADO (<24H)",
-        style: GoogleFonts.montserrat(
-          fontSize: 9,
-          fontWeight: FontWeight.w800,
-          color: Colors.amber.shade700,
-        ),
-      );
-    }
-    return ElevatedButton(
-      onPressed: () => _showCancelDialog(trip),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.red.withOpacity(0.1),
-        foregroundColor: Colors.redAccent,
-        elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-      ),
-      child: Text(
-        "CANCELAR",
-        style: GoogleFonts.montserrat(
-          fontSize: 11,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-    );
-  }
-
   List<TripModel> _applyFilter(List<TripModel> trips) {
     if (_selectedFilter == 'Programados') {
       return trips.where((t) => t.isUpcoming).toList();
@@ -471,42 +455,223 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return trips;
   }
 
+  Widget _buildCancelButton(TripModel trip) {
+    if (!trip.canCancelProgrammed) {
+      return Text(
+        "BLOQUEADO (<24H)",
+        style: GoogleFonts.montserrat(
+          fontSize: 9,
+          fontWeight: FontWeight.w800,
+          color: Colors.amber.shade700,
+        ),
+      );
+    }
+
+    // Usamos InkWell en lugar de ElevatedButton para evitar problemas de Layout en el ListView
+    return InkWell(
+      onTap: () => _showCancelDialog(trip),
+      child: Container(
+        height: 35,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: Colors.red.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          "CANCELAR",
+          style: GoogleFonts.montserrat(
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            color: Colors.redAccent,
+          ),
+        ),
+      ),
+    );
+  }
+
   void _showCancelDialog(TripModel trip) {
+    final bool isPenalty = trip.isWithinPenaltyPeriod;
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
-        title: Text(
-          "¿Cancelar viaje?",
-          style: GoogleFonts.montserrat(fontWeight: FontWeight.w800),
+      barrierDismissible: false, // Forzamos al usuario a decidir
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+        backgroundColor: Colors.white,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 350),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Icono con sombra suave
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: isPenalty
+                        ? Colors.amber.shade50
+                        : Colors.red.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    isPenalty
+                        ? Icons.error_outline_rounded
+                        : Icons.cancel_rounded,
+                    color: isPenalty ? Colors.amber.shade700 : Colors.redAccent,
+                    size: 45,
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Título con impacto
+                Text(
+                  isPenalty ? "¡Aviso de Penalización!" : "¿Cancelar viaje?",
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.montserrat(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.darkBlue,
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Descripción con mejor legibilidad
+                Text(
+                  trip.cancelationWarning,
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    fontSize: 13.5,
+                    color: Colors.grey.shade700,
+                    height: 1.5,
+                  ),
+                ),
+
+                if (isPenalty) ...[
+                  const SizedBox(height: 15),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.amber.shade200),
+                    ),
+                    child: Text(
+                      "La multa se cargará a tu próximo método de pago.",
+                      style: GoogleFonts.montserrat(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.amber.shade800,
+                      ),
+                    ),
+                  ),
+                ],
+
+                const SizedBox(height: 30),
+
+                // Botones Premium
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                        ),
+                        child: Text(
+                          "VOLVER",
+                          style: GoogleFonts.montserrat(
+                            fontWeight: FontWeight.w700,
+                            color: Colors.grey.shade400,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () async {
+                          // 1. Recibimos el mapa con el resultado
+                          final Map<String, dynamic> resultado =
+                              await _menuService.cancelTrip(trip.id);
+                          // ignore: avoid_print
+                          print(
+                            "DEBUG: Respuesta del servidor: $resultado",
+                          ); // <--- MIRA ESTO EN LA CONSOLA DE FLUTTER
+
+                          // 2. Verificamos si sigue montado
+                          if (!mounted) return;
+
+                          // 3. Cerramos el diálogo usando el contexto que el constructor del builder nos dio (ctx)
+                          // ignore: use_build_context_synchronously
+                          Navigator.pop(ctx);
+
+                          // 4. Usamos el contexto de la clase (_HistoryScreenState) para el SnackBar
+                          bool fueExitoso = resultado['success'] ?? false;
+                          bool huboMulta = resultado['aplica_multa'] ?? false;
+
+                          if (fueExitoso) {
+                            _showAppSnackBar(
+                              huboMulta
+                                  ? "Viaje cancelado. Se aplicó multa."
+                                  : "Viaje cancelado con éxito.",
+                              isError: huboMulta,
+                            );
+                            _loadHistory();
+                          } else {
+                            _showAppSnackBar(
+                              "Error al cancelar el viaje",
+                              isError: true,
+                            );
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: isPenalty
+                              ? Colors.amber.shade700
+                              : Colors.redAccent,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        child: Text(
+                          isPenalty ? "ACEPTAR MULTA" : "CONFIRMAR",
+                          style: GoogleFonts.montserrat(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
-        content: const Text("Esta acción no se puede deshacer."),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("VOLVER"),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            onPressed: () async {
-              Navigator.pop(ctx);
-              final success = await _menuService.cancelTrip(trip.id);
-              if (success) _loadHistory();
-            },
-            child: const Text(
-              "CONFIRMAR",
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ],
+      ),
+    );
+  }
+
+  void _showAppSnackBar(String message, {bool isError = false}) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: GoogleFonts.montserrat(fontWeight: FontWeight.w600),
+        ),
+        backgroundColor: isError ? Colors.redAccent : AppColors.primaryGreen,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(20),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
       ),
     );
   }

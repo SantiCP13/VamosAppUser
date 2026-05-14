@@ -152,27 +152,43 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
     if (_debounce?.isActive ?? false) _debounce!.cancel();
 
     _debounce = Timer(const Duration(milliseconds: 500), () async {
-      // Solo disparamos la carga si el componente sigue montado y hay texto
+      // 1. Validaciones previas
       if (!mounted || query.length < 3) return;
 
       setState(() => _isLoading = true);
-      // ignore: avoid_print
-      print(
-        "📡 Buscando: $query cerca de: ${widget.currentPosition?.latitude}, ${widget.currentPosition?.longitude}",
-      );
 
-      final results = await _searchService.searchPlaces(
-        query,
-        lat: widget.currentPosition?.latitude ?? 0.0,
-        lng: widget.currentPosition?.longitude ?? 0.0,
-        sessionToken: _sessionToken,
-      );
+      try {
+        // 2. Llamada al servicio con manejo de errores
+        final results = await _searchService.searchPlaces(
+          query,
+          lat: widget.currentPosition?.latitude ?? 0.0,
+          lng: widget.currentPosition?.longitude ?? 0.0,
+          sessionToken: _sessionToken,
+        );
 
-      if (mounted) {
-        setState(() {
-          _searchResults = results;
-          _isLoading = false;
-        });
+        // 3. Si todo sale bien
+        if (mounted) {
+          setState(() {
+            _searchResults = results;
+            _isLoading = false;
+          });
+        }
+      } catch (e) {
+        // 4. Si el servidor falla (500 o conexión), aquí controlamos el error
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _searchResults = []; // Limpiamos resultados para no mostrar basura
+          });
+
+          // Feedback visual al usuario para que sepa qué pasó
+          _showAppSnackBar(
+            "Error al conectar con el servidor. Intenta de nuevo.",
+            isError: true,
+          );
+
+          debugPrint("🚨 Error en _onSearchChanged: $e");
+        }
       }
     });
   }
@@ -219,14 +235,18 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
     });
 
     // 2. AUTO-GUARDADO DE RECIENTES (tu lógica actual)
-    if (_settingAddressType == null) {
+    if (place['lat'] != null && place['lng'] != null) {
       _searchService.saveManualRecent(
         name: place['name'] ?? "Ubicación",
         address: place['address'] ?? "",
         lat: (place['lat'] as num).toDouble(),
         lng: (place['lng'] as num).toDouble(),
       );
+    } else {
+      debugPrint("🚨 No se pudo guardar en recientes: Coordenadas nulas.");
     }
+    // ignore: avoid_print
+    print("DEBUG: Datos del lugar seleccionado: $place");
 
     // 3. VERIFICACIÓN FINAL: ¿Tenemos ambos?
     // Dentro de SearchDestinationScreen -> _handleResultTap
@@ -788,25 +808,30 @@ class _SearchDestinationScreenState extends State<SearchDestinationScreen> {
     );
   }
 
+  // Busca tu _buildEmptyState en search_destination_screen.dart y cámbialo a:
   Widget _buildEmptyState() {
-    return Padding(
-      padding: const EdgeInsets.all(40),
-      child: Column(
-        children: [
-          Icon(
-            Icons.location_off_rounded,
-            size: 60,
-            color: Colors.grey.shade200,
-          ),
-          const SizedBox(height: 15),
-          Text(
-            "No encontramos resultados.",
-            style: GoogleFonts.montserrat(
-              color: Colors.grey.shade400,
-              fontWeight: FontWeight.w600,
+    return SingleChildScrollView(
+      // Esto permite el scroll si el espacio es corto
+      child: Padding(
+        padding: const EdgeInsets.all(40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min, // Ajusta al contenido
+          children: [
+            Icon(
+              Icons.location_off_rounded,
+              size: 60,
+              color: Colors.grey.shade200,
             ),
-          ),
-        ],
+            const SizedBox(height: 15),
+            Text(
+              "No encontramos resultados.",
+              style: GoogleFonts.montserrat(
+                color: Colors.grey.shade400,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

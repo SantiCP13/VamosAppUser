@@ -127,17 +127,7 @@ class _LoginScreenState extends State<LoginScreen> {
         deviceId: deviceId,
         deviceName: deviceName,
       );
-      if (AuthService.currentUser?.idRole == 3) {
-        await AuthService.logout(); // Lo sacamos de inmediato
-        if (mounted) {
-          setState(() => _isLoading = false);
-          _showSnack(
-            "Esta cuenta está registrada como Conductor. Por favor usa la App VAMOS Conductor.",
-            isError: true,
-          );
-        }
-        return; // Detenemos la ejecución aquí, no va al Home
-      }
+
       // --- ENROLAMIENTO LOCAL (Lógica Nequi) ---
       final storage = sl<StorageService>();
 
